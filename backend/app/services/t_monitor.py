@@ -1623,9 +1623,41 @@ class TMonitor:
                         from app.services import gate_alarm as _gaNote
                         _gaNote.note("t_monitor:line983", _eN7)
                         pass
+                    # ★ 2026-10-15 ✓（用户「改吧」）：**T回 = 挂被动单在"卖出位置"** ✓
+                    #   语料 ✓（`docs/wolf-behavior-blueprint.md:232`）：
+                    #     「**被动挂单回补** | 已止损出局、等回到卖出位置 → **挂被动单、不盯分时**
+                    #      （"下去不补，上来回到这个位置才补"）」
+                    #   病灶 ✗（实测 t68 / t_triggers ✓）：T回 用**当时现价** ⇒ 必然撞两条他自己的纪律 ⇒
+                    #     「加仓口径：买入价 305.13 高于本轮首笔买入价 263.24 的 +4.0%」✗ ／
+                    #     「下去不补：最近卖出价 47.43，现价 45.29 更低」✗ ⇒ **14 blocked / 1 executed** ✓
+                    #   做法 ✓：有"待回补 T出"的标的 ⇒ 现价**未回到卖出价** ⇒ **延后** ✓（= 下去不补 ✓）；
+                    #     回到了 ⇒ **挂单价 = 该笔 T出 成交价** ✓（被动单 ✓）⇒ 两条纪律自动满足 ✓
+                    #   开关 `WOLF_T_BACK_AT_SELL`（**库内默认 0 ⇒ 逐字不变** ✓）
+                    _defer_atsell = False
+                    try:
+                        if os.getenv("WOLF_T_BACK_AT_SELL", "0").strip().lower() in ("1", "true", "yes", "on"):
+                            _tsp = getattr(self, "_tsell_px_cache", None)
+                            if _tsp is None:
+                                from app.services import wolf_t_base_gate as _tbgs
+                                _tsp = _tbgs.last_tsell_price(T_MONITOR_ACCOUNT) or {}
+                                self._tsell_px_cache = _tsp
+                            _lv_ts = float(_tsp.get(sym) or 0)
+                            _cur_q = float(q.get("current") or 0)
+                            if _lv_ts > 0:
+                                if _cur_q < _lv_ts:
+                                    _defer_atsell = True
+                                    if (sym, today) not in getattr(self, "_atsell_deferred", set()):
+                                        self._atsell_deferred = getattr(self, "_atsell_deferred", set())
+                                        self._atsell_deferred.add((sym, today))
+                                        print("[TMonitor] 下去不补→等回到卖出位置 %s: 现价%.3f < T出价%.3f"
+                                              % (sym, _cur_q, _lv_ts), flush=True)
+                                else:
+                                    _line_bid, _line_name = _lv_ts, "tsell"
+                    except Exception:
+                        pass
                     if (not _defer_nc and not _defer_line and not _defer_hpv
                             and not _defer_nobase and not _defer_tw and not _defer_oc
-                            and not _defer_fall):
+                            and not _defer_fall and not _defer_atsell):
                         try:
                             from app.services.wolf_t_rules import t_cycle_pnl
                             tb=self._today_bars(sym)

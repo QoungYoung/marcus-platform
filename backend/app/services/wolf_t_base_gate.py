@@ -107,7 +107,9 @@ def pending_refill_symbols(account_id: str, days: Optional[int] = None) -> Dict[
             if not _mx:
                 return {}
             dmax = str(_mx)[:10]
-            d0 = (datetime.strptime(dmax, "%Y-%m-%d") - timedelta(days=2 * max(1, min(30, n)))).strftime("%Y-%m-%d")
+            # ⚠️ 窗口取长（60 天 ✓）：用户口径「**T出要有 T回 对应**」✓ ⇒ 待回补**持续到买回为止** ✓，
+            #    不受 `WOLF_T_OUT_REFILL_DAYS`（那是"预期检查"的 3 日 ✓ 语料 2025-04-15「三日内」✓）限制 ✓
+            d0 = (datetime.strptime(dmax, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
             rows = db.execute(_text(
                 "SELECT symbol, trade_date, direction, COALESCE(volume,0), COALESCE(reason,'') "
                 "FROM paper_trades WHERE account_id=:a AND trade_date >= :d0 ORDER BY trade_date, id"),
@@ -136,5 +138,59 @@ def pending_refill_symbols(account_id: str, days: Optional[int] = None) -> Dict[
             _ga.note("wolf_t_base_gate:pending_refill", _e)
         except Exception:
             pass
+        return {}
+    return out
+
+
+def last_tsell_price(account_id: str, days: Optional[int] = None) -> Dict[str, float]:
+    """{symbol: **该笔待回补 T出 的成交价**} ✓ —— 供"**挂被动单在卖出位置**"用 ✓。
+
+    语料 ✓（`docs/wolf-behavior-blueprint.md:232`）：「**被动挂单回补** | 已止损出局、等回到卖出位置
+      → **挂被动单、不盯分时**（"下去不补，上来回到这个位置才补"）」✓
+    为什么必须用它 ✗：实测 t68 —— T回 用**当时现价** ⇒ 必然撞两条纪律 ⇒
+      「加仓口径：买入价 305.13 高于本轮首笔买入价 263.24 的 +4.0%」✗ ／
+      「下去不补：最近卖出价 47.43，现价 45.29 更低」✗ ⇒ 14 blocked / 1 executed ✓
+      ⇒ 挂"卖出位置"的被动单，两条纪律**自动同时满足** ✓。
+    纯只读 ✓；异常 ⇒ {} ✓（绝不影响主链路 ✓）。
+    """
+    out: Dict[str, float] = {}
+    try:
+        if not refill_enabled():
+            return out
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            _mx = db.execute(_text("SELECT MAX(trade_date) FROM paper_trades WHERE account_id=:a"),
+                             {"a": account_id}).scalar()
+            if not _mx:
+                return {}
+            dmax = str(_mx)[:10]
+            d0 = (datetime.strptime(dmax, "%Y-%m-%d") - timedelta(days=2 * 30)).strftime("%Y-%m-%d")
+            rows = db.execute(_text(
+                "SELECT symbol, direction, COALESCE(volume,0), COALESCE(price,0), COALESCE(reason,'') "
+                "FROM paper_trades WHERE account_id=:a AND trade_date >= :d0 ORDER BY trade_date, id"),
+                {"a": account_id, "d0": d0}).fetchall()
+        finally:
+            db.close()
+        left: Dict[str, int] = {}
+        price: Dict[str, float] = {}
+        for sym, direction, vol, px, reason in (rows or []):
+            s2 = str(sym or "")
+            if not s2:
+                continue
+            v = int(vol or 0)
+            if str(direction) == "卖出":
+                if "确认制T出" in str(reason):
+                    left[s2] = left.get(s2, 0) + v
+                    if float(px or 0) > 0:
+                        price[s2] = float(px)          # 最近一笔 T出 价 ✓
+            elif str(direction) == "买入":
+                if s2 in left:
+                    left[s2] = max(0, left[s2] - v)
+                    if left[s2] == 0:
+                        price.pop(s2, None)
+        out.update({k: v for k, v in price.items() if left.get(k, 0) > 0})
+    except Exception:
         return {}
     return out
