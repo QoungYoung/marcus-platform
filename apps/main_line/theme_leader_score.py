@@ -137,7 +137,9 @@ def _theme_concepts(theme: str) -> List[str]:
 
 def _leaders(theme: str) -> Dict[str, Dict[str, float]]:
     """主题成员的 成交额/市值（as-of 前 20 日均值 ✓，**带日期夹紧 ⇒ 无未来函数 ✓**）。"""
-    key = "ld:" + str(theme)
+    # ⚠️ 缓存键必须带 **as-of 日** ✓：本模块会被"逐日"调用（回测一天一进程 ✓，但同进程跨日
+    #   重用时也要正确 ✓）⇒ 否则 T-1 的得分会被 T 复用 ✗（= 未来函数 ✗）。env 无 as-of ⇒ 键同旧 ✓。
+    key = "ld:" + str(theme) + (":" + str(_asof_day()) if _asof_day() else "")
     if key in _CACHE:
         return _CACHE[key]
     out: Dict[str, Dict[str, float]] = {}
@@ -223,3 +225,94 @@ def score_for(symbol: str, theme: str, concepts: Optional[Sequence[str]] = None)
             purity, len(set(cand) & set(tcs)), len(tcs), lead, score)
     except Exception as e:
         return None, "打分异常: %s" % str(e)[:60]
+
+
+# ── 「只做龙头」通道（账本 §9.876；用户 2026-10-15 拍板「写」）────────────────────────
+# **依据（语料原文 ✗ + 离线实测 ✓）**：
+#   · 狼大 2025-07-29「**下跌浪只做龙头**」／2025-05-19「买就买强的 **千万不要买后排补涨**」／
+#     2025-07-29「雅下你们**千万别去做后排 除了死没有别的**」⇒ 选票必须**取龙头、绝不退后排** ✓
+#   · 127 天离线实测 ✓：合格龙头池 T+5 中位 **+0.58%** ✓ vs 现口径 room_bottom 池 **−1.65%** ✗；
+#     龙头池内按**龙头度**分桶：[0.80,1.00] **+0.85%** ✓ vs [0.70,0.80) **−1.16%** ✗
+#   · **正宗度（概念纯度）无效** ✗（杂毛池内 −2% 无改善；龙头池内反向 −2.43% ✗）
+#     ⇒ 只用于「合格判定」✓，**不**参与排序 ✗（排序一律用**龙头度** ✓）
+# **开关**：`WOLF_PICK_LEADER_ONLY`（**库内默认 0 ⇒ 生产/回测逐字不变** ✓；置 1 才启用 ✓）
+# **fail-open**：判不了（无 as-of 日线 ＝ 生产常态 ✓）⇒ 返回 None ⇒ 调用方**保持原判定** ✓
+def leader_only() -> bool:
+    """「只做龙头」通道开关（默认 **0** ⇒ 逐字不变 ✓）。"""
+    return str(os.getenv("WOLF_PICK_LEADER_ONLY", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ts(symbol: Any) -> str:
+    """`SZ002156` → `002156.SZ`（与 score_for 内部同款换算 ✓；仅本通道使用 ✓）。"""
+    s = str(symbol or "")
+    return ("%s.%s" % (s[2:], s[:2])) if (len(s) >= 8 and s[:2] in ("SH", "SZ", "BJ")) else s
+
+
+def lead_of(symbol: Any, theme: str) -> Tuple[Optional[float], str]:
+    """该股在主题内的**龙头度**（0~1 ＝ 成交额分位/市值分位 的均值 ✓）。
+
+    取不到（无 as-of 日线/该票不在主题成员里 ✓）⇒ `(None, 原因)` ⇒ 调用方**不改变判定** ✓。
+    """
+    try:
+        ld = _leaders(theme)
+        if not ld:
+            return None, "无 as-of 日线（数据不足 ⇒ 不改变判定）"
+        ts = _ts(symbol)
+        if ts not in ld:
+            return None, "该票无 as-of 日线 ⇒ 不改变判定"
+        amts = [x["amt"] for x in ld.values()]
+        mvs = [x["mv"] for x in ld.values()]
+        return 0.5 * _pct(amts, ld[ts]["amt"]) + 0.5 * _pct(mvs, ld[ts]["mv"]), "龙头度"
+    except Exception as e:
+        return None, "龙头度异常: %s" % str(e)[:60]
+
+
+def _asof_ctx(day: Optional[Any]):
+    """上下文管理器：临时把 `WOLF_ASOF_DAY` 指到指定 as-of 日（**用完必还原** ✓，不污染他人 ✓）。"""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        if not day:
+            yield
+            return
+        _old = os.environ.get("WOLF_ASOF_DAY")
+        os.environ["WOLF_ASOF_DAY"] = str(day)
+        try:
+            yield
+        finally:
+            if _old is None:
+                os.environ.pop("WOLF_ASOF_DAY", None)
+            else:
+                os.environ["WOLF_ASOF_DAY"] = _old
+
+    return _cm()
+
+
+def rank_leaders(theme: str, symbols: Sequence[Any], day: Optional[Any] = None) -> Optional[List[Tuple[str, float]]]:
+    """合格龙头（合成分 ≥ `min_score()` ✓）按**龙头度降序** ✓。
+
+    返回 **None** ⇒ **判不了**（无 as-of 日线／全部候选都取不到分 ✓）⇒ 调用方**保持原判定** ✓（fail-open ✓）。
+    返回 **[]** ⇒ 该主题当日**无合格龙头** ⇒ 调用方应**不布腿** ✓（语料：「绝不碰后排」✓）。
+    """
+    syms = [str(s) for s in (symbols or []) if s]
+    if not syms:
+        return []
+    with _asof_ctx(day):
+        if not _leaders(theme):        # 无 as-of 日线（生产常态）⇒ 判不了 ✓
+            return None
+        out: List[Tuple[str, float]] = []
+        judged = 0
+        for s in syms:
+            sc, _w = score_for(s, theme)
+            if sc is None:
+                continue
+            judged += 1
+            if sc < min_score():
+                continue
+            lv, _w2 = lead_of(s, theme)
+            out.append((s, float(lv) if isinstance(lv, (int, float)) else -1.0))
+        if judged == 0:
+            return None                # 一个都判不了 ⇒ 不改变判定 ✓
+        out.sort(key=lambda kv: -kv[1])
+        return out

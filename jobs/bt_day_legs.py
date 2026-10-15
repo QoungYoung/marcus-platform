@@ -506,6 +506,29 @@ def main() -> int:
                 _pick = arm.confirm_pick(th, exclude=held, limit=pool_legs - got, domain_out=dom)
             except Exception as e:
                 print("[legs] confirm_pick %s ERR %s" % (th, str(e)[:110]), flush=True); _pick = []
+            # ── 「只做龙头」通道（账本 §9.876 ✓ 依狼大 2025-07-29「下跌浪只做龙头」／
+            #    2025-05-19「买就买强的 千万不要买后排补涨」✓；**库内默认关 ⇒ 逐字不变** ✓）──
+            #   合格龙头（合成分 ≥ 阈值 ✓）按**龙头度**降序 ✓；无合格 ⇒ 该主题当日**不布腿** ✓（绝不退后排 ✗）；
+            #   判不了（无 as-of 日线 ＝ 生产常态 ✓）⇒ **保持原判定** ✓（fail-open ✓）。
+            try:
+                import theme_leader_score as _tls2
+                if _tls2.leader_only():
+                    _rk = _tls2.rank_leaders(th, [str(c.get("symbol")) for c in _pick], day=cut)
+                    if _rk is None:
+                        print("[legs] LEADER_ONLY 判不了（无 as-of 日线）⇒ 保持原判定 ✓: %s" % th, flush=True)
+                    elif not _rk:
+                        print("[legs] LEADER_ONLY 无合格龙头 ⇒ **该主题当日不布腿** ✗: %s（候选 %d 只）"
+                              % (th, len(_pick)), flush=True)
+                        _pick = []
+                    else:
+                        _by = {str(c.get("symbol")): c for c in _pick}
+                        _new = [_by[s] for s, _v in _rk if s in _by]
+                        if len(_new) != len(_pick):
+                            print("[legs] LEADER_ONLY %s ⇒ 候选 %d → %d 只（按龙头度降序 ✓ 前3: %s）"
+                                  % (th, len(_pick), len(_new), [(s, round(v, 3)) for s, v in _rk[:3]]), flush=True)
+                        _pick = _new
+            except Exception as _e_lk:
+                print("[legs] LEADER_ONLY 异常（保持原判定 ✓）: %s" % str(_e_lk)[:90], flush=True)
             for cand in _pick:
                 if got >= pool_legs:
                     break
