@@ -97,29 +97,39 @@ def pending_refill_symbols(account_id: str, days: Optional[int] = None) -> Dict[
         n = int(days if days is not None else (os.getenv("WOLF_T_OUT_REFILL_DAYS", "3") or 3))
         from sqlalchemy import text as _text
         from app.database import SessionLocal
-        d0 = (datetime.now() - timedelta(days=2 * max(1, min(30, n)))).strftime("%Y-%m-%d")
+        # ⚠️ 锚点必须是**该账户自己的最近交易日** ✗，不能用真实 today ✓
+        #   实测（2026-10-15）：臂里成交的 trade_date 是**模拟日**（2026-01-15 ✓），
+        #   用 `datetime.now()` 取窗口 ⇒ 一条都取不到 ⇒ 待回补恒为空 ✗（本函数第一版就踩了这个坑 ✓）。
         db = SessionLocal()
         try:
+            _mx = db.execute(_text("SELECT MAX(trade_date) FROM paper_trades WHERE account_id=:a"),
+                             {"a": account_id}).scalar()
+            if not _mx:
+                return {}
+            dmax = str(_mx)[:10]
+            d0 = (datetime.strptime(dmax, "%Y-%m-%d") - timedelta(days=2 * max(1, min(30, n)))).strftime("%Y-%m-%d")
             rows = db.execute(_text(
-                "SELECT symbol, trade_date, direction, COALESCE(volume,0) FROM paper_trades "
-                "WHERE account_id=:a AND trade_date >= :d0 ORDER BY trade_date, id"),
+                "SELECT symbol, trade_date, direction, COALESCE(volume,0), COALESCE(reason,'') "
+                "FROM paper_trades WHERE account_id=:a AND trade_date >= :d0 ORDER BY trade_date, id"),
                 {"a": account_id, "d0": d0}).fetchall()
         finally:
             db.close()
-        sold: Dict[str, int] = {}
-        bought: Dict[str, int] = {}
-        for sym, d, direction, vol in (rows or []):
+        # 按时间**顺序递推** ✓：T出 ⇒ 待回补 += vol ✓；其后的买入 ⇒ 抵扣 ✓
+        #   ⚠️ 不能用"窗口内买入总和"抵扣 ✗ —— 实测：603986 0115 T出 100 股，
+        #     而窗口里 0113 的建仓买入 200 股被拿去抵扣 ⇒ 待回补算成 0 ✗（第一版就错在这 ✓）。
+        seq: Dict[str, int] = {}
+        for sym, d, direction, vol, reason in (rows or []):
             s2 = str(sym or "")
             if not s2:
                 continue
+            v = int(vol or 0)
             if str(direction) == "卖出":
-                sold[s2] = sold.get(s2, 0) + int(vol or 0)
+                if "确认制T出" in str(reason):
+                    seq[s2] = seq.get(s2, 0) + v
             elif str(direction) == "买入":
-                bought[s2] = bought.get(s2, 0) + int(vol or 0)
-        for s2, q in sold.items():
-            left = int(q) - int(bought.get(s2, 0))
-            if left > 0:
-                out[s2] = left
+                if s2 in seq:
+                    seq[s2] = max(0, seq[s2] - v)
+        out.update({k: v for k, v in seq.items() if v > 0})
     except Exception as _e:
         try:
             from app.services import gate_alarm as _ga
