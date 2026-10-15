@@ -448,6 +448,39 @@ def _account_available_cash(account_id: str) -> Optional[float]:
 # 账本（当日可卖额度）
 # ────────────────────────────────────────────────────────────────
 
+class _CiLedger(dict):
+    """**大小写不敏感取键**的账本 ✓（2026-10-15 修 ✓）。
+
+    病灶 ✗（实测 t68 ✓ 用户「感觉怎么缺了离场条件呢」✓）：
+      · 账本键 = `paper_positions.symbol` = **大写**（`SH603986` ✓，`sellable: 100` ✓ 明明有货 ✓）
+      · 而 `t_triggers.symbol` 存的是**小写**（`sh603986` ✗，来自腾讯 qt 归一化 ✓）
+      · 调用点普遍 `get_sellable_ledger(...).get(sym)` ✗ **大小写敏感** ⇒ 取到 None
+        ⇒ `t_bridge.wake_skip_reason()` 判「持仓 0 股 ⇒ 卖腿成交即裸空 ⇒ **不唤醒 AI**」✗
+      · 后果 ✗：**所有卖出腿被 skip ⇒ 离场永不执行** ✓
+        实证：SH603986 买入 263.24（0113）⇒ 0130 收 314.88（**+19.6%** ✓），期间
+        `wolf_fib_target_sell`(0.618止盈 ✓) / `wolf_board_half_sell`(板上减半 ✓) /
+        `wolf_profit_take_sell`(浮盈≥3%减半 ✓) 每条后面都跟着
+        `skipped_no_position/skip sh603986 持仓 0 股` ✗。
+    修法 ✓：只在本函数返回值上做大小写兼容 ✓（**一处改、9 处调用点受益** ✓）；
+      精确键仍优先 ✓ ⇒ 不改变任何既有命中的行为 ✓。
+    """
+
+    def get(self, k, default=None):
+        if dict.__contains__(self, k):
+            return dict.get(self, k, default)
+        try:
+            want = str(k).upper()
+        except Exception:
+            return default
+        for kk in self.keys():
+            try:
+                if str(kk).upper() == want:
+                    return dict.get(self, kk, default)
+            except Exception:
+                continue
+        return default
+
+
 def get_sellable_ledger(account_id: str = "t") -> Dict[str, Dict[str, Any]]:
     """读取指定账户"当日可卖额度"账本（基于 paper_positions + 当日成交推算）。
 
@@ -507,7 +540,7 @@ def get_sellable_ledger(account_id: str = "t") -> Dict[str, Dict[str, Any]]:
                     "avg_price": float(p["avg_price"] or 0),
                 }
             db.commit()
-            return ledger
+            return _CiLedger(ledger)
         finally:
             db.close()
     except Exception as e:
