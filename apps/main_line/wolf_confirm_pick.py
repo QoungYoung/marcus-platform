@@ -27,6 +27,9 @@ v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低×(1+WO
 import os, sys, json, time, glob, urllib.request, statistics
 
 
+_C2T_CACHE = {}
+
+
 def _silent_alert(where, exc=None):
     """静默点统一出口（账本 §9.545）：原来 `except …: pass/continue` 什么都不留 ⇒ 至少留痕。
 
@@ -107,14 +110,58 @@ def board_allowed(ts_code):
 def names_map():
     return {str(x[0]): str(x[1]) for x in gz("stock_basic", {"list_status": "L"}, "ts_code,name")}
 
+def _concept_themes():
+    """概念 → 主题集合（来自**唯一映射源** `fusion_mainline.THEME_CONCEPTS` ✓）。
+
+    ⚠️ 为什么必须有它（2026-10-15 查实 ✓）：判级落盘 `stock_confirm_result.json` 每条记录**只打一个**
+    `theme` 标签 ✗，而 `THEME_CONCEPTS` 里存在**多归属**概念 ✓（如 存储芯片/AI芯片 **同属**
+    AI/算力/科技 **和** 半导体/芯片 ✓）⇒ 精确匹配单标签会让 `confirm_universe('半导体/芯片')` **恒空** ✗
+    ⇒ `pick_v2` 判 `no_universe` ⇒ **回退 legacy（无龙头约束）⇒ 买杂毛** ✗
+    （实证 20260106 ✓：存储芯片桶里有 002156 通富微电/600584 长电科技/002185 华天科技/002916 深南电路 ✓、
+      AI芯片桶里有 688041 海光信息/688256 寒武纪/002049 紫光国微 ✓ —— 全被这一个标签压掉 ✗）
+    """
+    key = "_c2t"
+    if key in _C2T_CACHE:
+        return _C2T_CACHE[key]
+    out = {}
+    try:
+        from fusion_mainline import THEME_CONCEPTS
+        for t, cs in (THEME_CONCEPTS or {}).items():
+            for c in (cs or []):
+                out.setdefault(str(c), set()).add(str(t))
+    except Exception as _e_c2t:
+        _silent_alert("wolf_confirm_pick.py:110", _e_c2t)
+        out = {}
+    _C2T_CACHE[key] = out
+    return out
+
+
+def multi_theme_universe() -> bool:
+    """**多归属域**开关：`WOLF_UNIVERSE_MULTI_THEME`（**库内默认 0 ⇒ 逐字不变** ✓）。
+
+    置 1 ⇒ 按 `THEME_CONCEPTS` 反查（含多归属 ✓）；未收录的概念**回落到原单标签判定** ✓（不下沉 ✗）。
+    """
+    return str(os.getenv("WOLF_UNIVERSE_MULTI_THEME", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def confirm_universe(theme="农业"):
     try:
         sc = json.load(open(os.path.join(DATA, "stock_confirm_result.json"), encoding="utf-8"))
     except Exception:
         return {}
     uni = {}
+    _c2t = _concept_themes() if multi_theme_universe() else {}
     for cname, v in sc.items():
-        if isinstance(v, dict) and v.get("theme") == theme:
+        if not isinstance(v, dict):
+            continue
+        if _c2t:
+            _real = _c2t.get(str(cname))
+            # 映射表收录了 ⇒ 按**真实归属**判定 ✓（多归属一概命中 ✓）；
+            # 未收录 ⇒ 回落原单标签 ✓（口径不沉底 ✗）。
+            _hit = (theme in _real) if _real else (v.get("theme") == theme)
+        else:
+            _hit = v.get("theme") == theme
+        if _hit:
             uni[cname] = [str(s.get("code", "")) for s in (v.get("stocks") or []) if s.get("code")]
     return uni
 
@@ -146,8 +193,31 @@ def cross_concepts():
     except Exception:
         return {}
 
+def _daily_start(end):
+    """日线取数起点。
+
+    ⚠️ 2026-10-15 查实 ✗：原实现**硬编码** `start_date="20260301"` ✗ ⇒ 回测里 as-of < 2026-03-01
+    时取数窗口为空 ⇒ `fetch_daily` 返回 0 行 ⇒ `pick_v2` 的 `len(rows) >= 80` 全不过 ⇒
+    **`no_scored` ⇒ v2 选股整段失效 ⇒ 回退 legacy（无龙头约束）⇒ 买杂毛** ✗
+    （与 §9.870 `stock_confirm_judge` 的硬编码 `start_date="20260601"` 同型 ✗）
+    开关 `WOLF_DAILY_START_DAYS`（**库内默认 0 ⇒ 逐字不变** ✓）：置 >0 时起点改为 end 往前推 N 个**自然日**
+    （建议 400 ⇒ 覆盖 ≥80 个交易日 ✓）。
+    """
+    try:
+        n = int(float(os.getenv("WOLF_DAILY_START_DAYS", "0") or 0))
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0 and end:
+        try:
+            import datetime as _dt
+            return (_dt.datetime.strptime(str(end), "%Y%m%d") - _dt.timedelta(days=n)).strftime("%Y%m%d")
+        except Exception as _e_ds:
+            _silent_alert("wolf_confirm_pick.py:196", _e_ds)
+    return "20260301"
+
+
 def fetch_daily(ts, end):
-    rows = gz("daily", {"ts_code": ts, "start_date": "20260301", "end_date": end},
+    rows = gz("daily", {"ts_code": ts, "start_date": _daily_start(end), "end_date": end},
               "ts_code,trade_date,close,low,amount,high")
     # rows: (trade_date, close, low, amount, high)  —— high 为 2026-09-15 v3 排序新增（flat_low_days）
     return sorted((str(x[1]), _safe_float(x[2], where="seg_o"), _safe_float(x[3], where="seg_h"),

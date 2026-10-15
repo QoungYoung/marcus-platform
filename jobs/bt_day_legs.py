@@ -502,6 +502,21 @@ def main() -> int:
                      len(pool) - _iB, time.time() - _lgT0), flush=True)
             if got >= pool_legs:
                 break
+            # ── C ✓ 判级域为空 ⇒ **不布腿**（2026-10-15 ✓ 语料「没方向就不买」✓）──
+            #   病灶 ✗：主题在**方向层**里、却不在**判级域**里 ⇒ `pick_v2` 报 `no_universe`
+            #   ⇒ 系统**回退 legacy（无龙头约束）⇒ 买杂毛** ✗（实证 20260106 ✓：
+            #     半导体/芯片、新能源/电池 两个主题都回退 ⇒ 选出 北京利尔(其他建材) 这类 ✗）
+            #   开关 `WOLF_SKIP_THEME_NO_DOMAIN`（**库内默认 0 ⇒ 逐字不变** ✓）⇒ 置 1 才启用 ✓。
+            if str(os.getenv("WOLF_SKIP_THEME_NO_DOMAIN", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    import wolf_confirm_pick as _wcp0
+                    _u0 = _wcp0.confirm_universe(th)
+                except Exception as _e_nd:
+                    _u0 = {"__judge_failed__": []}
+                    print("[legs] SKIP_NO_DOMAIN 判不了（保持原判定 ✓）: %s" % str(_e_nd)[:80], flush=True)
+                if not _u0:
+                    print("[legs] SKIP_NO_DOMAIN 主题[%s] 当日**无判级域** ⇒ 不布腿 ✓（不回退 legacy ✗）" % th, flush=True)
+                    continue
             try:
                 _pick = arm.confirm_pick(th, exclude=held, limit=pool_legs - got, domain_out=dom)
             except Exception as e:
