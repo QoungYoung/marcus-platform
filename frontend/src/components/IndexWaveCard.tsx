@@ -10,9 +10,14 @@ import { waveApi } from '../api/client';
  * ═══════════════════════════════════════════════════════ */
 
 interface Bar { date: string; open: number; high: number; low: number; close: number; amount: number }
+interface PatMark {
+  kind: string; neck: number; confirmed: boolean;
+  points: { date: string; value: number }[];
+}
 interface Wave {
   date: string; rung: number; name: string; level: string; sub_level: string;
   operation: string; mode: string; expect: string; invest: number; main_up: string; reasons: string;
+  marks?: PatMark | null;
 }
 
 const UP_COLOR = '#e5484d';
@@ -103,6 +108,49 @@ export default function IndexWaveCard({ days = 250, height = 340 }: { days?: num
       }
     }
 
+    // ── 形态标注：W底（两个低点+颈线）／双头（两个高点+颈线）—— 按「形态指纹」去重，每个只画一次 ✓
+    const bmap: Record<string, { high: number; low: number; close: number }> = {};
+    bars.forEach((b) => { bmap[b.date] = { high: b.high, low: b.low, close: b.close }; });
+    const patPoints: any[] = [];
+    const patLines: any[] = [];
+    const seenPat: Record<string, boolean> = {};
+    waves.forEach((w) => {
+      const m = w.marks;
+      if (!m || !m.points || m.points.length < 2) return;
+      const key = m.kind + '|' + m.points.map((p) => p.date).join('|');
+      if (seenPat[key]) return;
+      seenPat[key] = true;
+      const isW = m.kind === 'w_bottom';
+      const pc = isW ? '#2f9e6e' : '#d64545';
+      m.points.forEach((p, i) => {
+        const b = bmap[p.date];
+        if (!b) return;
+        patPoints.push({
+          coord: [p.date, isW ? b.low : b.high],
+          value: (isW ? 'W' : '顶') + (i + 1),
+          symbol: 'circle',
+          symbolSize: 9,
+          itemStyle: { color: pc, borderColor: '#fff', borderWidth: 1 },
+          label: { show: true, position: isW ? 'bottom' : 'top', color: pc, fontSize: 9, fontWeight: 600 },
+        });
+      });
+      const cb = bmap[w.date];
+      patPoints.push({
+        coord: [w.date, isW ? (cb ? cb.low : m.neck) : (cb ? cb.high : m.neck)],
+        value: isW ? 'W底确认' : '双头',
+        symbol: 'pin',
+        symbolSize: 26,
+        itemStyle: { color: pc },
+        label: { show: true, color: '#fff', fontSize: 8, fontWeight: 700 },
+      });
+      if (m.neck) {
+        patLines.push([
+          { coord: [m.points[0].date, m.neck], lineStyle: { color: pc, type: 'dashed', width: 1, opacity: 0.75 } },
+          { coord: [w.date, m.neck], label: { show: true, position: 'insideEndTop', formatter: '颈线 ' + m.neck, color: pc, fontSize: 8 } },
+        ]);
+      }
+    });
+
     ch.setOption({
       animation: false,
       backgroundColor: 'transparent',
@@ -176,6 +224,8 @@ export default function IndexWaveCard({ days = 250, height = 340 }: { days?: num
           borderColor: UP_COLOR, borderColor0: DOWN_COLOR,
         },
         markArea: { silent: true, data: areas },
+        markPoint: { silent: true, data: patPoints },
+        markLine: { silent: true, symbol: 'none', data: patLines },
       }],
     }, true);
     return () => { /* 保留实例，随组件卸载由 effect 清理 */ };

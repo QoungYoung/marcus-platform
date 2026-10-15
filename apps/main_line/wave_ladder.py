@@ -232,6 +232,26 @@ def sync3(asof: str, look: int = 3) -> Optional[bool]:
     return False
 
 
+def w_bottom_marks(pv: Sequence[Any], close: float, vol_ratio20: float, since_date: str = "") -> Optional[Dict[str, Any]]:
+    """W底**几何**：{"l1": {date,value}, "l2": {...}, "neck": float, "confirmed": bool}（供图上标注 ✓）。
+
+    与 `_w_bottom` 同一判据（后者只取 bool/颈线 ✓，单一来源不重复实现 ✓）。无形态 ⇒ None。
+    """
+    lows = [p for p in pv if str(p[3]).upper() == "L" and (not since_date or str(p[1]) >= since_date)][-2:]
+    if len(lows) < 2:
+        return None
+    d1, d2 = str(lows[0][1]), str(lows[1][1])
+    v1, v2 = lows[0][2], lows[1][2]
+    if not v1 or abs(v2 / v1 - 1) > WB_NEAR:
+        return None
+    mids = [p for p in pv if d1 < str(p[1]) < d2 and str(p[3]).upper() == "H"]
+    if not mids:
+        return None
+    neck = max(p[2] for p in mids)
+    return {"l1": {"date": d1, "value": round(v1, 2)}, "l2": {"date": d2, "value": round(v2, 2)},
+            "neck": round(neck, 2), "confirmed": bool(close > neck and vol_ratio20 >= WB_VOL)}
+
+
 def _w_bottom(pv: Sequence[Any], close: float, vol_ratio20: float, since_date: str = "") -> Tuple[bool, float]:
     """W底确认：最近两个**相近**低点（差 ≤WB_NEAR）＋ 中间颈线（两低之间的最高 H）＋ 今日**放量收上颈线**。
 
@@ -253,6 +273,25 @@ def _w_bottom(pv: Sequence[Any], close: float, vol_ratio20: float, since_date: s
     if close > neck and vol_ratio20 >= WB_VOL:
         return True, neck
     return False, neck
+
+
+def double_top_marks(pv: Sequence[Any], hi_excl: float, since_date: str = "") -> Optional[Dict[str, Any]]:
+    """双头**几何**：{"h1": {date,value}, "h2": {...}, "neck": float, "confirmed": bool}（供图上标注 ✓）。
+
+    颈线 = 两高点之间的最低 L（跌破它才是双头成立的方向 ✓）。无形态 ⇒ None。
+    """
+    highs = [p for p in pv if str(p[3]).upper() == "H" and (not since_date or str(p[1]) >= since_date)][-2:]
+    if len(highs) < 2:
+        return None
+    d1, d2 = str(highs[0][1]), str(highs[1][1])
+    v1, v2 = highs[0][2], highs[1][2]
+    if not v1 or abs(v2 / v1 - 1) > DT_NEAR:
+        return None
+    lws = [p for p in pv if d1 < str(p[1]) < d2 and str(p[3]).upper() == "L"]
+    neck = min([p[2] for p in lws]) if lws else 0.0
+    conf = bool(v2 <= v1 and hi_excl <= v1 * (1 + DT_NEAR))
+    return {"h1": {"date": d1, "value": round(v1, 2)}, "h2": {"date": d2, "value": round(v2, 2)},
+            "neck": round(neck, 2), "confirmed": conf}
 
 
 def _double_top(pv: Sequence[Any], hi20: float, since_date: str = "") -> bool:
@@ -530,8 +569,20 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
     _vr20 = (sum(r[3] for r in hist[-21:-1]) / 20) if len(hist) >= 21 and sum(r[3] for r in hist[-21:-1]) else 0.0
     # 注意：st["pivots"] 是**拐点个数**（int ✗），形态判定要用拐点列表 ⇒ 直接调 pivots()（同一因果函数 ✓）
     _pv = pivots(rows, asof)
-    _wb_ok, _wb_neck = _w_bottom(_pv, close, (amount / _vr20) if _vr20 else 0.0,
-                                hist[-WB_WIN][0] if len(hist) >= WB_WIN else "")
+    _since_wb = hist[-WB_WIN][0] if len(hist) >= WB_WIN else ""
+    _wb_marks = w_bottom_marks(_pv, close, (amount / _vr20) if _vr20 else 0.0, _since_wb)
+    _wb_ok, _wb_neck = bool(_wb_marks and _wb_marks["confirmed"]), (_wb_marks or {}).get("neck", 0.0)
+    _dt_marks = double_top_marks(_pv, max(r[1] for r in hist[-21:-1]) if len(hist) >= 21 else 0.0,
+                                hist[-DT_WIN][0] if len(hist) >= DT_WIN else "")
+    _marks = None
+    if _wb_ok and _wb_marks:
+        _marks = {"kind": "w_bottom", "neck": _wb_marks["neck"], "confirmed": True,
+                  "points": [{"date": _wb_marks["l1"]["date"], "value": _wb_marks["l1"]["value"]},
+                             {"date": _wb_marks["l2"]["date"], "value": _wb_marks["l2"]["value"]}]}
+    elif _dt_marks and _dt_marks["confirmed"]:
+        _marks = {"kind": "dtop", "neck": _dt_marks["neck"], "confirmed": True,
+                  "points": [{"date": _dt_marks["h1"]["date"], "value": _dt_marks["h1"]["value"]},
+                             {"date": _dt_marks["h2"]["date"], "value": _dt_marks["h2"]["value"]}]}
     return {
         "date": d, "close": close, "high": high, "prev_close": prev_close, "amount": amount,
         "wave1_top": w1, "wave1_top_date": st["wave1_top_date"], "wave1_top_minor": st["wave1_top_minor"],
@@ -597,6 +648,7 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
                          if len(hist) >= 61 and sum(r[3] for r in hist[-61:-1]) else False),
         "w_bottom": _wb_ok,
         "w_bottom_neck": _wb_neck,
+        "marks": _marks,          # 图上标注用（W底/双头的两个端点 + 颈线 ✓，无形态则 None）
         # ── 补档 C 的顶部/下跌族特征 ──
         "shrink_high": bool(close > (hist[-21:-1] and max(r[1] for r in hist[-21:-1])) and _vr20
                             and amount <= TOP_SHRINK * _vr20),

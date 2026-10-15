@@ -187,6 +187,7 @@ def _waves(code: str) -> List[Dict[str, Any]]:
         for ev in W.walk(rows):
             ws = W.to_wave_state(ev)
             out.append({"date": ev["date"], "rung": ev.get("rung_index"), "name": ev.get("name"),
+                        "marks": (ev.get("features") or {}).get("marks"),   # 图上标注：W底/双头的端点+颈线 ✓
                         "level": ws.get("level"), "sub_level": ws.get("sub_level"),
                         "operation": ws.get("operation"), "mode": ws.get("mode") or "",
                         "expect": ev.get("expect"), "invest": ev.get("invest"),
