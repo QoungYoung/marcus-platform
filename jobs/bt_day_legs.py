@@ -669,6 +669,22 @@ def main() -> int:
         except Exception as _elr:
             print("[legs] line_regime(对齐生产)异常(放行 ✓): %s" % str(_elr)[:90], flush=True)
 
+    # ── 腿去重（2026-10-15 ✓）──
+    #   病灶 ✗：pathA（链通道）与 pathB（主题通道）**各自**选票 ⇒ 同一天同一只票可能被两条路各选一次
+    #   ⇒ 写出**重复腿**〔实证 20260106：['SZ300475','SZ300475'] ✗〕⇒ 下游按腿下单会**重复建仓** ✗。
+    #   去重只删除**完全重复的 symbol** ✓（保留首次出现的来源 ✓，不改变被选中股票的**集合** ✓）。
+    #   `WOLF_LEGS_DEDUP=0` 可关（默认 **1**：重复腿是缺陷、不是口径 ✓）。
+    if str(os.getenv("WOLF_LEGS_DEDUP", "1")).strip().lower() not in ("0", "false", "no"):
+        _seen, _uniq, _dup = set(), [], []
+        for _l in legs_out:
+            _s = str(_l.get("symbol") or "")
+            if _s and _s in _seen:
+                _dup.append(_s); continue
+            _seen.add(_s); _uniq.append(_l)
+        if _dup:
+            print("[legs] DEDUP 去掉重复腿 %d 条: %s（保留首次来源 ✓）" % (len(_dup), _dup[:8]), flush=True)
+        legs_out = _uniq
+
     out = a.out or os.path.join(sb, "legs.jsonl")
     with open(out, "w", encoding="utf-8") as f:
         for l in legs_out:
