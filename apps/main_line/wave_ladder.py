@@ -1,0 +1,360 @@
+# -*- coding: utf-8 -*-
+"""wave_ladder.py — 他的**浪型假设链 + 自动降级**（2026-10-15 原话落地为影子）。
+
+狼大原话（帖 47288722，2026-10-15 10:17，lou 1224）：
+  · 「之前的判断是一级一级的降低的 —— 首先判断了整波为**调整浪**，可能性有
+     **失败4-5 / 成功4-5 / 下跌1浪**这三种，**当每一种达不到的时候自动降级为下一种**。
+     这就是技术在股市里的作用：通过**硬性条件**调整**操作策略、预期管理、仓位管理**。」
+原话（同日 09:56，lou 1221，降级实例）：
+  · 「今天收盘后**如果没有收回跳空跌幅** ⇒ 整波浪型从**主升阶段4浪调整**转为**主跌1浪**；
+    后续预期从**5浪上升**转为**大B浪反弹**；操作策略转为**自救**；持仓精简为个别算力和部分题材。」
+原话（2026-08-05 17:09）：
+  · 「4-5 对应就是高位科技的 C 杀，**可能 4-5 是失败5**」⇒ 「失败」= 不创新高的截断 5 浪。
+
+**档位顺序**（2026-10-15 用户拍板，按时间推进而非他字面顺序）：
+    4浪调整 → 成功4-5（整理结束·创出新高）→ 失败4-5（冲高不过前高后回落）→ 下跌1浪（破位）
+  · **单向**：`rung = max(上一档, 当日判定档)` —— 他的链条只降不升 ✓；
+    要“回档”（如 08-05 他改口「肯定按 4 接 5 做」）必须人工 `reset`，不自动回退 ✓。
+  · **操作/预期**（每档对他实际姿态的对照，见各档 `expect`/`operation`）：
+    4浪调整 → 吃反抽、以安全带走利润为主（`t_only`；他 07-31~08-03 只做半导体 ETF ✓）
+    成功4-5 → 调整结束、主升末段在走（`side`；他 08-05「按 4 接 5 做」✓）
+    失败4-5 → 反抽夭折、不新建仓（`defense`；他 10-09~10-13 避海外链、只吃差价 ✓）
+    下跌1浪 → 自救、精简持仓（`exit`；他 10-15「操作策略转为自救」✓）
+
+口径（带 ⛔ 的是我们的代理，他没给量化）：
+  · **未收回跳空** = 当日 `high < 前收`（真跳空）∧ `close < 前收`（跌幅未收回）——他的原话条件 ✓；
+  · **创新高** = `close >= 前 60 日收盘最高`（成功4-5 的硬证据 ⛔ 窗口自定）；
+  · **破位** = `close < 前 60 日收盘最低`（主跌1浪 ⛔ 窗口自定）；
+  · **失败4-5** = 近 20 日反弹**摸到前高附近**（高点 ≥ `NEAR_MIN`×前 60 日最高，⛔ 0.95）
+    ∧ 未创 60 日新高 ∧ 自该高点回落 ≥ `FADE_MIN`(⛔ 3%)
+    —— “摸到前高附近”这一条是 2026-10-15 实测补的：**少了它，深调里任何一次 3% 反弹
+       都会把档位误判成「失败4-5」**（首测 2026-07-31 就误报，而他当时说的是「调整浪」✗）；
+  · 数据：`data/index_daily_<code>.json`（东财日线，`[date, close, high, amount]` ✓ 已实测），
+    缺失回落 `data/指数数据/index_daily/<code>.csv`；**取不到一律返回 None（fail-open）** ✓；
+  · 操作/仓位口径复用 `wave_alloc.WAVE_ALLOC`（同一张表，避免两处各写一份 ✓）。
+
+离线验收（`python jobs/eval_wave_ladder.py`，2026 全年 as-of 回放，08 次降级 / 03 次重定浪 / 单向性 ✓）：
+  · 2026-03-23 [3] 下跌1浪 —— 他 03-23 在防、03-25「减回 50% 内」✓
+  · 2026-04-09 [3]（锁着）—— 他 04-09「白线在上 肯定没有买点 ⇒ 减回 50-55%」✓
+  · 2026-07-31 / 08-05 / 08-07 [0] 4浪调整（`t_only`）—— 他「整波为调整浪」「按 4 接 5 做」「半导体吃 20 个点」✓
+  · 2026-10-09 ~ 10-14 [3] 下跌1浪（`exit`）—— 他「避海外链、只吃差价」→ 10-15「转为自救」✓
+  · **已知偏差 ⚠️：2026-08-19 起锁在「下跌1浪」直到 10-14**，而他 9 月~10 月上旬公开说的是
+    「调整浪 / 反抽」⇒ 这一段我们**偏悲观约 2 个月**（根因：他的“重定浪型”是人工判断，
+    日线收盘代理看不到；可调 `WOLF_WAVE_LADDER_RESET` 或等盘口/分时数据到位再收紧）。
+
+开关：`WOLF_WAVE_LADDER`（默认 **0** ⇒ **影子**：只落盘 + 只读，不改任何交易行为）
+      `WOLF_WAVE_LADDER_FLOOR`（默认 0 ⇒ 不启用；>0 时额外作为“关键位”，跌破即主跌1浪）
+自检：`python apps/main_line/wave_ladder.py`
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+DATA = os.environ.get("DATA_DIR", "data")
+def _envf(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+
+
+MIN_BARS = 80                      # 少于这个根数不给结论（fail-open）
+HI_WIN = 60                        # 新高/破位窗口
+RALLY_WIN = 20                     # 反弹窗口
+RALLY_MIN = 0.03                   # ⛔ 代理：认定“冲出过一段”
+FADE_MIN = 0.03                    # ⛔ 代理：认定“已经回落”
+NEAR_MIN = _envf("WOLF_WAVE_LADDER_NEAR", 0.98)    # ⛔ 代理：认定“摸到前高附近”
+GAP_MIN = _envf("WOLF_WAVE_LADDER_GAP_MIN", 0.005)  # ⛔ 代理：真跳空的最小幅度（2026 全年只有 5 天 >0.5%）
+RESET_RALLY = _envf("WOLF_WAVE_LADDER_RESET", 0.08)  # ⛔ 代理：反抽幅度达到多少才算空头结构被破坏
+
+RUNGS: List[Dict[str, str]] = [
+    {"key": "w4_adj", "name": "4浪调整",
+     "expect": "调整未完，等 4-5 收尾（只吃反抽）", "operation": "t_only",
+     "hold": "未创新高 ∧ 未摸前高后夭折 ∧ 未破 60 日收盘低位 ∧ 无未收回跳空"},
+    {"key": "w45_ok", "name": "成功4-5",
+     "expect": "调整结束 ⇒ 主升末段（5浪上升）", "operation": "side",
+     "hold": "收盘创 60 日新高（4-5 腿有效走完）"},
+    {"key": "w45_fail", "name": "失败4-5",
+     "expect": "反抽夭折（冲高不过前高后回落）", "operation": "defense",
+     "hold": "近20日摸到前高附近 ∧ 未创60日新高 ∧ 已回落达标"},
+    {"key": "down1", "name": "下跌1浪",
+     "expect": "大B浪反弹（自救：只降不空）", "operation": "exit",
+     "hold": "未收回跳空 ∨ 收盘破 60 日低位（关键位）"},
+]
+RUNG_INDEX = {r["key"]: i for i, r in enumerate(RUNGS)}
+
+# 仓位/操作口径复用 wave_alloc（缺依赖时退回本地副本，值保持一致 ✓）
+try:  # pragma: no cover - 依赖环境
+    from wave_alloc import WAVE_ALLOC as _ALLOC  # type: ignore
+except Exception:  # pragma: no cover
+    _ALLOC = {"build": (0.40, 0.35, 0.25, 1.0), "t_only": (0.70, 0.20, 0.10, 1.0),
+              "side": (0.60, 0.25, 0.15, 1.0), "defense": (0.60, 0.25, 0.15, 0.30),
+              "exit": (0.60, 0.25, 0.15, 0.70)}
+
+
+def _silent_alert(where, exc=None):
+    """静默点统一出口（账本 §9.545）：至少留痕，**绝不抛** ✓。"""
+    try:
+        from app.services import alert_hub as _ah
+        _ah.note_silent(where, exc)
+    except Exception:
+        try:
+            print("[silent:%s] %s: %s" % (where, type(exc).__name__ if exc is not None else "",
+                  str(exc)[:110] if exc is not None else ""), flush=True)
+        except Exception:
+            pass
+
+
+# ─────────────────────────── 开关 ───────────────────────────
+def enabled() -> bool:
+    return os.getenv("WOLF_WAVE_LADDER", "0").strip() in ("1", "true", "yes")
+
+
+def floor_level() -> float:
+    try:
+        return float(os.getenv("WOLF_WAVE_LADDER_FLOOR", "0") or 0)
+    except ValueError:
+        return 0.0
+
+
+def index_code() -> str:
+    return os.getenv("WOLF_WAVE_LADDER_INDEX", "000001.SH").strip() or "000001.SH"
+
+
+# ─────────────────────────── 数据层 ───────────────────────────
+def _json_path(code: str) -> Optional[str]:
+    name = "index_daily_%s.json" % code.replace(".", "_")
+    for cand in (os.path.join(DATA, name), os.path.join("data", name)):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _csv_path(code: str) -> Optional[str]:
+    name = "%s.csv" % code
+    for cand in (os.path.join(DATA, "指数数据", "index_daily", name),
+                 os.path.join("data", "指数数据", "index_daily", name)):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def load_rows(code: Optional[str] = None) -> List[Tuple[str, float, float, float]]:
+    """→ [(date8, close, high, amount)] 升序；**取不到返回 []**（fail-open ✓）。"""
+    code = code or index_code()
+    out: List[Tuple[str, float, float, float]] = []
+    p = _json_path(code)
+    if p:
+        try:
+            rows = (json.load(open(p, encoding="utf-8")) or {}).get("rows") or []
+            for r in rows:
+                try:
+                    out.append((str(r[0])[:8], float(r[1]), float(r[2]), float(r[3] or 0)))
+                except (TypeError, ValueError, IndexError) as _e:
+                    _silent_alert("wave_ladder.py:json_row", _e)
+        except Exception as _e:
+            _silent_alert("wave_ladder.py:json_load", _e)
+            out = []
+    if not out:
+        p = _csv_path(code)
+        if p:
+            try:
+                import csv as _csv
+                with open(p, encoding="utf-8") as fh:
+                    for c in _csv.DictReader(fh):
+                        try:
+                            d = str(c.get("trade_date"))[:10].replace("-", "")
+                            cl = float(c.get("close"))
+                            hi = float(c.get("high") or cl)
+                            am = float(c.get("amount") or 0)
+                            out.append((d, cl, hi, am))
+                        except (TypeError, ValueError) as _e:
+                            _silent_alert("wave_ladder.py:csv_row", _e)
+            except Exception as _e:
+                _silent_alert("wave_ladder.py:csv_load", _e)
+                out = []
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+# ─────────────────────────── 特征 ───────────────────────────
+def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Optional[Dict[str, Any]]:
+    """as-of 日的硬条件快照（**只用 ≤ asof 的数据** ✓）。"""
+    hist = [r for r in rows if r[0] <= str(asof)[:8]]
+    if len(hist) < MIN_BARS:
+        return None
+    d, close, high, amount = hist[-1]
+    prev_close = hist[-2][1]
+    win = hist[-(HI_WIN + 1):-1]                     # 前 60 根（不含当日）
+    hi60_prev = max(r[1] for r in win)
+    lo60_prev = min(r[1] for r in win)
+    w = hist[-RALLY_WIN:]
+    lo20 = min(r[1] for r in w)
+    hi20 = max(r[1] for r in w)
+    amt_prev = hist[-2][3]
+    return {
+        "date": d, "close": close, "high": high, "prev_close": prev_close, "amount": amount,
+        "hi60_prev": hi60_prev, "lo60_prev": lo60_prev, "hi20": hi20, "lo20": lo20,
+        "ma60": round(sum(r[1] for r in hist[-61:-1]) / 60, 2) if len(hist) >= 61 else 0.0,
+        "below_ma60": bool(len(hist) >= 61 and close < sum(r[1] for r in hist[-61:-1]) / 60),
+        "new_high60": bool(close > hi60_prev),   # 严格突破：等于前高不算“创新高” ✓
+        "break_low60": bool(close < lo60_prev),
+        "gap_pct": round((prev_close - high) / prev_close, 4) if prev_close else 0.0,
+        "gap_unrecovered": bool((prev_close - high) / prev_close >= GAP_MIN and close < prev_close),
+        "gap_break": bool((prev_close - high) / prev_close >= GAP_MIN and close < prev_close
+                          and len(hist) >= 61 and close < sum(r[1] for r in hist[-61:-1]) / 60),
+        "break_floor": bool(floor_level() and close < floor_level()),
+        "rally_amp": round(hi20 / lo20 - 1, 4) if lo20 else 0.0,
+        "rally_new_high": bool(hi20 > hi60_prev),
+        "hi20_ratio": round(hi20 / hi60_prev, 4) if hi60_prev else 0.0,
+        "near_prev_high": bool(hi60_prev and hi20 >= NEAR_MIN * hi60_prev),
+        "fade": round(1 - close / hi20, 4) if hi20 else 0.0,
+        "shrink": bool(amt_prev and amount < amt_prev),
+    }
+
+
+def stage_of(f: Dict[str, Any]) -> int:
+    """当日判定档（只看当日硬条件，不带上一次）→ 0..3。"""
+    if f["gap_break"] or f["break_low60"] or f["break_floor"]:
+        return RUNG_INDEX["down1"]
+    if ((not f["rally_new_high"]) and f["near_prev_high"]
+            and f["rally_amp"] >= RALLY_MIN and f["fade"] >= FADE_MIN):
+        return RUNG_INDEX["w45_fail"]
+    if f["new_high60"]:
+        return RUNG_INDEX["w45_ok"]
+    return RUNG_INDEX["w4_adj"]
+
+
+def _reasons(f: Dict[str, Any], idx: int) -> str:
+    hits = []
+    if f["gap_unrecovered"]:
+        hits.append("跳空未收回(高%s<前收%s)" % (round(f["high"], 2), round(f["prev_close"], 2)))
+    if f["break_low60"]:
+        hits.append("收盘%s破前60日低位%s" % (round(f["close"], 2), round(f["lo60_prev"], 2)))
+    if f["break_floor"]:
+        hits.append("跌破关键位%s" % floor_level())
+    if hits:
+        return "；".join(hits)
+    if idx == RUNG_INDEX["w45_fail"]:
+        return "近20日摸到前高%s的%s%%后回落%s%%（未创新高）" % (
+            round(f["hi60_prev"], 2), round(f["hi20_ratio"] * 100, 1), round(f["fade"] * 100, 1))
+    if idx == RUNG_INDEX["w45_ok"]:
+        return "收盘%s创60日新高(前高%s)" % (round(f["close"], 2), round(f["hi60_prev"], 2))
+    return "无破位无新高（前高%s，近20日最高%s=%s%%）⇒ 仍在调整区间" % (
+        round(f["hi60_prev"], 2), round(f["hi20"], 2), round(f["hi20_ratio"] * 100, 1))
+
+
+# ─────────────────────────── 判定 ───────────────────────────
+def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
+             prev: Optional[int] = None, latch_start: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """as-of 判定 + **单向锁**（只降不升）：`rung = max(prev, 当日档)` ✓。
+
+    释放（**重定浪型**，两条硬条件，都对应他本人行为）：
+      ① 当日创 60 日新高 —— 结构转上；
+      ② 自锁账起点（`latch_start`）以来低点反抽 ≥ `RESET_RALLY` —— 空头结构被破坏。
+    **没有这两条，一次破位会把档位永久锁死在主跌1浪** ✗（实测：2026-06-08 一跳空锁死后，
+    7/31~10/14 全部误报主跌1浪，而他 8/05 在「按 4 接 5 做」、10/09 在吃反抽 ✓）。
+    """
+    f = features(rows, asof)
+    if f is None:
+        return None
+    raw = stage_of(f)
+    reset, why = False, ""
+    if prev is not None and int(prev) > raw:
+        if f["new_high60"]:
+            reset, why = True, "创60日新高 ⇒ 重定浪型"
+        elif latch_start:
+            seg = [r[1] for r in rows if latch_start <= r[0] <= str(asof)[:8]]
+            hi, lo = (max(seg), min(seg)) if seg else (0.0, 0.0)
+            if lo and hi / lo - 1 >= RESET_RALLY:
+                reset, why = True, "自低点反抽%.1f%% ⇒ 重定浪型" % ((hi / lo - 1) * 100)
+    idx = raw if (reset or prev is None) else max(int(prev), raw)
+    r = RUNGS[idx]
+    w1, w2, w3, invest = _ALLOC.get(r["operation"], (0.6, 0.25, 0.15, 1.0))
+    return {"date": f["date"], "rung_index": idx, "key": r["key"], "name": r["name"],
+            "expect": r["expect"], "operation": r["operation"], "invest": invest,
+            "weights": [w1, w2, w3], "day_stage": raw, "reset": reset, "reset_reason": why,
+            "degraded": bool(prev is not None and idx > prev and not reset),
+            "reasons": _reasons(f, idx), "features": f}
+
+
+def walk(rows: Sequence[Tuple[str, float, float, float]], start: Optional[str] = None,
+         end: Optional[str] = None, prev: Optional[int] = None) -> List[Dict[str, Any]]:
+    """逐日回放（as-of 逐日推进，带单向锁 + 重定浪）→ 每次**降档/重定浪**都记一条 ✓。"""
+    out: List[Dict[str, Any]] = []
+    cur: Optional[int] = prev
+    latch: Optional[str] = None
+    for r in rows:
+        d = r[0]
+        if start and d < start:
+            continue
+        if end and d > end:
+            break
+        ev = evaluate(rows, d, cur, latch)
+        if ev is None:
+            continue
+        if ev["reset"]:
+            latch = None
+        if ev["rung_index"] > 0 and (cur is None or ev["rung_index"] > cur):
+            latch = d
+        cur = ev["rung_index"]
+        out.append(ev)
+    return out
+
+
+def read_ladder(state_file: str = "wave_ladder.json") -> Optional[Dict[str, Any]]:
+    """读影子产物（供上层/复盘）。取不到返回 None（fail-open ✓）。"""
+    for cand in (os.path.join(DATA, state_file), os.path.join("data", state_file)):
+        try:
+            if os.path.exists(cand):
+                return json.load(open(cand, encoding="utf-8"))
+        except Exception as _e:
+            _silent_alert("wave_ladder.py:read", _e)
+    return None
+
+
+def write_artifact(ev: Optional[Dict[str, Any]], state_file: str = "wave_ladder.json") -> bool:
+    """落盘 `wave_ladder.json`（影子档：**只在 WOLF_WAVE_LADDER=1 时才可真影响交易** ✓）。"""
+    if not ev:
+        return False
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        obj = dict(ev)
+        obj["switch"] = "on" if enabled() else "shadow"
+        obj["ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        tmp = os.path.join(DATA, state_file + ".tmp")
+        json.dump(obj, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        os.replace(tmp, os.path.join(DATA, state_file))
+        return True
+    except Exception as _e:
+        _silent_alert("wave_ladder.py:write", _e)
+        return False
+
+
+def operation_for_gate(ev: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """给上层消费的**唯一入口**：开关关着 ⇒ 恒 None（生产逐字不变 ✓）。"""
+    if not enabled():
+        return None
+    ev = ev or read_ladder()
+    return (ev or {}).get("operation") or None
+
+
+if __name__ == "__main__":
+    rows = load_rows()
+    print("bars:", len(rows), rows[0][0] if rows else "-", "->", rows[-1][0] if rows else "-")
+    anchors = ["2026-07-31", "2026-08-05", "2026-09-01", "2026-10-09", "2026-10-12", "2026-10-13", "2026-10-14"]
+    cur = None
+    for a in anchors:
+        ev = evaluate(rows, a.replace("-", ""), cur)
+        if ev is None:
+            print(a, "-> 无数据(fail-open)")
+            continue
+        cur = ev["rung_index"]
+        print("%s -> [%d]%s | op=%s invest=%s | 当日档=%d | %s" % (
+            a, ev["rung_index"], ev["name"], ev["operation"], ev["invest"], ev["day_stage"], ev["reasons"]))
+    if rows:
+        write_artifact(evaluate(rows, rows[-1][0]))
+        print("artifact:", read_ladder() is not None, "| switch:", "on" if enabled() else "shadow")
