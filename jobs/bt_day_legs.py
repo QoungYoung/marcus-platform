@@ -259,6 +259,18 @@ def legs_cache_path(sb: str) -> str:
 
 
 
+def _known_themes():
+    """已知主题集合（`fusion_mainline.THEME_CONCEPTS` 的键 ✓）；取不到 ⇒ 空集（此时不过滤 ✗ 不下沉 ✓）。"""
+    try:
+        _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps", "main_line")
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+        from fusion_mainline import THEME_CONCEPTS
+        return set(str(k) for k in (THEME_CONCEPTS or {}).keys())
+    except Exception:
+        return set()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True, help="决策日 T（如 20260911）")
@@ -406,6 +418,49 @@ def main() -> int:
         print("   链 %s → theme=%s" % (c, _toc(c) if callable(_toc) else "(该版本无 theme_of_chain)"),
               flush=True)
 
+    # ── 「强势/动量」通道（2026-10-15 ✓ 开关 `WOLF_CHAIN_MOM_N` 默认 0 ⇒ 逐字不变 ✓）──
+    #   为什么在这里 ✗：臂读的是种子里**预先算好**的 `rotation_universe_result.json` ✗ ⇒ 只改
+    #   `rotation_universe.py` 对臂无效 ✓（实测 20260506：改后买链仍为空 ✗）；且必须放在
+    #   `confirmed_today_set` 之后 ⇒ 只在**当日确认主题**的概念里取动量 ✓
+    #   （实测：不过滤主题时动量第一名是「锂矿概念/2026—季报扭亏」⇒ 进不了买链 ✗）。
+    #   依据 ✓：链动量 IC=+0.133（t=+3.3 显著 ✓）vs space_score IC=−0.053（噪声 ✗）；
+    #          语料 2025-07-29「下跌浪只做龙头」／2025-05-19「买就买强的 千万不要买后排补涨」✓。
+    try:
+        _mom_n = int(float(os.getenv("WOLF_CHAIN_MOM_N", "0") or 0))
+    except (TypeError, ValueError):
+        _mom_n = 0
+    if _mom_n > 0 and confirmed_today_set:
+        try:
+            _p_ml = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps", "main_line")
+            if _p_ml not in sys.path:
+                sys.path.insert(0, _p_ml)
+            import re as _re_mom
+            import rotation_universe as _RU
+            _hist = _RU.load_json(_RU.HIST) or {}
+            _META_PAT = _re_mom.compile(r"扭亏|预增|预减|季报|年报|中报|次新|ST|融资融券|沪股通|深股通|破净|高送转|举牌|更名")
+            _cand = []
+            for _k, _v in _hist.items():
+                if not isinstance(_v, dict):
+                    continue
+                _cn = str(_v.get("name") or _k)
+                if _META_PAT.search(_cn):
+                    continue
+                try:
+                    _th = arm.theme_of_chain(_cn)
+                except Exception:
+                    _th = None
+                if _th in confirmed_today_set:
+                    _cand.append(_cn)
+            _rank = _RU.chain_momentum_top(_hist, _cand, _mom_n, _RU.META_GROUPS)
+            if _rank:
+                _names = [x for x, _r in _rank]
+                # 必须改**局部 room** ✓：`room = ru.get("room_bottom")` 在本块之前就取出了，
+                # 只改 `ru` 对 `for c in room + holdT` 无效 ✗（实测买链仍为空 ✗）
+                room = [x for x in _names if x not in room] + list(room)
+                print("[legs] CHAIN_MOM 前置 %d 条动量链: %s（5日 %s）"
+                      % (len(_names), _names, ["%.1f%%" % (r * 100) for _s, r in _rank]), flush=True)
+        except Exception as _e_mom:
+            print("[legs] CHAIN_MOM 失败(按原样继续 ✓): %s" % str(_e_mom)[:90], flush=True)
     buy_chains = []
     qualify = os.getenv("MAINLINE_QUALIFY", "1").strip() in ("1", "true", "yes")
     for c in room + holdT:
