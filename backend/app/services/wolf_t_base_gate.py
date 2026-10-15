@@ -28,7 +28,8 @@
 """
 from __future__ import annotations
 import os
-from typing import Tuple
+from datetime import datetime, timedelta
+from typing import Dict, Optional, Tuple
 
 
 def enabled() -> bool:
@@ -57,3 +58,73 @@ def allow(has_base: bool) -> Tuple[bool, str]:
         return True, ""
     return False, ("无底仓不发正T买腿（狼大 2026-08-25「**我今天没抄底 没有资格T**」；"
                    "2025-04-15 成文流程「尽量不要把做T的仓位变加仓」）")
+
+# ══════════════════════════════════════════════════════════════════════════
+# ★ 2026-10-15 ✓（用户「T出要有T回对应」→ 选 A1）：**T出登记待回补 ⇒ 并入做T宇宙**
+#
+# 病灶 ✗（实测 t68 全窗，证据确凿）：
+#   · 正T买腿（T回）**0 条** ✗，而 603986 在 0115 14:00 被「确认制T出」卖了 100 股 ✓
+#   · 原因 = **做T宇宙自锁** ✗：`t_monitor._check_wolf_t_rules()` 只在
+#       `{c.symbol for c in list_active_conditions(...) if _is_wolf_t_condition(c)}`
+#     里找标的 ⇒ **T出本身不产生任何做T类条件腿** ⇒ 该标的进不了这个集合
+#     ⇒ 永远不会被拿去做T判定 ⇒ 也就永远不会有 T回 ✓（鸡生蛋 ✓）
+#   · 而 T出 与 高抛 的闸还**不对称** ✗：0115 日志原文
+#       `sell 200股@249.96: rejected **无 T 仓不发高抛**`，可同日 14:00 的确认制T出却卖成了 ✓
+#
+# 本模块只做**一件事** ✓：把"有过确认制T出、且尚未买回、且仍有底仓"的标的**并入做T宇宙** ✓。
+#   · 不新造条件行 ✗（避免写坏 `t_conditions` schema ✓）
+#   · 不放宽任何闸 ✓：形态闸（`zheng_t_buy_quote`）、底仓闸、做T时段窗、churn/冷静期、
+#     `refill_blocked`、网关「当日正T回补笔数上限」**全部照旧生效** ✓
+#   · 开关 `WOLF_T_OUT_REFILL`（**库内默认 0 ⇒ 生产逐字不变** ✓）
+#   · 窗口天数 `WOLF_T_OUT_REFILL_DAYS`（默认 3 ✓ —— 语料 2025-04-15 成文流程第 7 条
+#     「如果**三日内**没有达到预期证明自己预期有问题」✓）
+# ══════════════════════════════════════════════════════════════════════════
+
+def refill_enabled() -> bool:
+    """T出登记待回补（并入做T宇宙）开关 ✓ 默认关 ✓。"""
+    return os.getenv("WOLF_T_OUT_REFILL", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def pending_refill_symbols(account_id: str, days: Optional[int] = None) -> Dict[str, int]:
+    """返回 {symbol: 待回补股数} ✓ ——「有过确认制T出 ∧ 之后未足额买回 ∧ 仍有持仓」✓。
+
+    纯只读 ✓；任何异常 ⇒ 返回 {} ✓（绝不因本功能影响卖出/买入主链路 ✓）。
+    """
+    out: Dict[str, int] = {}
+    try:
+        if not refill_enabled():
+            return out
+        n = int(days if days is not None else (os.getenv("WOLF_T_OUT_REFILL_DAYS", "3") or 3))
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal
+        d0 = (datetime.now() - timedelta(days=2 * max(1, min(30, n)))).strftime("%Y-%m-%d")
+        db = SessionLocal()
+        try:
+            rows = db.execute(_text(
+                "SELECT symbol, trade_date, direction, COALESCE(volume,0) FROM paper_trades "
+                "WHERE account_id=:a AND trade_date >= :d0 ORDER BY trade_date, id"),
+                {"a": account_id, "d0": d0}).fetchall()
+        finally:
+            db.close()
+        sold: Dict[str, int] = {}
+        bought: Dict[str, int] = {}
+        for sym, d, direction, vol in (rows or []):
+            s2 = str(sym or "")
+            if not s2:
+                continue
+            if str(direction) == "卖出":
+                sold[s2] = sold.get(s2, 0) + int(vol or 0)
+            elif str(direction) == "买入":
+                bought[s2] = bought.get(s2, 0) + int(vol or 0)
+        for s2, q in sold.items():
+            left = int(q) - int(bought.get(s2, 0))
+            if left > 0:
+                out[s2] = left
+    except Exception as _e:
+        try:
+            from app.services import gate_alarm as _ga
+            _ga.note("wolf_t_base_gate:pending_refill", _e)
+        except Exception:
+            pass
+        return {}
+    return out

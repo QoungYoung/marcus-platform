@@ -1396,6 +1396,24 @@ class TMonitor:
             from app.services.wolf_t_rules import zheng_t_buy_quote, dao_t_sell_quote
             conds = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
             syms = sorted({c.get('symbol') for c in conds if _is_wolf_t_condition(c)})
+            # ★ 2026-10-15 ✓（用户「T出要有T回对应」→ A1）：**T出登记待回补 ⇒ 并入做T宇宙** ✓
+            #   病灶 ✗（实测 t68 全窗）：正T买腿 **0 条** ✓ ——因为本函数只在"已是做T类条件腿"的
+            #     标的里找 ⇒ 而「确认制T出」不产生任何做T类条件腿 ✗ ⇒ 标的进不了集合 ⇒
+            #     **T出永远没有 T回** ✓（鸡生蛋 ✓）。
+            #   做法 ✓：把"有过T出、尚未买回、仍有底仓"的标的并进来 ✓ —— 其余闸**一律照旧** ✓
+            #     （形态闸 `zheng_t_buy_quote` ✓、底仓闸 ✓、做T时段窗 ✓、churn/冷静期 ✓、
+            #       `refill_blocked` ✓、网关「当日正T回补笔数上限」✓）。
+            #   开关 `WOLF_T_OUT_REFILL`（**库内默认 0 ⇒ 逐字不变** ✓）
+            try:
+                from app.services import wolf_t_base_gate as _tbg_r
+                if _tbg_r.refill_enabled():
+                    _pend = _tbg_r.pending_refill_symbols(T_MONITOR_ACCOUNT)
+                    _add = sorted(set(_pend) - set(syms))
+                    if _add:
+                        syms = sorted(set(syms) | set(_pend))
+                        print("[TMonitor] T出待回补并入做T宇宙 %d 只: %s" % (len(_add), _add[:8]), flush=True)
+            except Exception as _eR:
+                pass
             if not syms:
                 return
             quotes = fetch_tencent_quote([_normalize_symbol(s) for s in syms])
