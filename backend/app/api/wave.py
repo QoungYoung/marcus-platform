@@ -32,7 +32,7 @@ _EM_URL = ("https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}"
 
 _CACHE: Dict[str, Any] = {}
 _TTL = 300.0
-_LAST_ERR: Dict[str, str] = {"waves": ""}   # 浪型链失败原因（暴露到 note，生产可诊断 ✓）
+_LAST_ERR: Dict[str, str] = {"waves": "", "marks": ""}
 
 
 def _data_dir() -> Path:
@@ -170,6 +170,85 @@ def _ladder() -> Optional[Any]:
         return None
 
 
+def _display_patterns(code: str, bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """**显示用**形态标注（W底/双头）—— 刻意用 K线这段长序列算，**不碰浪型链的状态数据** ✓。
+
+    为什么必须分开：生产上浪型链的指数序列只有 600 根（2024-04 起），把它的窗口接长会**挪动 1 浪顶**
+    （实测 3674.40 → 3174.27 ✗✗ —— 那是铁律②的失效线，不能动 ✓）；而形态标注只是画图，
+    用 K线缓存（约 950 根 ✓）就能把 2024-02-05 + 2024-09-13 那种双底凑齐 ✓。
+    """
+    if len(bars) < 60:
+        return []
+    try:
+        W = _ladder()
+        if W is None:
+            return []
+        rows = [(b["date"], b["close"], b["high"], b["amount"]) for b in bars]
+        pv = W.pivots(rows, rows[-1][0])
+        # 显示专用回看窗（默认 900 根 ≈ 3.5 年 ✓）：**与状态判据的 WB_WIN 分开** ——
+        # 状态要"新鲜"（180 根内）才有操作意义 ✓；但画图希望看到历史形态（如 2024-09-30 那次 W底 ✓）
+        win = int(os.environ.get("WOLF_WAVE_LADDER_MARKS_WIN", "900") or 900)
+        since = rows[-min(win, len(rows) - 60)][0] if len(rows) > 60 else ""
+        amt20 = sum(r[3] for r in rows[-21:-1]) / 20 if len(rows) >= 21 and sum(r[3] for r in rows[-21:-1]) else 0.0
+        vr = (bars[-1]["amount"] / amt20) if amt20 else 0.0
+        hi_excl = max(r[1] for r in rows[-21:-1]) if len(rows) >= 21 else 0.0
+        def _confirm_date(l2: str, neck: float, above: bool) -> str:
+            """确认日 = l2 之后**第一根**以放量（≥WB_VOL×前20日均额）收在颈线正确一侧的 K 线 ✓。
+
+            必须按**历史当日**的量价判 ✗ 不能拿今天的量价（首版就这么写错了：今天量比 1.1 < 1.2 ⇒ 历史形态全丢 ✗）。
+            """
+            if not neck:
+                return ""
+            for i, b in enumerate(bars):
+                if b["date"] <= l2 or i < 21:
+                    continue
+                prev = bars[i - 20:i]
+                amt = sum(x["amount"] for x in prev) / 20 if prev else 0.0
+                ok_side = (b["close"] > neck) if above else (b["close"] < neck)
+                if ok_side and amt and b["amount"] >= W.WB_VOL * amt:
+                    return b["date"]
+            return ""
+
+        def _scan(kind: str) -> List[Dict[str, Any]]:
+            """扫描**所有配对**（不能只看最后两个端点 ✗ —— 实测：最近两个低点是 2024-09-13 + 2025-04-07，
+            相差 14% 不成形；真正成对的是更早的 2024-02-05 + 2024-09-13 ✓）。
+
+            返回每个成立形态的 {kind, neck, points, first_date(确认日)} ✓；显示专用，不动链的状态 ✓。
+            """
+            is_low = (kind == "w_bottom")
+            pts = [p for p in pv if str(p[3]).upper() == ("L" if is_low else "H")
+                   and (not since or str(p[1]) >= since)]
+            near = W.WB_NEAR if is_low else W.DT_NEAR
+            res = []
+            for i in range(len(pts)):
+                for j in range(i + 1, len(pts)):
+                    v1, v2 = pts[i][2], pts[j][2]
+                    if not v1 or abs(v2 / v1 - 1) > near:
+                        continue
+                    if is_low and v2 > v1 * (1 + near):
+                        continue                              # 双底右低点应大致不低于左低点 ✓
+                    d1, d2 = str(pts[i][1]), str(pts[j][1])
+                    mids = [p for p in pv if d1 < str(p[1]) < d2
+                            and str(p[3]).upper() == ("H" if is_low else "L")]
+                    if not mids:
+                        continue
+                    neck = (max if is_low else min)(p[2] for p in mids)
+                    cfd = _confirm_date(d2, neck, is_low)
+                    if not cfd:
+                        continue
+                    res.append({"kind": kind, "neck": round(neck, 2), "confirmed": True, "first_date": cfd,
+                                "points": [{"date": d1, "value": round(v1, 2)}, {"date": d2, "value": round(v2, 2)}]})
+            return res
+
+        out = []
+        out.extend(_scan("w_bottom"))
+        out.extend(_scan("dtop"))
+        return out
+    except Exception as e:
+        _LAST_ERR["marks"] = "%s: %s" % (type(e).__name__, str(e)[:120])
+        return []
+
+
 def _waves(code: str) -> List[Dict[str, Any]]:
     W = _ladder()
     if W is None:
@@ -210,6 +289,7 @@ def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000
         note = "本地 CSV 近月只有收盘 ⇒ 开高低为合成值（O=前收/H=L=收）⛔"
     if not waves:
         note = (note + " ｜ " if note else "") + "浪型链不可用（" + (_LAST_ERR["waves"] or "缺指数数据") + "）⇒ 只画 K 线 ✓"
-    return {"code": code, "asof": today, "bars": bars, "waves": waves,
+    disp = _display_patterns(code, bars)
+    return {"code": code, "asof": today, "bars": bars, "waves": waves, "display_patterns": disp,
             "last": wmap.get(today or "", None), "ohlc_source": src,
             "wave_source": "wave_ladder.walk" if waves else "none", "note": note}

@@ -57,6 +57,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
   const [bars, setBars] = useState<Bar[]>([]);
   const [waves, setWaves] = useState<Wave[]>([]);
   const [src, setSrc] = useState('');
+  const [dispPats, setDispPats] = useState<any[]>([]);
   const [note, setNote] = useState('');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
@@ -70,6 +71,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         const d = r.data || {};
         setBars(d.bars || []);
         setWaves(d.waves || []);
+        setDispPats(d.display_patterns || []);   // 显示专用形态（用长序列算，不改链的状态 ✓）
         setSrc(d.ohlc_source || '');
         setNote(d.note || '');
         setErr((d.bars || []).length ? '' : '无指数数据');
@@ -116,9 +118,13 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
     const patPoints: any[] = [];
     const patLines: any[] = [];
     const seenPat: Record<string, boolean> = {};
-    waves.forEach((w) => {
-      const m = w.marks;
+    // 显示专用形态（后端用长序列算 ✓）与逐日 marks 合并，按指纹去重 ✓
+    const allPats: { m: PatMark; date: string }[] = [];
+    dispPats.forEach((p) => { allPats.push({ m: p as PatMark, date: p.first_date }); });
+    waves.forEach((w) => { if (w.marks) allPats.push({ m: w.marks, date: w.date }); });
+    allPats.forEach(({ m, date }) => {
       if (!m || !m.points || m.points.length < 2) return;
+      const w = { date };
       const key = m.kind + '|' + m.points.map((p) => p.date).join('|');
       if (seenPat[key]) return;
       seenPat[key] = true;
@@ -145,7 +151,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         itemStyle: { color: pc },
         label: { show: true, color: '#fff', fontSize: 8, fontWeight: 700 },
       });
-      if (m.neck) {
+      if (m.neck && bmap[m.points[0].date]) {
         patLines.push([
           { coord: [m.points[0].date, m.neck], lineStyle: { color: pc, type: 'dashed', width: 1, opacity: 0.75 } },
           { coord: [w.date, m.neck], label: { show: true, position: 'insideEndTop', formatter: '颈线 ' + m.neck, color: pc, fontSize: 8 } },
