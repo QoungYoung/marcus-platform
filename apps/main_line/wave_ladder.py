@@ -357,7 +357,10 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "prev_peak": st["prev_peak"], "origin": st["origin"],
         "origin_date": st["origin_date"], "pivots": st["pivots"],
         "sub_stage": sub["stage"], "sub_forming": sub["forming"], "sub_legs": sub["legs"],
-        "break_wave1": bool(w1 and close < w1),
+        # ★ 2026-10-15 修：**首次下穿**才算事件。原来写成「close < 1浪顶」这种**状态** ⇒ 指数一旦
+        #   站到 1浪顶之下，档位就被钉死在主跌1浪（实测：2019-05~2020-07 共 285 天，期间指数还在涨；
+        #   2022-07~2024-02 共 391 天）—— 与之前修过的「MA60 状态」「20 日内新破」同一类错误 ✗。
+        "break_wave1": bool(w1 and close < w1 and prev_close >= w1),
         "hi60_prev": hi60_prev, "lo60_prev": lo60_prev, "hi20": hi20, "lo20": lo20,
         "ma60": round(sum(r[1] for r in hist[-61:-1]) / 60, 2) if len(hist) >= 61 else 0.0,
         "below_ma60": bool(len(hist) >= 61 and close < sum(r[1] for r in hist[-61:-1]) / 60),
@@ -397,9 +400,12 @@ def stage_of(f: Dict[str, Any]) -> int:
     if (f["break_wave1"] or f["break_floor"] or f["gap_break20"]
             or (LOW60_TRIGGER and f["break_low60"])):
         return RUNG_INDEX["down1"]
+    # ★ 2026-10-15 收紧：失败4-5 必须**真把结构跌坏**（回落时取掉了前 20 日最低），
+    #   否则区间里任何一次 3% 回踩都会被贴成「失败5/defense」（实测：旧口径下 rung2 当日
+    #   的「近20日高/前60日高」有 76% ≥0.99 ⇒ “摸前高”这条几乎恒真，等于没有过滤 ✗）。
     if (f["gap_unrecovered"]
             or ((not f["rally_new_high"]) and f["near_prev_high"]
-                and f["rally_amp"] >= RALLY_MIN and f["fade"] >= FADE_MIN)):
+                and f["rally_amp"] >= RALLY_MIN and f["fade"] >= FADE_MIN and f["break_low20"])):
         return RUNG_INDEX["w45_fail"]
     if f["new_high60"] or f["bottom_ok"]:
         return RUNG_INDEX["w45_ok"]

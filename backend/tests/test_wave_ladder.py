@@ -30,7 +30,7 @@ def mk(closes, highs=None, start="2025-06-02"):
 FLAT = [100.0] * 80
 # 前高 130（在 60 日窗内、20 日窗外的老高）→ 下行 → 反弹 → 回落
 CHOP = FLAT + [105.0] * 15 + [103.0, 102.0, 102.5]
-FADED = FLAT + [105.0] * 12 + [103.0, 101.0, 128.0, 126.0, 121.0, 118.0]   # 摸到前高 98.5% 后回落 7.8%
+FADED = FLAT + [105.0] * 12 + [103.0, 101.0, 128.0, 126.0, 121.0, 99.0]    # 摸前高后回落**并跌穿前 20 日低**（新口径）
 
 
 def last(rows):
@@ -55,6 +55,7 @@ def test_equal_to_prior_high_is_not_new_high():
 
 def test_failed_rally_goes_rung2():
     rows = mk(FADED)
+    rows[-1] = (rows[-1][0], rows[-1][1], 122.0, rows[-1][3])   # 末根不跳空 ⇒ 只测「反抽夭折」这条路
     ev = W.evaluate(rows, last(rows))
     assert ev["rung_index"] == 2 and ev["operation"] == "defense", ev["reasons"]
 
@@ -85,6 +86,7 @@ def test_trivial_gap_not_rung3():
 
 def test_latch_is_one_way():
     rows = mk(FADED)
+    rows[-1] = (rows[-1][0], rows[-1][1], 121.0, rows[-1][3])   # 末根不跳空（否则走 rung3 的跳空条）
     d = last(rows)
     assert W.evaluate(rows, d)["rung_index"] == 2
     ev2 = W.evaluate(rows, d, prev=2)
@@ -119,7 +121,7 @@ def test_switch_defaults_off(monkeypatch):
 # ─────────────── 铁律②（教材）与跳空降一档：2026-10-15 接入的硬规矩 ───────────────
 def test_tie2_wave1_top_break_goes_rung3():
     """铁律②「第四个浪的底部不可以低于第一个浪的浪顶」⇒ 破 1 浪顶 = 主跌1浪。"""
-    closes = [100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [104.0, 98.0, 96.0]
+    closes = [100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0]
     rows = mk(closes)
     ev = W.evaluate(rows, last(rows))
     assert ev["levels"]["wave1_top"] == 110.0, ev["levels"]
@@ -207,7 +209,7 @@ def test_to_wave_state_level_mapping():
     assert ws0["level"] == "d4" and ws0["source"] == "wave_ladder"
     assert ws0["operation"] == "t_only" and ws0["date"].count("-") == 2
     assert set(("level", "sub_level", "operation", "confidence", "reasons", "date", "features")) <= set(ws0)
-    flat = mk([100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [104.0, 98.0, 96.0])
+    flat = mk([100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0])
     ws3 = W.to_wave_state(W.evaluate(flat, last(flat)))
     assert ws3["level"] == "down" and ws3["operation"] == "exit" and ws3["sub_level"] == "C杀"
     high = mk([100.0] * 80 + [130.0])
