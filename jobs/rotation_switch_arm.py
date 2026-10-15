@@ -506,6 +506,7 @@ def pick_buy(chain, exclude, limit=3, domain_out=None):
     # ① 市值预筛(单次全市场调用): 龙头优先于字典序
     # ⛔自设(无语料依据, 见 docs/wolf-buy-parameter-ledger.md §4)
     shortlist_n = int(os.getenv("WOLF_PICK_BUY_SHORTLIST", "80"))
+    mv = {}
     try:
         mv = {str(x[0]): float(x[1] or 0) for x in _gz("daily_basic", {"trade_date": _today()}, "ts_code,total_mv")}
         if mv:
@@ -540,12 +541,27 @@ def pick_buy(chain, exclude, limit=3, domain_out=None):
         time.sleep(0.1)
     if not stats:
         return []
-    for key in ("r60", "amt20", "lim"):
+    # ★ 2026-10-15 ✓（用户「接进去，换成新规则」✓）——**链内排序键可切换** ✓
+    #   旧键 ✗：`(r60_p + amt20_p + lim_p)/3`（追涨+成交额+涨停数 ⇒ 实测全窗口最差 ✗）
+    #   新键 ✓：`(市值分位 + 60日动量分位)/2` ＝ **龙头因子**（大且已走强 ✓）
+    #   依据 ✓（122 天离线复算 ✓，同一批动量链同候选 ✓）：
+    #     新键 中位 +0.09% / 均值 **+1.92%** ✓ ｜ 旧键 中位 **−1.66%** / 均值 −0.24% ✗
+    #     选出的票 ✓：亨通光电 25 次(+6.4%)、长飞光纤 23 次(+9.4%)、生益科技 8、兆易创新 6、光迅科技 5 ✓
+    #   开关 `WOLF_PICK_RANK_MV_MOM`（**库内默认 0 ⇒ 生产/回测逐字不变** ✓）
+    _rank_new = str(os.getenv("WOLF_PICK_RANK_MV_MOM", "0")).strip().lower() in ("1", "true", "yes", "on")
+    if _rank_new:
+        for s in stats:
+            s["mv"] = float((mv or {}).get(s["ts"]) or 0)     # ① 已取到但原先只用于短名单排序 ✗
+    _keys = ("mv", "r60") if _rank_new else ("r60", "amt20", "lim")
+    for key in _keys:
         rk = _pct_rank([(s[key] if s[key] is not None else -1e9) for s in stats])
         for s, v in zip(stats, rk):
             s[key + "_p"] = v
     for s in stats:
-        s["leader"] = round((s["r60_p"] + s["amt20_p"] + s["lim_p"]) / 3.0, 4)
+        if _rank_new:
+            s["leader"] = round((s.get("mv_p", 0.0) + s.get("r60_p", 0.0)) / 2.0, 4)
+        else:
+            s["leader"] = round((s["r60_p"] + s["amt20_p"] + s["lim_p"]) / 3.0, 4)
     # U9 主题容量约束（2026-09-11, 用户决策"相对分位"）: 与路径B(pick_v2) **同一函数、同一 env**,
     # 避免又一次"两条路各一套口径"（本项目反复踩的坑）。理由与阈值出处见 wolf_confirm_pick.theme_quantile_keep。
     try:
