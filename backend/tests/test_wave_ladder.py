@@ -197,6 +197,44 @@ def test_sub_legs_fail_open():
     assert W.sub_legs(flat, last(flat))["stage"] == ""
 
 
+
+# ─────────────── 写生产 wave_state（2026-10-15 切换：浪型链＝唯一写入方） ───────────────
+def test_to_wave_state_level_mapping():
+    """level 映射必须对齐消费方：down ⇒ wave_gate/t_monitor 的**指数大级别止损**生效 ✓。"""
+    rows = mk(CHOP)
+    ev0 = W.evaluate(rows, last(rows))
+    ws0 = W.to_wave_state(ev0)
+    assert ws0["level"] == "d4" and ws0["source"] == "wave_ladder"
+    assert ws0["operation"] == "t_only" and ws0["date"].count("-") == 2
+    assert set(("level", "sub_level", "operation", "confidence", "reasons", "date", "features")) <= set(ws0)
+    flat = mk([100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [104.0, 98.0, 96.0])
+    ws3 = W.to_wave_state(W.evaluate(flat, last(flat)))
+    assert ws3["level"] == "down" and ws3["operation"] == "exit" and ws3["sub_level"] == "C杀"
+    high = mk([100.0] * 80 + [130.0])
+    assert W.to_wave_state(W.evaluate(high, last(high)))["level"] == "d5"
+
+
+def test_write_wave_state_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(W, "DATA", str(tmp_path))
+    rows = mk(CHOP)
+    p = W.write_wave_state(rows=rows, dated=True)
+    assert p and os.path.exists(p)
+    d = json.load(open(p, encoding="utf-8"))
+    assert d["source"] == "wave_ladder" and d["operation"] == "t_only"
+    dated = tmp_path / ("wave_state_%s.json" % d["date"])
+    assert dated.exists(), "带日期副本没写出来"
+
+
+def test_old_wave_agent_is_retired():
+    """旧 LLM agent 默认**不写盘直接退出**（WOLF_WAVE_LEGACY_AGENT=1 才恢复）。"""
+    import subprocess
+    env = dict(os.environ)
+    env.pop("WOLF_WAVE_LEGACY_AGENT", None)
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "apps", "main_line", "wave_agent.py")],
+                       capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0 and "退役" in (r.stderr + r.stdout)
+
+
 def test_artifact_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(W, "DATA", str(tmp_path))
     rows = mk(CHOP)

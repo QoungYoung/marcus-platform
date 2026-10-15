@@ -52,6 +52,18 @@ def _env(monkeypatch, tmp_path):
         return d.strftime("%Y%m%d")
     monkeypatch.setattr(DD, "_prev_trade_day", _fake_prev)
     DD._PREV_TD_CACHE.clear()
+
+    # ★ 2026-10-15：**冻结"今天"**。daily_decision 的 look-ahead 告警判据是
+    #   「kind == latest ∧ d8 != date.today()」，本文件所有用例固定 d8=20260916
+    #   ⇒ 不冻结的话，只要真实日期走到 09-16 之后，undated 用例就会多出一条
+    #   「用了不带日期的最新文件」告警而误红（与代码行为无关，纯时间脆弱）。
+    class _FrozenDate(_dt.date):
+        @classmethod
+        def today(cls):
+            return _dt.date(2026, 9, 16)
+
+    #   daily_decision 里是**函数内** `import datetime as _dt` ⇒ 只能改全局模块属性
+    monkeypatch.setattr(_dt, "date", _FrozenDate)
     yield
 
 

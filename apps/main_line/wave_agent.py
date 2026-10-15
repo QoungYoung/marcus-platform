@@ -377,6 +377,15 @@ def _ensure_index_fresh():
 
 def main():
     import sys as _s
+    # ★ 2026-10-15（用户拍板「切换到新的浪型，旧的不用了」）：**本 agent 的写盘已退役** ——
+    #   wave_state.json 改由 apps/main_line/wave_ladder.py 写入（浪型假设链：单向锁 + 重定浪 +
+    #   教材铁律②），消费方 schema 不变。这里默认**直接退出、不写盘**（避免旧 LLM 档位覆盖新结果 ✗）；
+    #   需要临时恢复旧判定：WOLF_WAVE_LEGACY_AGENT=1。
+    if os.getenv('WOLF_WAVE_LEGACY_AGENT', '0').strip() not in ('1', 'true', 'yes'):
+        print('[wave] ⛔ 已退役：wave_state.json 现由浪型链写入 —— 请改用 '
+              'python apps/main_line/wave_ladder.py --write --dated'
+              '（临时恢复旧 LLM 判定：WOLF_WAVE_LEGACY_AGENT=1）', file=_s.stderr)
+        raise SystemExit(0)
     date=None
     if len(_s.argv)>1 and _s.argv[1].startswith('--date'):
         if '=' in _s.argv[1]: date=_s.argv[1].split('=',1)[1]

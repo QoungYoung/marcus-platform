@@ -119,7 +119,18 @@
 
 ## 4. 环境/波浪链
 
-- `wave_agent.py`（08:10，周一为主）→ `wave_state.json`：level(d1..down) / sub_level / operation(build/t_only/side/defense/exit) / confidence / reasons。
+- ★ **2026-10-15 切换（用户拍板「切到新的浪型，旧的不用了，历史也重新生成」）**：
+  `wave_state.json` 的写入方从 LLM `wave_agent.py` 换成**浪型假设链** `apps/main_line/wave_ladder.py`
+  （调度任务 `wave_ladder_state`，`10 8 * * mon-fri`，命令 `--write --dated`）。旧的 `wave_agent.py`
+  **默认直接退出、不写盘**（`WOLF_WAVE_LEGACY_AGENT=1` 才恢复；容器外挂 cron 即使还在也无效 ✓）。
+  · schema 不变：level(d1..down)/sub_level/operation/confidence/reasons/date/features（消费方一行未改）；
+    另加 `source=wave_ladder` / `rung` / `levels` / `sub_legs` 供复盘。
+  · 档位：4浪调整(d4,t_only) → 成功4-5(d5,side) → 失败4-5(d5,defense) → 下跌1浪(**down**,exit)；
+    `sub_level` 用他的编号（4-3 / 4-5 / 失败5 / C杀）⇒ `level=='down'` 仍是指数大级别止损的判据 ✓。
+  · 历史重生成：`jobs/regen_wave_state_ladder.py --apply`（5070 份：live + 60 带日期 + 5011 回测快照；
+    备份 `data/_waveagent_backup/wave_states_*.tar.gz`；`_bt_*/<day>/wave_state_<date>.json` 26.7 万归档副本未动）。
+  · 实测影响：87.8% 的历史快照 operation 会变；新分布 d5/defense 2539、d5/side 1868、down/exit 428、d4/t_only 235。
+- `wave_agent.py`（原 08:10，周一为主）→ `wave_state.json`：level(d1..down) / sub_level / operation(build/t_only/side/defense/exit) / confidence / reasons。
 - `wave_alloc.read_wave_alloc()`：把 operation 映射成 `invest` 仓位系数；布腿器按 invest 裁剪买腿数量（build/t_only/side=1 不裁剪）。
 - `trade_graph.node_check_safety_gates`：**operation ∈ (defense, exit) → 不建仓（硬拦）**；可用 `SAFETY_GATE_BYPASS` 旁路（默认关）。
   ⚠️ **范围更正（2026-09-10 核验）**：该硬拦**只覆盖 AI-agent 决策路径**（`run_trade_decision`，即 09:35/13:35 等 `auto_trade_*` 档）。

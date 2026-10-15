@@ -553,6 +553,79 @@ def adopt_operation(prod_op: Optional[str], asof: Optional[str] = None) -> Optio
     return prod_op
 
 
+# ─────────────── 写生产 wave_state.json（2026-10-15 起：浪型链＝唯一写入方） ───────────────
+# level 映射**必须**对齐既有消费方语义：wave_gate.py:14 / t_monitor.py:2365 / wolf_context.py:623
+# 都以 `wave_state.level == "down"` 作为**指数大级别止损**判据（他 2026-08-27「转下跌1浪就止损」）
+# ⇒ rung3 必须映射成 "down" ✓；取值域 d1..d5/down、sub_level 取值域 3-x/4-x/失败5/ABC/B反/C杀/…
+LEVEL_OF_RUNG = {"w4_adj": "d4", "w45_ok": "d5", "w45_fail": "d5", "down1": "down"}
+SUB_OF_RUNG = {"w4_adj": "", "w45_ok": "4-5", "w45_fail": "失败5", "down1": "C杀"}
+CONF_OF_RUNG = {"w4_adj": 0.6, "w45_ok": 0.7, "w45_fail": 0.7, "down1": 0.8}
+
+
+def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """浪型链判定 → **既有 schema** 的 wave_state（消费方一行都不用改 ✓）。
+
+    保留原字段 level/sub_level/operation/confidence/reasons/date/features（与旧 LLM 版同名同义），
+    另加 source/rung/expect/levels/sub_legs 供复盘与后续扩展；取不到 ev ⇒ None（fail-open）✓。
+    """
+    if not ev:
+        return None
+    key = ev.get("key") or ""
+    fi = ev.get("features") or {}
+    sub = SUB_OF_RUNG.get(key, "")
+    if key == "w4_adj" and fi.get("sub_stage"):
+        sub = fi["sub_stage"] + (("→" + fi["sub_forming"]) if fi.get("sub_forming") else "")
+    d = str(ev.get("date") or asof or "")[:8]
+    return {
+        "date": ("%s-%s-%s" % (d[:4], d[4:6], d[6:8])) if len(d) == 8 else str(ev.get("date") or ""),
+        "as_of": d,
+        "level": LEVEL_OF_RUNG.get(key, "d4"),
+        "sub_level": sub,
+        "operation": ev.get("operation"),
+        "confidence": CONF_OF_RUNG.get(key, 0.5),
+        "reasons": ("【浪型链 rung%d/%s】%s；预期：%s；操作：%s（invest %.2f）" % (
+            int(ev.get("rung_index", -1)), ev.get("name") or "?", ev.get("reasons") or "",
+            ev.get("expect") or "", ev.get("operation") or "", float(ev.get("invest") or 0))),
+        "features": fi,
+        "source": "wave_ladder",
+        "rung": {"key": key, "name": ev.get("name"), "index": ev.get("rung_index"),
+                 "expect": ev.get("expect"), "degraded": ev.get("degraded"), "reset": ev.get("reset")},
+        "levels": ev.get("levels") or {},
+        "sub_legs": fi.get("sub_legs") or [],
+    }
+
+
+def write_wave_state(asof: Optional[str] = None, dated: bool = False,
+                     rows: Optional[Sequence[Tuple[str, float, float, float]]] = None,
+                     ev: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """写 `data/wave_state.json`（可选带日期副本）→ 路径；失败返回 None ✓。
+
+    传 ev（来自 walk，含单向锁）时按它写；否则用 `evaluate()` 现算（无降级锁，实时口径）。
+    """
+    if ev is None:
+        rows = rows or load_rows()
+        if not rows:
+            return None
+        ev = evaluate(rows, str(asof)[:8] if asof else rows[-1][0])
+    ws = to_wave_state(ev, asof)
+    if not ws:
+        return None
+    d = ws["as_of"]
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        p = os.path.join(DATA, "wave_state.json")
+        json.dump(ws, open(p + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        os.replace(p + ".tmp", p)
+        if dated:
+            pd = os.path.join(DATA, "wave_state_%s-%s-%s.json" % (d[:4], d[4:6], d[6:8]))
+            json.dump(ws, open(pd + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            os.replace(pd + ".tmp", pd)
+        return p
+    except Exception as _e:
+        _silent_alert("wave_ladder.py:write_wave_state", _e)
+        return None
+
+
 def read_ladder(state_file: str = "wave_ladder.json") -> Optional[Dict[str, Any]]:
     """读影子产物（供上层/复盘）。取不到返回 None（fail-open ✓）。"""
     for cand in (os.path.join(DATA, state_file), os.path.join("data", state_file)):
@@ -591,6 +664,18 @@ def operation_for_gate(ev: Optional[Dict[str, Any]] = None) -> Optional[str]:
 
 
 if __name__ == "__main__":
+    import sys as _sys
+    if "--write" in _sys.argv:
+        _asof = ""
+        if "--asof" in _sys.argv:
+            _asof = _sys.argv[_sys.argv.index("--asof") + 1]
+        _p = write_wave_state(_asof or None, dated=("--dated" in _sys.argv))
+        if _p:
+            _ws = json.load(open(_p, encoding="utf-8")) or {}
+            print("wave_state 已写:", _p, json.dumps({k: _ws.get(k) for k in ("date", "level", "sub_level", "operation")}, ensure_ascii=False))
+        else:
+            print("写失败（fail-open）")
+        raise SystemExit(0 if _p else 1)
     rows = load_rows()
     print("bars:", len(rows), rows[0][0] if rows else "-", "->", rows[-1][0] if rows else "-")
     anchors = ["2026-07-31", "2026-08-05", "2026-09-01", "2026-10-09", "2026-10-12", "2026-10-13", "2026-10-14"]

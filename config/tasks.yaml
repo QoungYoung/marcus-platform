@@ -1267,6 +1267,38 @@ tasks:
     on_success: false
     on_failure: false
 
+- id: wave_ladder_state
+  name: 浪型假设链判定（替代 wave_agent LLM，写 wave_state.json）
+  description: |
+    08:10 开盘前用浪型假设链（apps/main_line/wave_ladder.py）重算并写 data/wave_state.json
+    ＋带日期副本（--dated）。口径：教材铁律②「第四个浪的底部不可以低于第一个浪的浪顶」＋
+    止跌确认（低点冻结≥5日 ∧ 距低≥3% ∧ 站上MA20）＋单向锁/重定浪；level 映射 d4/d5/down
+    （down ⇒ wave_gate/t_monitor 的指数大级别止损生效）。
+    ★ 2026-10-15 用户拍板「切换到新的浪型，旧的不用了」：旧 apps/main_line/wave_agent.py
+    的写盘已退役（不加 WOLF_WAVE_LEGACY_AGENT=1 时直接退出、不写盘）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '10 8 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/wave_ladder.py
+    args:
+    - --write
+    - --dated
+  output:
+    log_file: logs/wave_ladder_state_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+
 - id: account_cash_recon
   name: 账户现金对账（现金/持仓/方向词表三条线）
   description: |
