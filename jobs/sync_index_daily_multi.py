@@ -14,7 +14,9 @@ import argparse, json, os, sys, time, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core"))
 DATA = os.environ.get("DATA_DIR", "data")
-CODES = ["000001.SH", "399001.SZ", "399006.SZ", "000300.SH", "000852.SH"]
+PRIMARY = "000001.SH"          # 浪型链主指数：**它的文件归既有流水线所有**（生产用 16:30 刷新的 CSV）
+#   ⇒ 在生产上同步时要 `--skip-primary`，否则会新增一份 2023+ 的 JSON 与 CSV 合并、改变主指数数据窗口 ✗
+CODES = [PRIMARY, "399001.SZ", "399006.SZ", "000300.SH", "000852.SH"]
 
 
 def em_secid(code: str) -> str:
@@ -50,9 +52,12 @@ def fetch_relay(code: str, days: int):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=900)
-    ap.add_argument("--only", default="")
+    ap.add_argument("--only", default="", help="逗号分隔的代码子集，如 399001.SZ,399006.SZ")
+    ap.add_argument("--skip-primary", action="store_true", help="跳过主指数（生产上必须加，见 PRIMARY 注释）")
     args = ap.parse_args()
-    codes = [args.only] if args.only else CODES
+    codes = [c.strip() for c in args.only.split(",") if c.strip()] or list(CODES)
+    if args.skip_primary:
+        codes = [c for c in codes if c != PRIMARY]
     os.makedirs(DATA, exist_ok=True)
     ok = 0
     for code in codes:
