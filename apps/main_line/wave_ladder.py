@@ -106,6 +106,21 @@ RUNGS: List[Dict[str, str]] = [
      "hold": "未收回跳空 ∨ 收盘 < 主升 1 浪顶（铁律②失效）∨ 跌破关键位"},
 ]
 RUNG_INDEX = {r["key"]: i for i, r in enumerate(RUNGS)}
+
+# ────────────── 叠加档：主升 3-3 / 主升回调 3-2（2026-10-15 补，用户拍板 B）──────────────
+# 为什么是「叠加」而不是插进 RUNGS：4 浪族那 4 档是**单向链**（只降不升 + 重定浪）✓；
+# 而 3-x 在时间上位于整条链**之前**（3-2 → 3-3 → 3-4 → 3-5 → 4-1..4-5 → 5 或 down）⇒ 硬插会破坏单向性 ✗。
+# 口径来自语料（见 docs/wave-operation-table.md §4）：
+#   · 3-2→3-3 确认：「**站稳 4006 三天**…**三大指数同时化解顶背离**…直接跳 3-3」（2025-10-29）
+#     ⇒ 量化：**连续 ≥3 日收盘 > 前 20 日最高** ∧ 量能不缩（三大指数同步我们本地只有上证 ⇒ 记为向量化 TODO ⛔）
+#   · 3-2 回调：「3-2 后半段最重要的操作策略就是，**保持 50%** 仓位」（2025-10-09）⇒ operation `side`（原表 3-2=side ✓）
+MAIN_UP = {"key": "mainup_33", "name": "主升3-3", "level": "d3", "sub_level": "3-3", "operation": "build",
+           "expect": "主升中段（最强段：建仓/追/产业链）"}
+MAIN_UP_PB = {"key": "mainup_32", "name": "主升回调3-2", "level": "d3", "sub_level": "3-2", "operation": "side",
+               "expect": "主升中的回调（原表：观望/调仓换股；语料：保持约 50% 仓位）"}
+MAIN_UP_STREAK = int(_envf("WOLF_WAVE_LADDER_UP_STREAK", 3))   # 「站稳三天」
+MAIN_UP_VOL = _envf("WOLF_WAVE_LADDER_UP_VOL", 1.0)            # 量能不缩：当日额 ≥ 20 日均额 × 该系数
+MAIN_UP_PULLBACK = _envf("WOLF_WAVE_LADDER_UP_PB", 0.03)       # 主升中的回调幅度门槛（⛔ 代理）
 # ★ 2026-10-15 修正（用户拍板 A）：下跌1浪拆成**两件事** ——
 #   「**不进**」= operation `defense`（禁新建仓；tier 目标 30% ⇐ 原表 down→defense ＋ 他「熊市不做，什么都不做」）
 #   「**怎么出**」= mode `自救`（存量借反弹/放量分批减；他 2026-10-15：「要出来光靠硬割不行 需要创造条件才能割肉」）
@@ -120,6 +135,26 @@ except Exception:  # pragma: no cover
     _ALLOC = {"build": (0.40, 0.35, 0.25, 1.0), "t_only": (0.70, 0.20, 0.10, 1.0),
               "side": (0.60, 0.25, 0.15, 1.0), "defense": (0.60, 0.25, 0.15, 0.30),
               "exit": (0.60, 0.25, 0.15, 0.70)}
+
+
+def _streak_above(hist: Sequence[Tuple[str, float, float, float]], win: int) -> int:
+    """连续收盘 > 前 `win` 日最高收盘 的天数（他的「站稳三天」的量化）。"""
+    n = 0
+    for i in range(len(hist) - 1, max(win, 0), -1):
+        ref = max(r[1] for r in hist[i - win:i])
+        if hist[i][1] > ref:
+            n += 1
+        else:
+            break
+    return n
+
+
+def _up33_in_window(hist: Sequence[Tuple[str, float, float, float]], win: int) -> bool:
+    """近 `win` 日内是否出现过「连续 ≥MAIN_UP_STREAK 日站稳前 20 日高点」（= 3-3 曾确认 ✓）。"""
+    for i in range(max(win, 1), len(hist)):
+        if _streak_above(hist[:i + 1], RALLY_WIN) >= MAIN_UP_STREAK:
+            return True
+    return False
 
 
 def _silent_alert(where, exc=None):
@@ -364,6 +399,14 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "prev_peak": st["prev_peak"], "origin": st["origin"],
         "origin_date": st["origin_date"], "pivots": st["pivots"],
         "sub_stage": sub["stage"], "sub_forming": sub["forming"], "sub_legs": sub["legs"],
+        # ── 主升叠加档的量价特征（3-3/3-2 判据）──
+        "hi20_prev": max(r[1] for r in w), "streak_above_hi20": _streak_above(hist, RALLY_WIN),
+        "vol_ratio20": (round(amount / (sum(r[3] for r in hist[-21:-1]) / 20), 2)
+                        if len(hist) >= 21 and sum(r[3] for r in hist[-21:-1]) else 0.0),
+        "main_up_up": bool(_streak_above(hist, RALLY_WIN) >= MAIN_UP_STREAK
+                           and (sum(r[3] for r in hist[-21:-1]) / 20) and amount >= MAIN_UP_VOL * (sum(r[3] for r in hist[-21:-1]) / 20)),
+        "main_up_pb": bool(_up33_in_window(hist, HI_WIN)
+                           and hi20 and close <= hi20 * (1 - MAIN_UP_PULLBACK) and not bool(close < lo60_prev)),
         # ★ 2026-10-15 修：**首次下穿**才算事件。原来写成「close < 1浪顶」这种**状态** ⇒ 指数一旦
         #   站到 1浪顶之下，档位就被钉死在主跌1浪（实测：2019-05~2020-07 共 285 天，期间指数还在涨；
         #   2022-07~2024-02 共 391 天）—— 与之前修过的「MA60 状态」「20 日内新破」同一类错误 ✗。
@@ -476,6 +519,13 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             "expect": r["expect"], "operation": r["operation"], "invest": invest,
             "weights": [w1, w2, w3], "day_stage": raw, "reset": reset, "reset_reason": why,
             "degraded": bool(prev is not None and idx > prev and not reset),
+            # ★ 主升叠加档（2026-10-15 补 B，实测后**只保留 3-3**）：
+            #   · 判据基于**上锁后的 rung**（不是当日档！首版用 raw ⇒ 10-09 那种"上锁 defense"的日子被放宽成 side ✗）；
+            #   · **3-2 不做接管**：它跟 4 浪调整在价格上**不可区分**（2026-07-31 他叫"调整浪/4浪"，按 3-2 就会给 side ✗）
+            #     —— 这是"等级不可分辨"问题的又一次实证，只能留作信息字段（`main_up_pb`）⛔。
+            "main_up": ("3-3" if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else ""),
+            "main_up_pb_info": bool(f.get("main_up_pb")),
+            "main_up_spec": (MAIN_UP if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else None),
             "reasons": _reasons(f, idx), "features": f,
             "sub_stage": ("%s%s" % (f.get("sub_stage") or "", ("→" + f["sub_forming"]) if f.get("sub_forming") else "")),
             "levels": {"wave1_top": f["wave1_top"], "wave1_top_date": f["wave1_top_date"],
@@ -585,6 +635,7 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         return None
     key = ev.get("key") or ""
     fi = ev.get("features") or {}
+    mus = ev.get("main_up_spec") or {}          # 主升叠加档生效时用它改写 level/sub_level/operation ✓
     sub = SUB_OF_RUNG.get(key, "")
     if key == "w4_adj" and fi.get("sub_stage"):
         sub = fi["sub_stage"] + (("→" + fi["sub_forming"]) if fi.get("sub_forming") else "")
@@ -592,9 +643,9 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
     return {
         "date": ("%s-%s-%s" % (d[:4], d[4:6], d[6:8])) if len(d) == 8 else str(ev.get("date") or ""),
         "as_of": d,
-        "level": LEVEL_OF_RUNG.get(key, "d4"),
-        "sub_level": sub,
-        "operation": ev.get("operation"),
+        "level": mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"),
+        "sub_level": (mus.get("sub_level") or sub) if mus else sub,
+        "operation": mus.get("operation") or ev.get("operation"),
         "confidence": CONF_OF_RUNG.get(key, 0.5),
         "reasons": ("【浪型链 rung%d/%s】%s；预期：%s；操作：%s（invest %.2f）" % (
             int(ev.get("rung_index", -1)), ev.get("name") or "?", ev.get("reasons") or "",

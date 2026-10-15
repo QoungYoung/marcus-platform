@@ -238,6 +238,38 @@ def test_old_wave_agent_is_retired():
     assert r.returncode == 0 and "退役" in (r.stderr + r.stdout)
 
 
+
+# ─────────────── 主升叠加档 3-3（2026-10-15 补 B；3-2 不做接管） ───────────────
+def test_main_up_33_overlay():
+    """连续 ≥3 日收盘 > 前 20 日最高（「站稳三天」的量化）∧ 量能不缩 ⇒ 叠加档 3-3（level=d3 / op=build）。"""
+    rows = mk(FLAT + [103.0, 104.0, 105.0])
+    ev = W.evaluate(rows, last(rows))
+    assert ev["main_up"] == "3-3" and ev["main_up_spec"]["operation"] == "build", ev["main_up"]
+    ws = W.to_wave_state(ev)
+    assert ws["level"] == "d3" and ws["sub_level"] == "3-3" and ws["operation"] == "build", ws
+
+
+def test_main_up_33_respects_latch():
+    """★ 必须看**上锁后的档**：链已经在 defense（rung2）时，不许被主升叠加档放宽成 build ✗
+    （首版用当日档 raw ⇒ 2026-10-09 那种上锁 defense 的日子被误放宽，实测打回）。"""
+    rows = mk(FADED)                                   # 该 fixture 自身判到 rung2（失败4-5）
+    rows[-1] = (rows[-1][0], rows[-1][1], 121.0, rows[-1][3])
+    ev = W.evaluate(rows, last(rows), prev=2)           # 上锁在 rung2（失败4-5/defense）
+    assert ev["rung_index"] == 2 and ev["main_up"] == "", ev["main_up"]
+    assert W.to_wave_state(ev)["operation"] == "defense"
+
+
+def test_main_up_32_is_info_only():
+    """3-2 与「4浪调整」在价格上**不可区分**（2026-07-31 实测）⇒ 只留信息字段，绝不改写 level/op ✓。"""
+    rows = mk(FLAT + [130.0] + [112.0] * 19 + [120.0, 124.0, 121.0, 118.0])
+    rows[-1] = (rows[-1][0], rows[-1][1], 121.0, rows[-1][3])   # 末根不跳空
+    ev = W.evaluate(rows, last(rows))
+    assert ev["main_up"] == "" and ev["main_up_pb_info"] is False, ev["main_up"]
+    ws = W.to_wave_state(ev)
+    # 关键断言：叠加档**没有**改写 level/op（不出现 d3/build），仍按链自己的档 ✓
+    assert ws["level"] != "d3" and ws["operation"] != "build", ws
+
+
 def test_artifact_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(W, "DATA", str(tmp_path))
     rows = mk(CHOP)
