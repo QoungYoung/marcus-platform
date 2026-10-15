@@ -66,7 +66,8 @@ def test_shallow_rebound_is_not_rung2():
     # 最后一根“高 123 收 118”：盘中摸高、不构成跳空 ⇒ 只测「摸前高后回落」这一条
     rows[-1] = (rows[-1][0], rows[-1][1], 123.0, rows[-1][3])
     ev = W.evaluate(rows, last(rows))
-    assert ev["rung_index"] == 0 and ev["features"]["hi20_ratio"] < W.NEAR_MIN, ev["reasons"]
+    assert ev["features"]["hi20_ratio"] < W.NEAR_MIN, ev["reasons"]
+    assert ev["rung_index"] != W.RUNG_INDEX["w45_fail"], ev["reasons"]   # 摸不到前高 ⇒ 不算“失败4-5”
 
 
 def test_real_gap_goes_rung3():
@@ -147,6 +148,26 @@ def test_load_rows_merges_csv_and_json(tmp_path, monkeypatch):
     rows = W.load_rows("999999.XX")
     assert [r[0] for r in rows] == ["20240102", "20240103", "20240104"]
     assert rows[1][1] == 9.5 and rows[1][3] == 200     # 同日 JSON 覆盖 CSV ✓
+
+
+# ─────────────── rung1「止跌确认」（2026-10-15 第二轮：治 2026-08 偏保守） ───────────────
+def test_bottom_confirmed_goes_rung1():
+    """他的“4-5 腿走完、等 5 浪上升”：低点冻结 + 距低 ≥3% + 站上 MA20（8 月窗口的形状）。"""
+    closes = [100.0 - i * 0.4 for i in range(80)] + [70.0, 70.5, 71.0, 72.0, 74.0, 76.0, 78.0]
+    rows = mk(closes)
+    ev = W.evaluate(rows, last(rows))
+    f = ev["features"]
+    assert f["low_age"] >= W.LOW_AGE and f["off_low20"] >= W.OFF_LOW and f["above_ma20"]
+    assert ev["rung_index"] == W.RUNG_INDEX["w45_ok"] and "止跌确认" in ev["reasons"], ev["reasons"]
+
+
+def test_continuous_new_lows_not_rung1():
+    """10 月窗口的形状：20 日低点一路被刷新、反弹只有 2% ⇒ 不许判“止跌确认”（而是继续等）。"""
+    closes = [100.0 - i * 0.25 for i in range(90)] + [78.5, 78.0, 78.3, 77.0, 77.6, 78.0]
+    rows = mk(closes)
+    ev = W.evaluate(rows, last(rows))
+    assert ev["features"]["off_low20"] < W.OFF_LOW
+    assert ev["rung_index"] != W.RUNG_INDEX["w45_ok"], ev["reasons"]
 
 
 def test_artifact_roundtrip(tmp_path, monkeypatch):

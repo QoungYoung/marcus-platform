@@ -40,12 +40,16 @@
 离线验收（`python jobs/eval_wave_ladder.py`，2026 全年 as-of 回放，RESET=5%：8 次降级 / 5 次重定浪 / 无非法升档 ✓）：
   · 2026-03-23 [3] 下跌1浪 —— 他 03-23 在防、03-25「减回 50% 内」✓
   · 2026-04-09 [3]（锁着）—— 他 04-09「白线在上 肯定没有买点 ⇒ 减回 50-55%」✓
-  · 2026-07-31 / 08-05 / 08-07 [0] 4浪调整（`t_only`）—— 他「整波为调整浪」「按 4 接 5 做」「半导体吃 20 个点」✓
+  · 2026-07-31 [0] 4浪调整（`t_only`）—— 他「整波为调整浪」✓
+  · 2026-08-05 [1] 成功4-5（`side`，「止跌确认：20日低点 3764.15 冻结13日 ∧ 距低+3.0% ∧ 站上MA20」）
+    —— 他说「看到上面守了 3800 ⇒ 肯定按 4 接 5 做」并在半导体吃 20 个点 ✓✓
   · 2026-10-09 ~ 10-14 [3] 下跌1浪（`exit`）—— 他「避海外链、只吃差价」→ 10-15「转为自救」✓
-  · **已知偏差 ⚠️（2026-10-15 复测）**：2026-08 我们停在「失败4-5/防守」，而他 07-31~08-07 在
-    「按 4 接 5 做」并在半导体吃了 20 个点 ⇒ **这一段偏保守**（根因：他的“4-5 腿走完”＝人工看底，
-    我们的 rung1 只认“创 60 日新高”，深跌结构里**够不到** ⇒ 待办：rung1 改判「调整结束/止跌确认」）。
-    2026-08-19 那条“一跳空直接判主跌1浪”的偏差**已修**（单日跳空只降一档）✓。
+  · **2026-08「偏保守」已修**（2026-10-15 第二轮）：rung1 不再只认「创 60 日新高」，改为**止跌确认**
+    = 20 日低点**冻结 ≥5 日** ∧ **距低 ≥3%** ∧ **站上 MA20** ⇒ 2026-08-05（他说「按 4 接 5 做」的
+    同一天）判出 [1] 成功4-5/`side` ✓。两窗口实测可分：8 月距低 +3.0~5.4% ∧ 低点自 07-17 冻结；
+    10 月距低 ≤2.3% ∧ 低点一路刷新（3823→3811→3797→3767）✓。
+    **残余风险 ⚠️**：rung1 会**放行建仓**（`side`）⇒ 若误报的代价大于误漏，请收紧 `OFF_LOW`/`LOW_AGE`。
+    2026-08-19「一跳空直接判主跌1浪」的偏差**已修**（单日跳空只降一档）✓。
 
 开关：`WOLF_WAVE_LADDER`（默认 **0** ⇒ **影子**：只落盘 + 只读，不改任何交易行为）
       `WOLF_WAVE_LADDER_FLOOR`（默认 0 ⇒ 不启用；>0 时额外作为“关键位”，跌破即主跌1浪）
@@ -76,6 +80,10 @@ GAP_MIN = _envf("WOLF_WAVE_LADDER_GAP_MIN", 0.005)  # ⛔ 代理：真跳空的�
 RESET_RALLY = _envf("WOLF_WAVE_LADDER_RESET", 0.05)  # ⛔ 代理：反抽 ≥5% ⇒ 空头结构被破坏 ⇒ 重定浪型
 # ↑ 2026-10-15 扫 8%/6%/5%：8% ⇒ 7-17 判夭折后**锁死到 10-14**（他 8 月在买半导体 ✗）；
 #   5% ⇒ 07-31/08-05 回到「4浪调整(试探)」、08-19 才转防守 ✓ 与他的公开姿态一致 ✓
+OFF_LOW = _envf("WOLF_WAVE_LADDER_OFF_LOW", 0.03)  # rung1 止跌确认：距 20 日低点反弹 ≥3%（⛔ 代理）
+LOW_AGE = int(_envf("WOLF_WAVE_LADDER_LOW_AGE", 5))   # rung1 止跌确认：20 日低点已冻结 ≥5 个交易日
+# ↑ 两窗口实测（2026-10-15）：窗口A（他 08-05「按4接5做」并吃半导体）距低 +3.0~5.4% ∧ 低点自 07-17 冻结；
+#   窗口B（他 10 月上「调整/反抽、避海外链」）距低 ≤2.3% ∧ 20 日低点一路被刷新（3823→3811→3797→3767）⇒ 分得开 ✓
 ZIGZAG_PCT = _envf("WOLF_WAVE_LADDER_ZIGZAG", 0.10)     # 主级 zigzag 阈值（10% ⇒ 上证一年几次拐点）
 PCT_FINE = _envf("WOLF_WAVE_LADDER_ZIGZAG_FINE", 0.05)  # 细级 zigzag（只出预警位，不触发降级）
 ORIGIN_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_BARS", 900))  # 主升起点回溯窗口（≈3.5 年）
@@ -87,8 +95,8 @@ RUNGS: List[Dict[str, str]] = [
      "expect": "调整未完，等 4-5 收尾（只吃反抽）", "operation": "t_only",
      "hold": "未创新高 ∧ 未摸前高后夭折 ∧ 未破 60 日收盘低位 ∧ 无未收回跳空"},
     {"key": "w45_ok", "name": "成功4-5",
-     "expect": "调整结束 ⇒ 主升末段（5浪上升）", "operation": "side",
-     "hold": "收盘创 60 日新高（4-5 腿有效走完）"},
+     "expect": "调整末腿走完 ⇒ 主升末段（5浪上升）", "operation": "side",
+     "hold": "收盘创 60 日新高 ∨ **止跌确认**（低点冻结 ≥5 日 ∧ 距低 ≥3% ∧ 站上 MA20）"},
     {"key": "w45_fail", "name": "失败4-5",
      "expect": "反抽夭折（冲高不过前高后回落）", "operation": "defense",
      "hold": "近20日摸到前高附近 ∧ 未创60日新高 ∧ 已回落达标"},
@@ -318,6 +326,14 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
                           and len(hist) >= 61 and close < sum(r[1] for r in hist[-61:-1]) / 60),
         "break_floor": bool(floor_level() and close < floor_level()),
         "break_low20": bool(close < min(r[1] for r in hist[-21:-1])),
+        "ma20": round(sum(r[1] for r in w) / len(w), 2) if w else 0.0,
+        "above_ma20": bool(w and close > sum(r[1] for r in w) / len(w)),
+        "low_age": int(len(w) - 1 - min(range(len(w)), key=lambda i: w[i][1])) if w else 0,
+        "off_low20": round(close / lo20 - 1, 4) if lo20 else 0.0,
+        "bottom_ok": bool(w and len(w) >= 20
+                          and (len(w) - 1 - min(range(len(w)), key=lambda i: w[i][1])) >= LOW_AGE
+                          and (close / lo20 - 1) >= OFF_LOW
+                          and close > sum(r[1] for r in w) / len(w)),
         "gap_break20": bool((prev_close - high) / prev_close >= GAP_MIN and close < prev_close
                             and close < min(r[1] for r in hist[-21:-1])),
         "rally_amp": round(hi20 / lo20 - 1, 4) if lo20 else 0.0,
@@ -342,7 +358,7 @@ def stage_of(f: Dict[str, Any]) -> int:
             or ((not f["rally_new_high"]) and f["near_prev_high"]
                 and f["rally_amp"] >= RALLY_MIN and f["fade"] >= FADE_MIN)):
         return RUNG_INDEX["w45_fail"]
-    if f["new_high60"]:
+    if f["new_high60"] or f["bottom_ok"]:
         return RUNG_INDEX["w45_ok"]
     return RUNG_INDEX["w4_adj"]
 
@@ -364,7 +380,10 @@ def _reasons(f: Dict[str, Any], idx: int) -> str:
         return "近20日摸到前高%s的%s%%后回落%s%%（未创新高）" % (
             round(f["hi60_prev"], 2), round(f["hi20_ratio"] * 100, 1), round(f["fade"] * 100, 1))
     if idx == RUNG_INDEX["w45_ok"]:
-        return "收盘%s创60日新高(前高%s)" % (round(f["close"], 2), round(f["hi60_prev"], 2))
+        if f["new_high60"]:
+            return "收盘%s创60日新高(前高%s)" % (round(f["close"], 2), round(f["hi60_prev"], 2))
+        return "止跌确认：20日低点%s 冻结%d日 ∧ 距低+%s%% ∧ 站上MA20(%s)" % (
+            round(f["lo20"], 2), f["low_age"], round(f["off_low20"] * 100, 1), round(f["ma20"], 2))
     return "无破位无新高（前高%s，近20日最高%s=%s%%）⇒ 仍在调整区间" % (
         round(f["hi60_prev"], 2), round(f["hi20"], 2), round(f["hi20_ratio"] * 100, 1))
 
