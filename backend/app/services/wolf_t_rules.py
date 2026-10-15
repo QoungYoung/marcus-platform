@@ -80,7 +80,26 @@ def zheng_t_buy_quote(quote, prev_days):
     hit_prev = bool(prev_low and low <= prev_low*1.005)
     pvols=[p.get('vol') for p in prev_days if p.get('vol')]
     avg_vol=sum(pvols)/len(pvols) if pvols else 0
-    shrink = avg_vol>0 and vol <= avg_vol*0.9
+    # ★ 2026-10-15 ✓（用户「改」）：**量比分母做"同时段伸缩"** ✓ —— 照搬系统自己卖出侧的口径 ✓
+    #   病灶 ✗（实测 t68 全窗）：`shrink` 拿**当日累计量**比**前5日全天均量** ⇒ 早盘（09:45-10:00 ✓）
+    #     恒成立 ✓，而午后允许时段（14:00-14:30 ✓）**恒不成立** ✗；偏偏"日内回撤≥2.5%/触前低"又
+    #     几乎只在午后成立 ✓ ⇒ 两个允许时段**不可能同时满足** ⇒ **正T买腿（T回）永远发不出来** ✓
+    #     （实测：t68 全窗 `wolf_zheng_t_buy` **0 条** ✗，而 603986 于 0115 被确认制T出卖了 100 股 ✓）
+    #   卖出侧同一 bug 早已修 ✓：`defensive_t_reduce_quote` 注释 §9.862「旧口径把当日累计量直接比前5日
+    #     全天均量 ✗ ⇒ 开盘时必然'量能不足'（恒真✓）⇒ **量比先做时段伸缩**」✓ —— 买入侧一直没修 ✗。
+    #   口径 ✓：`avg_vol_eff = 前5日全天均量 × (已开盘分钟数 / 240)` ✓（用本模块现成的
+    #     `_session_open_minutes()` ✓，与卖出侧同一函数 ✓）。
+    #   开关 `WOLF_T_BUY_VOL_SCALE`（**库内默认 0 ⇒ 逐字不变** ✓）
+    _vol_scale = 1.0
+    try:
+        if os.getenv("WOLF_T_BUY_VOL_SCALE", "0").strip().lower() in ("1", "true", "yes", "on"):
+            _open_min = float(_session_open_minutes() or 0)
+            if _open_min > 0:
+                _vol_scale = max(1.0 / 240.0, min(1.0, _open_min / 240.0))
+    except Exception:
+        _vol_scale = 1.0
+    _avg_vol_eff = avg_vol * _vol_scale
+    shrink = _avg_vol_eff>0 and vol <= _avg_vol_eff*0.9
     amp=(high/low-1)*100 if low>0 else 0
     ok=(hit_dd or hit_prev) and shrink and amp>=3.0
     return bool(ok), '日内回撤%.1f%%%s 量比%.2f 振幅%.1f%%' % (dd, ('/触前低' if hit_prev else ''), (vol/avg_vol if avg_vol else 0), amp)
