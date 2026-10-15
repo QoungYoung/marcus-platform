@@ -47,7 +47,12 @@ def fetch_relay(code: str, days: int):
     df = relay_query("index_daily", ts_code=code, start_date=start, end_date=end)
     rows = []
     for _, r in (df.iterrows() if df is not None else []):
-        rows.append([str(r["trade_date"]), float(r["close"]), float(r.get("high") or r["close"]), float(r.get("amount") or 0)])
+        # tushare index_daily 本身有 open/high/low/close ✓ ⇒ 一并存（前 4 项仍是浪型链兼容序 ✓）
+        cl = float(r["close"])
+        op = float(r.get("open") or cl) if hasattr(r, "get") else cl
+        hi = float(r.get("high") or max(op, cl)) if hasattr(r, "get") else cl
+        lo = float(r.get("low") or min(op, cl)) if hasattr(r, "get") else cl
+        rows.append([str(r["trade_date"]), cl, hi, float(r.get("amount") or 0), op, lo])
     return sorted(rows)
 
 
