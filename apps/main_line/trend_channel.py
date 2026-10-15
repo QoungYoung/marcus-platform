@@ -313,6 +313,20 @@ def _v2_pick(domain: Sequence[Dict[str, Any]], themes: Sequence[str], day: str,
             _silent_alert("trend_channel.py:287", _e_sil6)
         ranked = lv2.rank_concept(_rows, ctx, index_ret20=idx20)
         ok_rows = [r for r in ranked if r.get("_v2_gate")]
+        # ★ 2026-10-15 ✓（用户选 B）：**趋势通道也按「市值 + 动量」选龙头** ✓
+        #   病灶 ✗：趋势通道（`src=trend` ✓）是**实际成交**的那条路 ✗（实测 t68 前 6 天成交的
+        #     4 只全部来自它 ✓），而它按 `leader_v2` 的分数取前 `topk` ⇒ 选出的仍非名单龙头 ✗。
+        #   依据 ✓：同一族因子离线复算（市值分位+r60 分位 ✓）中位 +0.09%/均值 +1.92% ✓ vs 旧键 −1.66% ✗。
+        #   开关 `WOLF_TREND_RANK_MV_MOM`（**库内默认 0 ⇒ 逐字不变** ✓）
+        if str(os.getenv("WOLF_TREND_RANK_MV_MOM", "0")).strip().lower() in ("1", "true", "yes", "on") and len(ok_rows) > 1:
+            try:
+                _mvp = _pct_rank_local([float(r.get("mv") or 0) for r in ok_rows])
+                _r20p = _pct_rank_local([float(r.get("ret20") or 0) for r in ok_rows])
+                for _i, _r in enumerate(ok_rows):
+                    _r["_mm_score"] = round(0.5 * _mvp[_i] + 0.5 * _r20p[_i], 4)
+                ok_rows = sorted(ok_rows, key=lambda r: -(r.get("_mm_score") or 0))
+            except Exception as _e_mm:
+                _silent_alert("trend_channel.py:mm_rank", _e_mm)
         if not ok_rows:
             gated_out += 1
         for r in ok_rows[:int(topk)]:

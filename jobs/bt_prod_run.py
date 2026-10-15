@@ -1255,8 +1255,29 @@ def main() -> int:
             conn.autocommit = True
             cur = conn.cursor()
             rsa.expire_old(cur, day)
-            for fn in ("legs_switch.jsonl", "legs.jsonl"):
-                p = os.path.join(day_dir, fn)
+            # ★ 2026-10-15 ✓（用户选 A：「挂单当日有效」太紧 ✗）——
+            #   实测：pathA 龙头单挂在 0108/0109，价格回踩发生在 **0112** ⇒ 早已过期 ⇒ 不成交 ✗
+            #   （他的语义是「**挂着等**回踩」✓：「挂前一天的低点」「等突破或回踩打满」✓）
+            #   开关 `WOLF_ARM_CARRY_DAYS`（**库内默认 0 ⇒ 逐字不变** ✓）：置 N ⇒ 把**前 N 个交易日**
+            #   的 `legs.jsonl` 也一并读进来（同口径挂单 ✓），让龙头的回踩单有机会成交 ✓。
+            _leg_files = [os.path.join(day_dir, "legs_switch.jsonl"), os.path.join(day_dir, "legs.jsonl")]
+            try:
+                _carry = int(float(os.getenv("WOLF_ARM_CARRY_DAYS", "0") or 0))
+            except (TypeError, ValueError):
+                _carry = 0
+            if _carry > 0:
+                _base = os.path.basename(str(day_dir).rstrip("/"))
+                try:
+                    _prev = sorted([d for d in os.listdir(os.path.dirname(str(day_dir).rstrip("/")))
+                                    if d.isdigit() and d < _base])[-_carry:]
+                    for _d in _prev:
+                        _leg_files.append(os.path.join(os.path.dirname(str(day_dir).rstrip("/")), _d, "legs.jsonl"))
+                    if _prev:
+                        print("[prod] ARM_CARRY 带上前 %d 天腿: %s" % (len(_prev), _prev), file=sys.stderr)
+                except Exception as _e_carry:
+                    print("[prod] ARM_CARRY 失败(按当日 ✓): %s" % str(_e_carry)[:70], file=sys.stderr)
+            for p in _leg_files:
+                fn = os.path.basename(p)
                 if not os.path.exists(p):
                     continue
                 for ln in open(p, encoding="utf-8"):
