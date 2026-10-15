@@ -1338,11 +1338,45 @@ def main() -> int:
                             _lnp = rsa.ma_line_price(sym, day)
                         except Exception as _e_lnp:
                             print("[prod] pathA 取线位失败 %s: %s" % (sym, str(_e_lnp)[:70]), file=sys.stderr)
-                        if _lnp and _lnp.get("v"):
+                        # ★ 2026-10-15 ✓（用户选 A：「B 选出来但**买不进去**」）——
+                        #   实测（B 选中的 244 个样本 ✓）：**他的线组在强势龙头上成交率只有 12%** ✗
+                        #   （龙头走强时不回踩均线 ✓），而 **-2% 浅回踩成交率 66%** ✓、T+5 均值 +3.23% ✓；
+                        #   -5% 深回踩成交率 30% 但中位 +6.42% ✓。
+                        #   ⇒ 开关 `WOLF_ARM_PATHA_DIP_PCT`（**库内默认 0 ⇒ 只用线组、逐字不变** ✓）：
+                        #     置 >0 时取 `max(线位, 前收盘×(1-pct%))` ✓ ——**取更容易成交的那个价** ✓
+                        #     （限价单价格越高越容易触发 ✓），并在 armed 里记 `dip` 便于事后归因 ✓。
+                        #   ⚠️ `pct` 是**自设参数**（语料只给了"挂前一天低点"✓）⇒ 需在臂里单变量验证 ✓
+                        _px = None
+                        _dip_pct = 0.0
+                        try:
+                            _dip_pct = float(os.getenv("WOLF_ARM_PATHA_DIP_PCT", "0") or 0)
+                        except (TypeError, ValueError):
+                            _dip_pct = 0.0
+                        if _dip_pct > 0:
+                            try:
+                                import wolf_confirm_pick as _wcp_d
+                                _tsc = (str(sym)[2:] + "." + str(sym)[:2]) if str(sym)[:2] in ("SH", "SZ") else str(sym)
+                                _rr = _wcp_d.gz("daily", {"ts_code": _tsc, "start_date": "20250101",
+                                                          "end_date": "20991231"}, "trade_date,close") or []
+                                _rr = [x for x in _rr if str(x[0]) < str(day)]
+                                if _rr:
+                                    _cl = float(sorted(_rr, key=lambda x: str(x[0]))[-1][1])
+                                    _px = round(_cl * (1.0 - _dip_pct / 100.0), 3)
+                            except Exception as _e_dp:
+                                print("[prod] pathA 取前收盘失败 %s: %s" % (sym, str(_e_dp)[:70]), file=sys.stderr)
+                        _v_use = None
+                        if _px and _lnp and _lnp.get("v"):
+                            _v_use = max(float(_px), float(_lnp["v"]))       # 更容易成交的那个 ✓
+                        elif _px:
+                            _v_use = float(_px)
+                        elif _lnp and _lnp.get("v"):
+                            _v_use = float(_lnp["v"])
+                        if _v_use:
                             _r255 = rsa.arm(conn, cur, sym, "custom_line_dip", "buy",
-                                            rsa.ma_line_expr(_lnp["v"]), day)
+                                            rsa.ma_line_expr(_v_use), day)
                             armed.append({"symbol": sym, "src": "pathA_line", "line": _r255,
-                                          "k": _lnp.get("k"), "price": round(float(_lnp["v"]), 3)})
+                                          "k": (_lnp or {}).get("k"), "price": round(_v_use, 3),
+                                          "dip": (round(_px, 3) if _px else None)})
                         else:
                             armed.append({"symbol": sym, "src": "pathA_noline"})
                         continue
