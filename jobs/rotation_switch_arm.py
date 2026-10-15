@@ -234,6 +234,22 @@ def board_prefilter_shadow(chain, cur, alt):
         print("BOARD_PREFILTER_WRITE_ERR", str(e)[:80], file=sys.stderr)
 
 
+def pos_gate_any() -> bool:
+    """位置闸开关 ✓ `WOLF_PICK_POS_GATE`（**库内默认 low_mid ⇒ 逐字不变** ✓）。
+
+    ★ 2026-10-15 ✓（用户「那狼大是怎么买到龙头的」→ 语料原文 ✓）：
+      · 「趋势行情…剩下的做T **等突破或回踩打满**」／「带量**突破**空翻多则 50% 加到 80%」✓
+      · 「出现自己认可的新逻辑或**低位区间**…**位置在相对低位**才…」✓
+        ⇒ **"位置低"只约束【回踩低吸】那一条进场路** ✓，**不约束【带量突破】**那条 ✓。
+      · 实测 ✓：龙头链进榜的 288 个样本里，龙头自身位置 **HIGH 237 / MID 46 / LOW 5**
+        （中位 **0.87** ✓）⇒ 位置闸当"选股前提"用 ⇒ **82% 的龙头被踢** ✗
+        ⇒ 这正是"他买得到、我们买不到"的机制 ✓（不是选股因子错 ✗，是闸用错了位置 ✗）。
+    置 `any`（或 off/0/1 之外的任意值 ✓）⇒ 位置**不再决定"能不能被选中"** ✓，
+      只由进场规则区分（突破型用回踩挂单 ✓ / 低吸型用线位前低 ✓）。
+    """
+    return str(os.getenv("WOLF_PICK_POS_GATE", "low_mid")).strip().lower() in ("any", "off", "0", "none", "*")
+
+
 def _select_by_gate(stats, limit, use_board_prefilter=False):
     """按 leader 降序过位置闸取前 `limit`（原 `pick_buy` ③ 段抽出，便于单测）。
 
@@ -252,7 +268,7 @@ def _select_by_gate(stats, limit, use_board_prefilter=False):
             pos = pc.classify(f)["position"] if f else None
         except Exception:
             pos = None
-        if pos in ("LOW", "MID"):
+        if pos_gate_any() or pos in ("LOW", "MID"):
             leg = {"symbol": s["xq"], "ts_code": s["ts"], "position": pos,
                    "chain": s.get("chain"), "leader": s["leader"],
                    "r60": round(s["r60"], 1) if s["r60"] is not None else None,
@@ -311,7 +327,7 @@ def _lowmid_domain(stats, win=20):
             pos = pc.classify(f)["position"] if f else None
         except Exception:
             pos = None
-        if pos not in ("LOW", "MID"):
+        if not pos_gate_any() and pos not in ("LOW", "MID"):
             continue
         d = {"symbol": s.get("xq"), "ts_code": s.get("ts"), "chain": s.get("chain")}
         d.update(s.get("dom") or _dom_feat(s.get("closes") or [], s.get("lows") or [],
