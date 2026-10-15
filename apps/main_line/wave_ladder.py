@@ -132,6 +132,36 @@ MAIN_UP_PULLBACK = _envf("WOLF_WAVE_LADDER_UP_PB", 0.03)       # 主升中的回
 #   · W底确认 = `build`（原表「W底(确认建仓)」+ d1「反转大1浪(底部确认后建仓)」）
 #     判据：**两个相近低点（≤3%）+ 中间颈线** + 今日**放量收上颈线** —— 他 10-15 原话「**需放量突破颈线才确认重仓 build**」✓
 #     命中 ⇒ **重定浪**（底部确认推翻下跌结构 ✓）+ level=d1/sub=W底/op=build。
+# ────────────── 补档 C（2026-10-15）：防顶 d5/双头 ＋ B反/ABC/下跌浪4反弹 ＋ 4-1 回调初 ＋ C杀 语义 ──────────────
+# 全部照原表 operation（wave_agent.py:322-327，不自己编 ✓）：
+#   d5 末段/衰竭 ⇒ **exit**（兑现降仓防顶）｜双头/M顶 ⇒ **exit**（见顶防跌）｜下跌浪4反弹 ⇒ **exit**（确认4必有5，先卖）
+#   B反 ⇒ **t_only**（典型诱多别抄底）｜ABC 期间 ⇒ **t_only**（不参与、等结束）｜4-1 回调初 ⇒ **defense**（观望降仓）
+# 判据出处：他 2025-05-15「银保证券出**长上影+放量**，然后**大盘缩量** —— 这就是顶部结构形成的重要条件」✓；
+#   原表「上涨末段(3-5/4-5/d5/双头M顶)：**缩量滞涨+量价背离**→顶部(exit/defense)」✓；
+#   他 2026-06-30「缩圈到最后大票带指数上、情绪小票反而不如大票 = 加速完成」✓。
+TOP_SHADOW = _envf("WOLF_WAVE_LADDER_TOP_SHADOW", 0.008)   # 长上影：(high-close)/close 门槛
+TOP_SHRINK = _envf("WOLF_WAVE_LADDER_TOP_SHRINK", 0.85)    # 缩量新高：当日额 / 20 日均额 上限
+TOP_STALL = _envf("WOLF_WAVE_LADDER_TOP_STALL", 0.01)      # 滞涨：近 5 日累计涨幅上限
+DT_NEAR = _envf("WOLF_WAVE_LADDER_DT_NEAR", 0.03)          # 双头：两高点相近度
+DT_WIN = int(_envf("WOLF_WAVE_LADDER_DT_WIN", 160))        # 双头：回看窗口
+B_REBOUND_MIN = _envf("WOLF_WAVE_LADDER_BREB", 0.03)       # B反：自低点反弹幅度门槛
+SHARP_DROP = _envf("WOLF_WAVE_LADDER_SHARP", 0.02)         # C杀：单日跌幅门槛
+SHARP_VOL = _envf("WOLF_WAVE_LADDER_SHARPVOL", 1.2)        # C杀：放量倍数（相对 20 日均额）
+
+TOP_SELL = {"key": "top_sell", "name": "末段/顶部", "level": "d5", "sub_level": "末段", "operation": "exit",
+            "expect": "上涨末段（缩量滞涨/量价背离/长上影）⇒ 兑现降仓、防顶（原表 d5 = exit）"}
+DOUBLE_TOP = {"key": "dtop", "name": "双头/M顶", "level": "d5", "sub_level": "双头", "operation": "exit",
+              "expect": "双头未创新高 ⇒ 见顶防跌（原表：做不做双头都撤、不做 T）"}
+B_REBOUND = {"key": "breb", "name": "B反", "level": "down", "sub_level": "B反", "operation": "t_only",
+             "expect": "下跌中的反弹（典型诱多别抄底）⇒ 只做T、不追（原表 B反 = t_only）"}
+ABC_DOWN = {"key": "abc", "name": "ABC", "level": "down", "sub_level": "ABC", "operation": "t_only",
+            "expect": "完整三段 A跌B反C杀（不参与、等结束）⇒ 只做T（原表 ABC = t_only）"}
+LEG4_SELL = {"key": "leg4", "name": "下跌浪4反弹", "level": "down", "sub_level": "下跌4反弹", "operation": "exit",
+             "expect": "下跌浪的 4 反弹（确认 4 必有 5）⇒ 先卖（原表 = exit）"}
+BASE41_OFF = _envf("WOLF_WAVE_LADDER_41_OFF", 0.05)     # 4-1：距 60 日前高上限（⛔ 自设）
+BASE41 = {"key": "basis_41", "name": "4-1回调初", "level": "d4", "sub_level": "4-1", "operation": "defense",
+          "expect": "4-1 回调初 ⇒ 观望降仓（原表 4-1 = defense）"}
+
 BASE43_OFF = _envf("WOLF_WAVE_LADDER_43_OFF", 0.05)     # 4-3：距 20 日低点上限
 BASE43_VOL = _envf("WOLF_WAVE_LADDER_43_VOL", 0.8)       # 4-3：缩量门槛（20 日均额 / 60 日均额）
 WB_NEAR = _envf("WOLF_WAVE_LADDER_WB_NEAR", 0.03)        # W底：两低点相近度
@@ -223,6 +253,20 @@ def _w_bottom(pv: Sequence[Any], close: float, vol_ratio20: float, since_date: s
     if close > neck and vol_ratio20 >= WB_VOL:
         return True, neck
     return False, neck
+
+
+def _double_top(pv: Sequence[Any], hi20: float, since_date: str = "") -> bool:
+    """双头/M顶：最近两个**相近**高点（≤DT_NEAR）∧ 第二个高点**未创新高**（≤ 第一个）⇒ 见顶防跌 ✓。
+
+    只用已确认拐点 ⇒ 无未来函数 ✓。原表：「双头/M顶(见顶防跌)」+「做不做双头都撤，不做 T」✓
+    """
+    highs = [p for p in pv if str(p[3]).upper() == "H" and (not since_date or str(p[1]) >= since_date)][-2:]
+    if len(highs) < 2:
+        return False
+    v1, v2 = highs[0][2], highs[1][2]
+    if not v1:
+        return False
+    return bool(abs(v2 / v1 - 1) <= DT_NEAR and v2 <= v1 and hi20 <= v1 * (1 + DT_NEAR))
 
 
 def _up33_in_window(hist: Sequence[Tuple[str, float, float, float]], win: int) -> bool:
@@ -497,6 +541,8 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "sub_stage": sub["stage"], "sub_forming": sub["forming"], "sub_legs": sub["legs"],
         # ── 主升叠加档的量价特征（3-3/3-2 判据）──
         "hi20_prev": max(r[1] for r in w), "streak_above_hi20": _streak_above(hist, RALLY_WIN),
+        # ★ 不含当日的 20 日最高（"突破"类比较必须用它：hi20 含当日 ⇒ close > hi20 恒假 ✗ 实测踩过）
+        "hi20_excl": max(r[1] for r in hist[-21:-1]) if len(hist) >= 21 else 0.0,
         "vol_ratio20": (round(amount / (sum(r[3] for r in hist[-21:-1]) / 20), 2)
                         if len(hist) >= 21 and sum(r[3] for r in hist[-21:-1]) else 0.0),
         "sync3": _SYNC3,          # True 三指数同步创 20 日新高 / False 不同步 / None 数据不全（退回单指数）
@@ -551,6 +597,20 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
                          if len(hist) >= 61 and sum(r[3] for r in hist[-61:-1]) else False),
         "w_bottom": _wb_ok,
         "w_bottom_neck": _wb_neck,
+        # ── 补档 C 的顶部/下跌族特征 ──
+        "shrink_high": bool(close > (hist[-21:-1] and max(r[1] for r in hist[-21:-1])) and _vr20
+                            and amount <= TOP_SHRINK * _vr20),
+        "upper_shadow": bool(high >= (hist[-21:-1] and max(r[1] for r in hist[-21:-1])) and close
+                             and (high - close) / close >= TOP_SHADOW),
+        "stall": bool(len(w) >= 6 and close >= w[-1][1] * (1 - 0.02) and (close / w[-6][1] - 1) <= TOP_STALL),
+        "top_zone": bool(close > hi60_prev * 0.97),      # 在高位区间（距 60 日前高 3% 内）才谈顶部
+        "double_top": _double_top(_pv, max(r[1] for r in hist[-21:-1]) if len(hist) >= 21 else hi20,
+                                 hist[-DT_WIN][0] if len(hist) >= DT_WIN else ""),
+        "b_rebound": bool(lo20 and (close / lo20 - 1) >= B_REBOUND_MIN and close < hi20 and close < hi60_prev),
+        "abc_done": bool(sum(1 for p in _pv[-4:] if str(p[3]).upper() == "L") >= 2 and close < hi60_prev),
+        "basis_41": bool((close / hi60_prev - 1) >= -BASE41_OFF and len(w) >= 6
+                         and (close / w[-6][1] - 1) <= -0.02 and not bool(close > hi60_prev)),
+        "sharp_drop": bool(prev_close and (close / prev_close - 1) <= -SHARP_DROP and _vr20 and amount >= SHARP_VOL * _vr20),
     }
 
 
@@ -575,6 +635,11 @@ def stage_of(f: Dict[str, Any]) -> int:
     return RUNG_INDEX["w4_adj"]
 
 
+def fixture_sharp(fi: Dict[str, Any]) -> bool:
+    """放量急杀当日（C杀 的标记口径 ✓）。"""
+    return bool((fi or {}).get("sharp_drop"))
+
+
 def _reasons(f: Dict[str, Any], idx: int) -> str:
     hits = []
     if f["gap_unrecovered"]:
@@ -589,6 +654,8 @@ def _reasons(f: Dict[str, Any], idx: int) -> str:
     if f.get("w_bottom"):
         hits.append("W底确认（放量%s倍收上颈线%s ⇒ 底部反转，原表 build）" % (
             f.get("vol_ratio20"), round(f.get("w_bottom_neck") or 0, 2)))
+    elif idx >= RUNG_INDEX["w45_fail"] and f.get("b_rebound"):
+        hits.append("下跌结构中的反弹（B反：典型诱多别抄底 ⇒ 只降不抄底，原表 B反=t_only 但本档 defense 更严 ✓）")
     elif f.get("basis_43"):
         hits.append("4-3 筑底（低点冻结%d日 ∧ 距低%+.1f%% ∧ 缩量%.2f ⇒ 可分批接主线，原表 side）" % (
             f.get("low_age", 0), 100 * (f.get("off_low20") or 0), f.get("vol_ratio60") or 0))
@@ -638,10 +705,21 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
     idx = raw if (reset or prev is None) else max(int(prev), raw)
     # 补档 B 的档位改写：W底 ⇒ d1/W底/build（已重定浪 ✓）；4-3 筑底 ⇒ d4/4-3/side（**仅 4 浪调整档内** ✓）
     ov = None
+    _top_hits = sum(1 for k in ("shrink_high", "upper_shadow", "stall", "double_top") if f.get(k))
     if wb:
-        ov = W_BOTTOM
-    elif f.get("basis_43") and idx == RUNG_INDEX["w4_adj"]:
-        ov = BASE_43
+        ov = W_BOTTOM                                        # 底部确认（最高优先 ✓）
+    elif idx <= RUNG_INDEX["w45_ok"] and f.get("top_zone") and _top_hits >= 2:
+        ov = DOUBLE_TOP if f.get("double_top") else TOP_SELL  # 防顶：d5/双头 ⇒ exit（原表 ✓）
+    elif idx == RUNG_INDEX["w4_adj"] and f.get("basis_41"):
+        ov = BASE41                                          # 4-1 回调初 ⇒ defense
+    elif idx == RUNG_INDEX["w4_adj"] and f.get("basis_43"):
+        ov = BASE_43                                         # 4-3 筑底 ⇒ side
+    # ★ 修正（同日实测）：B反 / ABC **不改 operation** ✗ ——
+    #   原表给 B反/ABC 的是 `t_only`（**板块/个股场合**「不参与、等结束」），而我们的 `down1` 已经是
+    #   `defense ＋ mode=自救`（原表 down=空仓防御 ＋ 他 2025-09「熊市不做」）⇒ 拿 t_only 去覆盖它是**放松** ✗
+    #   （t_only 在 P3 会给 probe ≤3%，defense 给 None ✗）。故 B反/ABC 只作**标签**（`down_tag`，进 reasons ✓），
+    #   档位与 operation 保持 down1 自身的口径 ✓。
+    # ⛔「下跌浪4反弹」（原表 = exit 先卖）没有单独实现：它与 B反 的差别是"第几段下跌"（需子级计数 ✗）⇒ 留缺口 ✓。
     r = RUNGS[idx]
     w1, w2, w3, invest = _ALLOC.get(r["operation"], (0.6, 0.25, 0.15, 1.0))
     return {"date": f["date"], "rung_index": idx, "key": r["key"], "name": r["name"],
@@ -653,6 +731,9 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             #   · **3-2 不做接管**：它跟 4 浪调整在价格上**不可区分**（2026-07-31 他叫"调整浪/4浪"，按 3-2 就会给 side ✗）
             #     —— 这是"等级不可分辨"问题的又一次实证，只能留作信息字段（`main_up_pb`）⛔。
             "ov_spec": ov,
+            # 只留 B反 标签：ABC 的判据太宽（实测 1614 天几乎覆盖整段下跌 ⇒ 无信息量 ✗ 去掉）；
+            # 下跌浪4反弹 需子级计数 ✗ 未实现（留缺口 ✓）。
+            "down_tag": ("B反" if (idx >= RUNG_INDEX["w45_fail"] and f.get("b_rebound")) else ""),
             "main_up": ("3-3" if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else ""),
             "main_up_pb_info": bool(f.get("main_up_pb")),
             "main_up_spec": (MAIN_UP if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else None),
@@ -752,7 +833,9 @@ def adopt_operation(prod_op: Optional[str], asof: Optional[str] = None) -> Optio
 # 都以 `wave_state.level == "down"` 作为**指数大级别止损**判据（他 2026-08-27「转下跌1浪就止损」）
 # ⇒ rung3 必须映射成 "down" ✓；取值域 d1..d5/down、sub_level 取值域 3-x/4-x/失败5/ABC/B反/C杀/…
 LEVEL_OF_RUNG = {"w4_adj": "d4", "w45_ok": "d5", "w45_fail": "d5", "down1": "down"}
-SUB_OF_RUNG = {"w4_adj": "", "w45_ok": "4-5", "w45_fail": "失败5", "down1": "C杀"}
+# ★ 2026-10-15 语义修正：`down1` 不再一律标 C杀 ✗ —— C杀 是**下跌的最后急杀段**，只有放量急杀当日才标；
+#   其余标「下跌1浪」（原来把整段下跌都叫 C杀，与他的用法不符 ✗）。
+SUB_OF_RUNG = {"w4_adj": "", "w45_ok": "4-5", "w45_fail": "失败5", "down1": "下跌1浪"}
 CONF_OF_RUNG = {"w4_adj": 0.6, "w45_ok": 0.7, "w45_fail": 0.7, "down1": 0.8}
 
 
@@ -768,6 +851,8 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
     fi = ev.get("features") or {}
     mus = ev.get("ov_spec") or ev.get("main_up_spec") or {}   # 档位改写：W底/4-3 优先，其次主升 3-3 ✓
     sub = SUB_OF_RUNG.get(key, "")
+    if key == "down1" and fixture_sharp(fi):        # 放量急杀当日 ⇒ C杀 ✓（他的用法）
+        sub = "C杀"
     if key == "w4_adj" and fi.get("sub_stage"):
         sub = fi["sub_stage"] + (("→" + fi["sub_forming"]) if fi.get("sub_forming") else "")
     d = str(ev.get("date") or asof or "")[:8]

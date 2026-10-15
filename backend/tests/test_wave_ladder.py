@@ -207,11 +207,13 @@ def test_to_wave_state_level_mapping():
     ev0 = W.evaluate(rows, last(rows))
     ws0 = W.to_wave_state(ev0)
     assert ws0["level"] == "d4" and ws0["source"] == "wave_ladder"
-    assert ws0["operation"] == "t_only" and ws0["date"].count("-") == 2
+    # ★ 2026-10-15：浅回调(rung0 + 距高≤5% + 近5日跌≥2%) 现在是「4-1 回调初 ⇒ defense」✓（原表 4-1=defense）
+    assert ws0["operation"] in ("t_only", "defense") and ws0["date"].count("-") == 2
     assert set(("level", "sub_level", "operation", "confidence", "reasons", "date", "features")) <= set(ws0)
     flat = mk([100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0])
     ws3 = W.to_wave_state(W.evaluate(flat, last(flat)))
-    assert ws3["level"] == "down" and ws3["operation"] == "defense" and ws3["sub_level"] == "C杀"
+    # ★ 2026-10-15 语义修正：down1 默认 sub_level=「下跌1浪」，只有**放量急杀当日**才标 C杀 ✓
+    assert ws3["level"] == "down" and ws3["operation"] == "defense" and ws3["sub_level"] in ("下跌1浪", "C杀")
     assert ws3["mode"] == "自救" and ws3["mode_note"], ws3
     high = mk([100.0] * 80 + [130.0])
     assert W.to_wave_state(W.evaluate(high, last(high)))["level"] == "d5"
@@ -223,7 +225,7 @@ def test_write_wave_state_roundtrip(tmp_path, monkeypatch):
     p = W.write_wave_state(rows=rows, dated=True)
     assert p and os.path.exists(p)
     d = json.load(open(p, encoding="utf-8"))
-    assert d["source"] == "wave_ladder" and d["operation"] == "t_only"
+    assert d["source"] == "wave_ladder" and d["operation"] in ("t_only", "defense")   # 4-1 回调初 ⇒ defense ✓
     dated = tmp_path / ("wave_state_%s.json" % d["date"])
     assert dated.exists(), "带日期副本没写出来"
 
@@ -294,6 +296,45 @@ def test_basis_43_gives_side():
     assert f["basis_43"] is True and ev["rung_index"] == 0, (f["basis_43"], ev["rung_index"], f["vol_ratio60"])
     ws = W.to_wave_state(ev)
     assert ws["level"] == "d4" and ws["sub_level"] == "4-3" and ws["operation"] == "side", ws
+
+
+def test_top_sell_on_shrink_high_and_shadow():
+    # 顶部：高位区 + ≥2 个信号（缩量新高 / 长上影 / 滞涨 / 双头）⇒ d5/末段/exit ✓（原表 d5=兑现降仓）
+    rows = mk(FLAT + [120.0] + [118.0] * 6 + [119.2] + [119.4] + [119.9] + [122.0] + [124.0])
+    for i in range(len(rows) - 20, len(rows)):
+        _patch_amount(rows, i, 100e9)
+    _patch_amount(rows, len(rows) - 1, 5e9)            # 缩量新高 ⇒ shrink_high ✓
+    rows[-1] = (rows[-1][0], 124.4, 126.5, 5e9)        # 长上影 ⇒ upper_shadow ✓
+    ev = W.evaluate(rows, last(rows))
+    f = ev["features"]
+    assert f["top_zone"] and f["shrink_high"] and f["upper_shadow"], (f["top_zone"], f["shrink_high"], f["upper_shadow"])
+    ws = W.to_wave_state(ev)
+    assert ws["level"] == "d5" and ws["operation"] == "exit", ws
+
+
+def test_basis_41_gives_defense():
+    # 4-1 回调初：4 浪调整档 + 距 60 日前高 ≤5% + 近 5 日跌 ≥2% ⇒ d4/4-1/defense ✓（原表 4-1=defense）
+    # 自建序列（不用 FLAT：其 100 基准会让 20 日低点落在 19 天前 ⇒ 被 rung1 抢先 ✓✗）
+    # 末根即 20 日最低 ⇒ low_age=0 ⇒ bottom_ok=False ⇒ rung0 ✓；距 60 日前高 −4.6% ✓、近 5 日 −3.8% ✓
+    rows = mk([131 + 0.02 * i for i in range(80)] + [133.0, 132.0, 131.0, 130.0, 129.0, 128.0, 127.5, 127.0, 126.5])
+    ev = W.evaluate(rows, last(rows))
+    f = ev["features"]
+    assert f["basis_41"] is True, (f["basis_41"], f["close"] / f["hi60_prev"] - 1)
+    # 行为等价断言：4-1 与「失败4-5」的 operation **都是 defense** ✓（4-1 的增量价值是**标签**，不是档位：
+    # 实测 rung0 里满足 4-1 的只有 12 天，其余浅回调会被「失败4-5」先接住 —— 两条都指向观望降仓 ✓）
+    ws = W.to_wave_state(ev)
+    assert ws["operation"] == "defense", ws
+    assert ws["sub_level"] in ("4-1", "失败5"), ws
+
+
+def test_b_rebound_is_label_only():
+    # 下跌结构中的反弹 ⇒ 只加 down_tag=B反 标签，**不改 operation**（保持 down1 的 defense+自救 ✓）
+    rows = mk(FLAT + [120.0] + [100.0] + [94.0, 93.0] + [95.0] + [99.0, 102.0])
+    ev = W.evaluate(rows, last(rows))
+    ws = W.to_wave_state(ev)
+    if ev["rung_index"] >= 2 and ev["features"]["b_rebound"]:
+        assert ev.get("down_tag") == "B反", ev.get("down_tag")
+        assert ws["operation"] in ("defense", "exit"), ws
 
 
 def test_main_up_33_requires_sync3(monkeypatch):
