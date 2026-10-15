@@ -4,6 +4,7 @@
 覆盖：四档判定、单向锁、两条重定浪、**实测踩出来的两道误报防线**（跳空幅度 / 摸前高比例）、fail-open、开关。
 """
 import datetime as dt
+import json
 import os
 import sys
 
@@ -62,6 +63,8 @@ def test_shallow_rebound_is_not_rung2():
     # 只摸到前高 95%（不是“挑战前高”）⇒ 仍按 4浪调整（实测：2026-07-31 被误判的正是这一档）
     # 前高 130 落在 20 日窗**之外**（真实盘面：7 月那波反弹距 6 月高点还有 5%）
     rows = mk(FLAT + [130.0] + [112.0] * 19 + [120.0, 124.0, 121.0, 118.0])
+    # 最后一根“高 123 收 118”：盘中摸高、不构成跳空 ⇒ 只测「摸前高后回落」这一条
+    rows[-1] = (rows[-1][0], rows[-1][1], 123.0, rows[-1][3])
     ev = W.evaluate(rows, last(rows))
     assert ev["rung_index"] == 0 and ev["features"]["hi20_ratio"] < W.NEAR_MIN, ev["reasons"]
 
@@ -110,6 +113,40 @@ def test_switch_defaults_off(monkeypatch):
     assert W.enabled() is False and W.operation_for_gate({"operation": "exit"}) is None
     monkeypatch.setenv("WOLF_WAVE_LADDER", "1")
     assert W.enabled() is True and W.operation_for_gate({"operation": "exit"}) == "exit"
+
+
+# ─────────────── 铁律②（教材）与跳空降一档：2026-10-15 接入的硬规矩 ───────────────
+def test_tie2_wave1_top_break_goes_rung3():
+    """铁律②「第四个浪的底部不可以低于第一个浪的浪顶」⇒ 破 1 浪顶 = 主跌1浪。"""
+    closes = [100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [104.0, 98.0, 96.0]
+    rows = mk(closes)
+    ev = W.evaluate(rows, last(rows))
+    assert ev["levels"]["wave1_top"] == 110.0, ev["levels"]
+    assert ev["rung_index"] == 3 and "铁律②" in ev["reasons"], ev["reasons"]
+
+
+def test_single_gap_only_degrades_one_notch():
+    """单日跳空**不再**直接判主跌1浪（实测 2026-08-19 一跳空就误判两个月 ✗）⇒ 只到防守档。"""
+    closes = [100.0 + i * 0.2 for i in range(100)] + [119.0]   # 末根跳空 1.7% 下行，但未破 20 日低位
+    rows = mk(closes, highs=closes[:-1] + [119.0])
+    ev = W.evaluate(rows, last(rows))
+    assert ev["features"]["gap_unrecovered"] is True
+    assert ev["features"]["break_low20"] is False
+    assert ev["rung_index"] == 2 and "跳空" in ev["reasons"], (ev["rung_index"], ev["reasons"])
+
+
+def test_load_rows_merges_csv_and_json(tmp_path, monkeypatch):
+    """长历史来自 CSV、近端来自 JSON，同日以 JSON 为准（铁律② 需要 2024-10 那种老拐点）。"""
+    monkeypatch.setattr(W, "DATA", str(tmp_path))
+    d = tmp_path / "指数数据" / "index_daily"
+    d.mkdir(parents=True)
+    (d / "999999.XX.csv").write_text("trade_date,open,high,low,close,amount\n2024-01-02,1,9,1,8.0,100\n"
+                                     "2024-01-03,1,9,1,9.0,100\n", encoding="utf-8")
+    (tmp_path / "index_daily_999999_XX.json").write_text(
+        json.dumps({"rows": [["20240103", 9.5, 9.8, 200], ["20240104", 10.0, 10.2, 300]]}), encoding="utf-8")
+    rows = W.load_rows("999999.XX")
+    assert [r[0] for r in rows] == ["20240102", "20240103", "20240104"]
+    assert rows[1][1] == 9.5 and rows[1][3] == 200     # 同日 JSON 覆盖 CSV ✓
 
 
 def test_artifact_roundtrip(tmp_path, monkeypatch):

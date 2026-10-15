@@ -21,10 +21,14 @@
     失败4-5 → 反抽夭折、不新建仓（`defense`；他 10-09~10-13 避海外链、只吃差价 ✓）
     下跌1浪 → 自救、精简持仓（`exit`；他 10-15「操作策略转为自救」✓）
 
-口径（带 ⛔ 的是我们的代理，他没给量化）：
+口径（带 ⛔ 的是我们的代理，他没给量化；**教材依据**见本文件「结构位（教材铁律②）」一节，出处
+中山证券投资者教育《波浪理论》https://www.zszq.com/tzzyd/article/292 —— 该页原文即“两条基本数浪规则”）:
   · **未收回跳空** = 当日 `high < 前收`（真跳空）∧ `close < 前收`（跌幅未收回）——他的原话条件 ✓；
   · **创新高** = `close >= 前 60 日收盘最高`（成功4-5 的硬证据 ⛔ 窗口自定）；
-  · **破位** = `close < 前 60 日收盘最低`（主跌1浪 ⛔ 窗口自定）；
+  · **主跌1浪的破位**（2026-10-15 换教材口径）= 收盘 < **主升 1 浪顶**（铁律②「第四个浪的底部不可以低于
+    第一个浪的浪顶」；实测 3174.27/2024-05-20，他引用的 3674.40 是再前一个主级 H ⇒ 可用
+    `WOLF_WAVE_LADDER_W1` 钉住）∨ **跳空且破 20 日低位** ∨ 关键位；**单日跳空只降一档**到「失败4-5」
+    （实测：2026-08-19 一个 0.73% 跳空直接判主跌1浪 ⇒ 9~10 月误判两个月 ✗）；
   · **失败4-5** = 近 20 日反弹**摸到前高附近**（高点 ≥ `NEAR_MIN`×前 60 日最高，⛔ 0.95）
     ∧ 未创 60 日新高 ∧ 自该高点回落 ≥ `FADE_MIN`(⛔ 3%)
     —— “摸到前高附近”这一条是 2026-10-15 实测补的：**少了它，深调里任何一次 3% 反弹
@@ -33,14 +37,15 @@
     缺失回落 `data/指数数据/index_daily/<code>.csv`；**取不到一律返回 None（fail-open）** ✓；
   · 操作/仓位口径复用 `wave_alloc.WAVE_ALLOC`（同一张表，避免两处各写一份 ✓）。
 
-离线验收（`python jobs/eval_wave_ladder.py`，2026 全年 as-of 回放，08 次降级 / 03 次重定浪 / 单向性 ✓）：
+离线验收（`python jobs/eval_wave_ladder.py`，2026 全年 as-of 回放，RESET=5%：8 次降级 / 5 次重定浪 / 无非法升档 ✓）：
   · 2026-03-23 [3] 下跌1浪 —— 他 03-23 在防、03-25「减回 50% 内」✓
   · 2026-04-09 [3]（锁着）—— 他 04-09「白线在上 肯定没有买点 ⇒ 减回 50-55%」✓
   · 2026-07-31 / 08-05 / 08-07 [0] 4浪调整（`t_only`）—— 他「整波为调整浪」「按 4 接 5 做」「半导体吃 20 个点」✓
   · 2026-10-09 ~ 10-14 [3] 下跌1浪（`exit`）—— 他「避海外链、只吃差价」→ 10-15「转为自救」✓
-  · **已知偏差 ⚠️：2026-08-19 起锁在「下跌1浪」直到 10-14**，而他 9 月~10 月上旬公开说的是
-    「调整浪 / 反抽」⇒ 这一段我们**偏悲观约 2 个月**（根因：他的“重定浪型”是人工判断，
-    日线收盘代理看不到；可调 `WOLF_WAVE_LADDER_RESET` 或等盘口/分时数据到位再收紧）。
+  · **已知偏差 ⚠️（2026-10-15 复测）**：2026-08 我们停在「失败4-5/防守」，而他 07-31~08-07 在
+    「按 4 接 5 做」并在半导体吃了 20 个点 ⇒ **这一段偏保守**（根因：他的“4-5 腿走完”＝人工看底，
+    我们的 rung1 只认“创 60 日新高”，深跌结构里**够不到** ⇒ 待办：rung1 改判「调整结束/止跌确认」）。
+    2026-08-19 那条“一跳空直接判主跌1浪”的偏差**已修**（单日跳空只降一档）✓。
 
 开关：`WOLF_WAVE_LADDER`（默认 **0** ⇒ **影子**：只落盘 + 只读，不改任何交易行为）
       `WOLF_WAVE_LADDER_FLOOR`（默认 0 ⇒ 不启用；>0 时额外作为“关键位”，跌破即主跌1浪）
@@ -68,7 +73,14 @@ RALLY_MIN = 0.03                   # ⛔ 代理：认定“冲出过一段”
 FADE_MIN = 0.03                    # ⛔ 代理：认定“已经回落”
 NEAR_MIN = _envf("WOLF_WAVE_LADDER_NEAR", 0.98)    # ⛔ 代理：认定“摸到前高附近”
 GAP_MIN = _envf("WOLF_WAVE_LADDER_GAP_MIN", 0.005)  # ⛔ 代理：真跳空的最小幅度（2026 全年只有 5 天 >0.5%）
-RESET_RALLY = _envf("WOLF_WAVE_LADDER_RESET", 0.08)  # ⛔ 代理：反抽幅度达到多少才算空头结构被破坏
+RESET_RALLY = _envf("WOLF_WAVE_LADDER_RESET", 0.05)  # ⛔ 代理：反抽 ≥5% ⇒ 空头结构被破坏 ⇒ 重定浪型
+# ↑ 2026-10-15 扫 8%/6%/5%：8% ⇒ 7-17 判夭折后**锁死到 10-14**（他 8 月在买半导体 ✗）；
+#   5% ⇒ 07-31/08-05 回到「4浪调整(试探)」、08-19 才转防守 ✓ 与他的公开姿态一致 ✓
+ZIGZAG_PCT = _envf("WOLF_WAVE_LADDER_ZIGZAG", 0.10)     # 主级 zigzag 阈值（10% ⇒ 上证一年几次拐点）
+PCT_FINE = _envf("WOLF_WAVE_LADDER_ZIGZAG_FINE", 0.05)  # 细级 zigzag（只出预警位，不触发降级）
+ORIGIN_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_BARS", 900))  # 主升起点回溯窗口（≈3.5 年）
+LOW60_TRIGGER = os.getenv("WOLF_WAVE_LADDER_LOW60", "0").strip() in ("1", "true", "yes")
+# ↑ 2026-10-15 起**默认关**：60 日新低是早期拍的代理；换教材「铁律②」后它退为参考量，=1 可 A/B 回旧行为 ✓
 
 RUNGS: List[Dict[str, str]] = [
     {"key": "w4_adj", "name": "4浪调整",
@@ -82,7 +94,7 @@ RUNGS: List[Dict[str, str]] = [
      "hold": "近20日摸到前高附近 ∧ 未创60日新高 ∧ 已回落达标"},
     {"key": "down1", "name": "下跌1浪",
      "expect": "大B浪反弹（自救：只降不空）", "operation": "exit",
-     "hold": "未收回跳空 ∨ 收盘破 60 日低位（关键位）"},
+     "hold": "未收回跳空 ∨ 收盘 < 主升 1 浪顶（铁律②失效）∨ 跌破关键位"},
 ]
 RUNG_INDEX = {r["key"]: i for i, r in enumerate(RUNGS)}
 
@@ -124,6 +136,15 @@ def index_code() -> str:
     return os.getenv("WOLF_WAVE_LADDER_INDEX", "000001.SH").strip() or "000001.SH"
 
 
+def _env_pin_w1() -> float:
+    """`WOLF_WAVE_LADDER_W1` > 0 ⇒ 人工钉住「1 浪顶」（如钉他引用的 3674.40 做 A/B）。"""
+    try:
+        v = float(os.getenv("WOLF_WAVE_LADDER_W1", "0") or 0)
+        return v if v > 0 else 0.0
+    except ValueError:
+        return 0.0
+
+
 # ─────────────────────────── 数据层 ───────────────────────────
 def _json_path(code: str) -> Optional[str]:
     name = "index_daily_%s.json" % code.replace(".", "_")
@@ -142,9 +163,7 @@ def _csv_path(code: str) -> Optional[str]:
     return None
 
 
-def load_rows(code: Optional[str] = None) -> List[Tuple[str, float, float, float]]:
-    """→ [(date8, close, high, amount)] 升序；**取不到返回 []**（fail-open ✓）。"""
-    code = code or index_code()
+def _load_json(code: str) -> List[Tuple[str, float, float, float]]:
     out: List[Tuple[str, float, float, float]] = []
     p = _json_path(code)
     if p:
@@ -157,26 +176,111 @@ def load_rows(code: Optional[str] = None) -> List[Tuple[str, float, float, float
                     _silent_alert("wave_ladder.py:json_row", _e)
         except Exception as _e:
             _silent_alert("wave_ladder.py:json_load", _e)
-            out = []
-    if not out:
-        p = _csv_path(code)
-        if p:
-            try:
-                import csv as _csv
-                with open(p, encoding="utf-8") as fh:
-                    for c in _csv.DictReader(fh):
-                        try:
-                            d = str(c.get("trade_date"))[:10].replace("-", "")
-                            cl = float(c.get("close"))
-                            hi = float(c.get("high") or cl)
-                            am = float(c.get("amount") or 0)
-                            out.append((d, cl, hi, am))
-                        except (TypeError, ValueError) as _e:
-                            _silent_alert("wave_ladder.py:csv_row", _e)
-            except Exception as _e:
-                _silent_alert("wave_ladder.py:csv_load", _e)
-                out = []
-    out.sort(key=lambda x: x[0])
+    return out
+
+
+def _load_csv(code: str) -> List[Tuple[str, float, float, float]]:
+    out: List[Tuple[str, float, float, float]] = []
+    p = _csv_path(code)
+    if p:
+        try:
+            import csv as _csv
+            with open(p, encoding="utf-8") as fh:
+                for c in _csv.DictReader(fh):
+                    try:
+                        d = str(c.get("trade_date"))[:10].replace("-", "")
+                        cl = float(c.get("close"))
+                        hi = float(c.get("high") or cl)
+                        am = float(c.get("amount") or 0)
+                        out.append((d, cl, hi, am))
+                    except (TypeError, ValueError) as _e:
+                        _silent_alert("wave_ladder.py:csv_row", _e)
+        except Exception as _e:
+            _silent_alert("wave_ladder.py:csv_load", _e)
+    return out
+
+
+def load_rows(code: Optional[str] = None) -> List[Tuple[str, float, float, float]]:
+    """→ [(date8, close, high, amount)] 升序；**两源合并**（CSV 2016+ 长历史 ∪ JSON 近一年，
+    同日以 JSON 为准）；取不到返回 []（fail-open）。
+    长历史是**铁律② 的前提**：JSON 只回溯到 2024-11 ⇒ 看不到 2024-10-08 那个 1 浪顶（3674）。"""
+    code = code or index_code()
+    merged: Dict[str, Tuple[str, float, float, float]] = {}
+    for r in _load_csv(code):
+        merged[r[0]] = r
+    for r in _load_json(code):
+        merged[r[0]] = r
+    return [merged[k] for k in sorted(merged)]
+
+
+# ────────────── 结构位（教材「铁律②」，2026-10-15 接入） ──────────────
+# 出处：中山证券投资者教育《波浪理论》https://www.zszq.com/tzzyd/article/292
+#   「数浪的两条基本规则：……（二）**第四个浪的底部，不可以低于第一个浪的浪顶**」
+#   「（一）第三浪永远不允许是第一至第五浪中最短的一个浪」；补充规则一＝**交替规则**。
+# 意义：这就是“4浪调整”被证伪的**客观失效线** —— 比我们早期拍的“60 日新低”有依据 ✓。
+def pivots(rows: Sequence[Tuple[str, float, float, float]], asof: str,
+           pct: Optional[float] = None) -> List[Tuple[str, str, float, str]]:
+    """**因果** zigzag 拐点（只用 ≤ asof 的数据；极值反向 ≥ pct 才确认 ⇒ 无未来函数 ✓）。
+    → [(confirm_date, pivot_date, value, type)]；H 取 high、L 取 close。"""
+    pct = ZIGZAG_PCT if pct is None else pct
+    hist = [r for r in rows if r[0] <= str(asof)[:8]]
+    seg: List[Tuple[str, str, float, str]] = []
+    if len(hist) < 2:
+        return seg
+    ext_i, ext_v, ext_t = 0, hist[0][1], "?"
+    for i in range(1, len(hist)):
+        c, h = hist[i][1], hist[i][2]
+        if ext_t == "?":
+            if c <= ext_v * (1 - pct):
+                ext_i, ext_v, ext_t = i, c, "L"
+            elif c >= ext_v * (1 + pct):
+                ext_i, ext_v, ext_t = i, c, "H"
+            continue
+        if ext_t == "H":
+            if h > ext_v:
+                ext_i, ext_v = i, h
+            elif c <= ext_v * (1 - pct):
+                seg.append((hist[i][0], hist[ext_i][0], ext_v, "H"))
+                ext_i, ext_v, ext_t = i, c, "L"
+        else:
+            if c < ext_v:
+                ext_i, ext_v = i, c
+            elif c >= ext_v * (1 + pct):
+                seg.append((hist[i][0], hist[ext_i][0], ext_v, "L"))
+                ext_i, ext_v, ext_t = i, c, "H"
+    return seg
+
+
+def structural_levels(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Dict[str, Any]:
+    """铁律② 需要的结构位（全部**因果取** ✓，取不到就 None ⇒ 上层 fail-open）：
+      · origin       = 回溯 `ORIGIN_BARS` 内**最低的主级 L** ＝ 本轮主升起点；
+      · wave1_top    = origin 之后**第一个主级 H** ＝「1 浪顶」⇒ **4 浪底的理论失效线**（触发降级）；
+      · wave1_top_minor = 同起点之后第一个**细级** H（降一级的 1 浪顶，只作预警，不触发）；
+      · prior_peak   = 最近一个主级 H（＝主级前高）；prev_peak = 再前一个主级 H（次级参考位）。
+    实测（000001.SH，as-of 2026-10-14）：origin 2704.09(2024-09-13) → 主级 H 3674.40(2024-10-08)、
+      prior_peak 4242.57(2026-05-13)、prev_peak 3674.40、wave1_top_minor 4029.50(2025-11-13)；
+      收盘 3767.23 **仍在 3674.40 之上** ⇒ 铁律② 未破（他 10-15 的降级来自**跳空**那条规则 ✓）。"""
+    z = pivots(rows, asof)
+    out: Dict[str, Any] = {"origin": None, "origin_date": "", "wave1_top": None, "wave1_top_date": "",
+                           "wave1_top_minor": None, "wave1_top_minor_date": "", "prior_peak": None,
+                           "prior_peak_date": "", "prev_peak": None, "prev_peak_date": "", "pivots": len(z)}
+    hs = [p for p in z if p[3] == "H"]
+    if hs:
+        out["prior_peak"], out["prior_peak_date"] = hs[-1][2], hs[-1][1]
+        if len(hs) > 1:
+            out["prev_peak"], out["prev_peak_date"] = hs[-2][2], hs[-2][1]
+    hist = [r for r in rows if r[0] <= str(asof)[:8]]
+    lo_date = hist[-ORIGIN_BARS][0] if len(hist) > ORIGIN_BARS else ""
+    ls = [p for p in z if p[3] == "L" and (not lo_date or p[1] >= lo_date)]
+    if ls:
+        o = min(ls, key=lambda p: p[2])
+        out["origin"], out["origin_date"] = o[2], o[1]
+        after = [p for p in z if p[3] == "H" and p[1] > o[1]]
+        if after:
+            out["wave1_top"], out["wave1_top_date"] = after[0][2], after[0][1]
+        afterf = [p for p in pivots(rows, asof, PCT_FINE) if p[3] == "H" and p[1] > o[1]]
+        if afterf:
+            out["wave1_top_minor"], out["wave1_top_minor_date"] = afterf[0][2], afterf[0][1]
     return out
 
 
@@ -195,8 +299,14 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
     lo20 = min(r[1] for r in w)
     hi20 = max(r[1] for r in w)
     amt_prev = hist[-2][3]
+    st = structural_levels(rows, asof)
+    w1 = _env_pin_w1() or st["wave1_top"]
     return {
         "date": d, "close": close, "high": high, "prev_close": prev_close, "amount": amount,
+        "wave1_top": w1, "wave1_top_date": st["wave1_top_date"], "wave1_top_minor": st["wave1_top_minor"],
+        "prior_peak": st["prior_peak"], "prev_peak": st["prev_peak"], "origin": st["origin"],
+        "origin_date": st["origin_date"], "pivots": st["pivots"],
+        "break_wave1": bool(w1 and close < w1),
         "hi60_prev": hi60_prev, "lo60_prev": lo60_prev, "hi20": hi20, "lo20": lo20,
         "ma60": round(sum(r[1] for r in hist[-61:-1]) / 60, 2) if len(hist) >= 61 else 0.0,
         "below_ma60": bool(len(hist) >= 61 and close < sum(r[1] for r in hist[-61:-1]) / 60),
@@ -207,6 +317,9 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "gap_break": bool((prev_close - high) / prev_close >= GAP_MIN and close < prev_close
                           and len(hist) >= 61 and close < sum(r[1] for r in hist[-61:-1]) / 60),
         "break_floor": bool(floor_level() and close < floor_level()),
+        "break_low20": bool(close < min(r[1] for r in hist[-21:-1])),
+        "gap_break20": bool((prev_close - high) / prev_close >= GAP_MIN and close < prev_close
+                            and close < min(r[1] for r in hist[-21:-1])),
         "rally_amp": round(hi20 / lo20 - 1, 4) if lo20 else 0.0,
         "rally_new_high": bool(hi20 > hi60_prev),
         "hi20_ratio": round(hi20 / hi60_prev, 4) if hi60_prev else 0.0,
@@ -217,11 +330,17 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
 
 
 def stage_of(f: Dict[str, Any]) -> int:
-    """当日判定档（只看当日硬条件，不带上一次）→ 0..3。"""
-    if f["gap_break"] or f["break_low60"] or f["break_floor"]:
+    """当日判定档（只看当日硬条件，不带上一次）→ 0..3。
+
+    rung3（主跌1浪）**只认结构性破位**：收盘 < 主升 1 浪顶（铁律②）∨ **跳空且破 20 日低位** ∨ 关键位；
+    单日跳空**只降一档**到 rung2（反抽结束 ⇒ 防守）——2026-08-19 实测教训：一跳空直接判主跌1浪，
+    会把 9~10 月（他在「调整/反抽」✓）误判两个月 ✗；60 日新低退为参考量（`WOLF_WAVE_LADDER_LOW60=1` 才参与）。"""
+    if (f["break_wave1"] or f["break_floor"] or f["gap_break20"]
+            or (LOW60_TRIGGER and f["break_low60"])):
         return RUNG_INDEX["down1"]
-    if ((not f["rally_new_high"]) and f["near_prev_high"]
-            and f["rally_amp"] >= RALLY_MIN and f["fade"] >= FADE_MIN):
+    if (f["gap_unrecovered"]
+            or ((not f["rally_new_high"]) and f["near_prev_high"]
+                and f["rally_amp"] >= RALLY_MIN and f["fade"] >= FADE_MIN)):
         return RUNG_INDEX["w45_fail"]
     if f["new_high60"]:
         return RUNG_INDEX["w45_ok"]
@@ -232,7 +351,10 @@ def _reasons(f: Dict[str, Any], idx: int) -> str:
     hits = []
     if f["gap_unrecovered"]:
         hits.append("跳空未收回(高%s<前收%s)" % (round(f["high"], 2), round(f["prev_close"], 2)))
-    if f["break_low60"]:
+    if f["break_wave1"]:
+        hits.append("收盘%s < 主升1浪顶%s（铁律②失效，起点%s）" % (
+            round(f["close"], 2), round(f["wave1_top"], 2), f["origin_date"] or "-"))
+    if LOW60_TRIGGER and f["break_low60"]:
         hits.append("收盘%s破前60日低位%s" % (round(f["close"], 2), round(f["lo60_prev"], 2)))
     if f["break_floor"]:
         hits.append("跌破关键位%s" % floor_level())
@@ -278,7 +400,10 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             "expect": r["expect"], "operation": r["operation"], "invest": invest,
             "weights": [w1, w2, w3], "day_stage": raw, "reset": reset, "reset_reason": why,
             "degraded": bool(prev is not None and idx > prev and not reset),
-            "reasons": _reasons(f, idx), "features": f}
+            "reasons": _reasons(f, idx), "features": f,
+            "levels": {"wave1_top": f["wave1_top"], "wave1_top_date": f["wave1_top_date"],
+                       "wave1_top_minor": f["wave1_top_minor"], "prior_peak": f["prior_peak"],
+                       "prev_peak": f["prev_peak"], "origin": f["origin"]}}
 
 
 def walk(rows: Sequence[Tuple[str, float, float, float]], start: Optional[str] = None,
