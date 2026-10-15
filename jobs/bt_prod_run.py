@@ -1260,6 +1260,7 @@ def main() -> int:
             #   （他的语义是「**挂着等**回踩」✓：「挂前一天的低点」「等突破或回踩打满」✓）
             #   开关 `WOLF_ARM_CARRY_DAYS`（**库内默认 0 ⇒ 逐字不变** ✓）：置 N ⇒ 把**前 N 个交易日**
             #   的 `legs.jsonl` 也一并读进来（同口径挂单 ✓），让龙头的回踩单有机会成交 ✓。
+            _LV = {}
             _leg_files = [os.path.join(day_dir, "legs_switch.jsonl"), os.path.join(day_dir, "legs.jsonl")]
             try:
                 _carry = int(float(os.getenv("WOLF_ARM_CARRY_DAYS", "0") or 0))
@@ -1385,8 +1386,25 @@ def main() -> int:
                                     _px = round(_cl * (1.0 - _dip_pct / 100.0), 3)
                             except Exception as _e_dp:
                                 print("[prod] pathA 取前收盘失败 %s: %s" % (sym, str(_e_dp)[:70]), file=sys.stderr)
+                        # ★ 2026-10-15 修 flaw ✗（用户实测：「跨日重挂时挂价跟着价格往下追 ⇒ 永远买不到」✗）：
+                        #   carried 腿（来自**前 N 天**的 legs.jsonl ✓）**必须沿用它当初的挂价** ✓，
+                        #   不能按当天的前收盘重算 -2% ✗（那样跌 2% 线也下移 2% ⇒ 成交率≈0 ✗）。
+                        #   原始挂价记在**源日**的 `patha_arm_levels.json` ✓（本分支落盘 ✓）。
+                        _src_day = os.path.basename(os.path.dirname(str(p)))
+                        _cur_day = os.path.basename(str(day_dir).rstrip("/"))
+                        _carried_px = None
+                        if _src_day != _cur_day:
+                            try:
+                                import json as _json_lv
+                                with open(os.path.join(os.path.dirname(str(p)), "patha_arm_levels.json"),
+                                          encoding="utf-8") as _flv:
+                                    _carried_px = (_json_lv.load(_flv) or {}).get(str(sym))
+                            except Exception:
+                                _carried_px = None
                         _v_use = None
-                        if _px and _lnp and _lnp.get("v"):
+                        if _carried_px:
+                            _v_use = float(_carried_px)                       # 沿用原始挂价 ✓
+                        elif _px and _lnp and _lnp.get("v"):
                             _v_use = max(float(_px), float(_lnp["v"]))       # 更容易成交的那个 ✓
                         elif _px:
                             _v_use = float(_px)
@@ -1397,7 +1415,12 @@ def main() -> int:
                                             rsa.ma_line_expr(_v_use), day)
                             armed.append({"symbol": sym, "src": "pathA_line", "line": _r255,
                                           "k": (_lnp or {}).get("k"), "price": round(_v_use, 3),
-                                          "dip": (round(_px, 3) if _px else None)})
+                                          "dip": (round(_px, 3) if _px else None),
+                                          "carried": (_src_day != _cur_day)})
+                            try:
+                                _LV[str(sym)] = round(_v_use, 3)              # 落盘 ⇒ 跨日沿用 ✓
+                            except Exception:
+                                pass
                         else:
                             armed.append({"symbol": sym, "src": "pathA_noline"})
                         continue
@@ -1456,6 +1479,23 @@ def main() -> int:
         if s not in symbols:
             symbols.append(s)
     symbols = sorted(set(symbols))
+    # ★ 落盘 pathA 的**挂价**（供跨日沿用 ✓）：`<day_dir>/patha_arm_levels.json`
+    if _LV:
+        try:
+            import json as _json_lvw
+            _lvp = os.path.join(day_dir, "patha_arm_levels.json")
+            _old = {}
+            try:
+                with open(_lvp, encoding="utf-8") as _fo:
+                    _old = _json_lvw.load(_fo) or {}
+            except Exception:
+                _old = {}
+            _old.update(_LV)
+            with open(_lvp, "w", encoding="utf-8") as _fw:
+                _json_lvw.dump(_old, _fw, ensure_ascii=False, indent=1)
+            print("[prod] pathA 挂价已落盘 %d 条 → %s" % (len(_LV), _lvp), file=sys.stderr)
+        except Exception as _e_lvw:
+            print("[prod] 挂价落盘失败(不影响下单 ✓): %s" % str(_e_lvw)[:70], file=sys.stderr)
     print("[prod] 布腿 %d 条 / 标的 %d 只（持仓 %d）" % (len(armed), len(symbols), len(held)), file=sys.stderr)
 
     # ⑤b 每日决策对象（生产：盘后 19:45 job 产出当日对象，**次日**盘中用，max_age=4 天）
