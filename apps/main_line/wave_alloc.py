@@ -54,6 +54,11 @@ def read_wave_alloc(state_file: str = "wave_state.json") -> dict:
     """读当前 wave_state.operation + main_line_state.fusion top3 → 分配配置。"""
     st = _load(state_file)
     op = str(st.get("operation") or DEFAULT_OP)
+    try:
+        import wave_ladder as _wl
+        op = _wl.adopt_operation(op)     # ★ 浪型链影子/接管（默认关 ⇒ 原样 ✓）
+    except Exception:
+        pass
     w1, w2, w3, invest = WAVE_ALLOC.get(op, WAVE_ALLOC[DEFAULT_OP])
     # ★ 2026-10-13（§9.829）：`fusion` 自 2026-09-13 起已被移除 ✗ ⇒ 改用**方向层**同源清单 ✓
     #   （与布腿器 `switch_builder.theme_top12` 同一来源 ✓；分数用 `mainline_select.r5` ✓）

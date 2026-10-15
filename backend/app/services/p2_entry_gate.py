@@ -47,6 +47,11 @@ def _wave_decision():
     st=_load("wave_state.json")
     if not st: return None
     op=(st.get("operation") or "side").lower()
+    try:
+        from app.services.wave_ladder_gate import adopt_wave_op
+        op = adopt_wave_op(op)          # ★ 浪型链影子/接管（WOLF_WAVE_LADDER 默认 0 ⇒ 原样 ✓）
+    except Exception:
+        pass
     lvl=st.get("level") or "未知"; sub=st.get("sub_level") or ""
     return {"level":lvl,"sub_level":sub,"operation":op,"gate":"defense" if op in ("defense","exit") else op}
 

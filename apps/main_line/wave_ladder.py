@@ -494,6 +494,65 @@ def walk(rows: Sequence[Tuple[str, float, float, float]], start: Optional[str] =
     return out
 
 
+# ─────────────── 影子 / 接管（生产消费点的**唯一**入口） ───────────────
+ADOPT_CACHE: Dict[str, Any] = {}
+
+
+def ladder_operation(asof: Optional[str] = None) -> Optional[str]:
+    """「若按浪型假设链走，今天的 operation 是什么」——**按需现算**（不依赖 artifact 是否新鲜），
+    结果按 as-of 缓存；无数据/异常 ⇒ None（fail-open ✓）。"""
+    key = (str(asof)[:8] if asof else "latest")
+    if key in ADOPT_CACHE:
+        return ADOPT_CACHE[key]
+    op: Optional[str] = None
+    try:
+        rows = load_rows()
+        if rows:
+            ev = evaluate(rows, str(asof)[:8] if asof else rows[-1][0])
+            op = (ev or {}).get("operation")
+    except Exception as _e:
+        _silent_alert("wave_ladder.py:ladder_operation", _e)
+    ADOPT_CACHE[key] = op
+    return op
+
+
+def shadow_log(prod_op: Optional[str], lop: Optional[str], note: str = "") -> None:
+    """影子双跑留痕 → `logs/wave_ladder_ab.jsonl`（同一 (日, 两个 op) 只记一次；**绝不抛** ✓）。"""
+    try:
+        d = time.strftime("%Y%m%d")
+        key = "%s|%s|%s" % (d, prod_op, lop)
+        if ADOPT_CACHE.get("logged") == key:
+            return
+        ADOPT_CACHE["logged"] = key
+        for base in (os.environ.get("LOG_DIR", "logs"), "logs", DATA, "."):
+            try:
+                os.makedirs(base, exist_ok=True)
+                with open(os.path.join(base, "wave_ladder_ab.jsonl"), "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "date": d,
+                                         "prod_op": prod_op, "ladder_op": lop,
+                                         "adopted": lop if enabled() else prod_op,
+                                         "switch": "on" if enabled() else "shadow", "note": note},
+                                        ensure_ascii=False) + chr(10))
+                return
+            except OSError as _e:
+                _silent_alert("wave_ladder.py:shadow_log", _e)
+    except Exception as _e:
+        _silent_alert("wave_ladder.py:shadow_log_outer", _e)
+
+
+def adopt_operation(prod_op: Optional[str], asof: Optional[str] = None) -> Optional[str]:
+    """**生产消费点唯一入口**：`WOLF_WAVE_LADDER=0`（默认）⇒ 原样返回生产 op（生产逐字不变 ✓），
+    同时把「浪型链会说什么」写进影子日志；`=1` 且算得出 ⇒ 由浪型链接管；算不出 ⇒ 回落生产 op ✓。"""
+    try:
+        lop = ladder_operation(asof)
+        shadow_log(prod_op, lop)
+        if enabled() and lop:
+            return lop
+    except Exception as _e:                     # 兜底：入口绝不把异常带给生产 ✓
+        _silent_alert("wave_ladder.py:adopt_operation", _e)
+    return prod_op
+
+
 def read_ladder(state_file: str = "wave_ladder.json") -> Optional[Dict[str, Any]]:
     """读影子产物（供上层/复盘）。取不到返回 None（fail-open ✓）。"""
     for cand in (os.path.join(DATA, state_file), os.path.join("data", state_file)):

@@ -71,7 +71,13 @@ def run_async(coro):
         loop.close()
 
 def _wave_op():
-    return (load("wave_state.json").get("operation") or "side").lower()
+    op = (load("wave_state.json").get("operation") or "side").lower()
+    try:
+        from app.services.wave_ladder_gate import adopt_wave_op
+        op = adopt_wave_op(op)          # ★ 浪型链影子/接管（默认关 ⇒ 原样 ✓）
+    except Exception:
+        pass
+    return op
 
 def choose_intent(wave_op=None):
     """狼大 P3 档位意图：build/side→new_base；t_only→probe(≤3%)；defense/exit→None(不新建)。"""
