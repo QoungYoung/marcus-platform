@@ -170,6 +170,33 @@ def test_continuous_new_lows_not_rung1():
     assert ev["rung_index"] != W.RUNG_INDEX["w45_ok"], ev["reasons"]
 
 
+
+# ─────────────── 等级与 4 浪内部腿标注（B：对齐他的「4-4 / 4-5」口径） ───────────────
+def test_sub_legs_labeling():
+    """主级顶之后按他的编号：4-1 跌 / 4-2 弹 / 4-3…，末段用 up 腿 + 回落判「下一段形成中」。"""
+    closes = [100.0] * 80 + [130.0, 120.0, 110.0, 100.0] + [105.0, 108.0, 110.0] + [104.0, 103.0]
+    rows = mk(closes)
+    st = W.structural_levels(rows, last(rows))
+    sub = W.sub_legs(rows, last(rows), st)
+    assert [l["label"] for l in sub["legs"]] == ["4-1", "4-2"], sub
+    assert (sub["legs"][0]["kind"], sub["legs"][1]["kind"]) == ("down", "up")
+    assert sub["stage"] == "4-2" and sub["forming"] == "4-3", sub
+
+
+def test_degree_ladder_is_monotone():
+    """D1(20%) ⊇ D2(10%) ⊇ D3(5%)：阈值越细，拐点越多（＝他的「级别/浪中有浪」）。"""
+    closes = [100.0 + (i % 17) * 2.0 + i * 0.6 for i in range(200)]
+    dp = W.degree_pivots(mk(closes), "20260401")
+    assert set(dp) == {"D1", "D2", "D3"}
+    assert len(dp["D1"]) <= len(dp["D2"]) <= len(dp["D3"])
+
+
+def test_sub_legs_fail_open():
+    assert W.sub_legs([], "20260401")["legs"] == []
+    flat = mk([100.0] * 90)
+    assert W.sub_legs(flat, last(flat))["stage"] == ""
+
+
 def test_artifact_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(W, "DATA", str(tmp_path))
     rows = mk(CHOP)

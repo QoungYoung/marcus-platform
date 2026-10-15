@@ -259,6 +259,46 @@ def pivots(rows: Sequence[Tuple[str, float, float, float]], asof: str,
     return seg
 
 
+DEGREES = [("D1", _envf("WOLF_WAVE_LADDER_D1", 0.20)), ("D2", ZIGZAG_PCT), ("D3", PCT_FINE)]
+# ↑ 他的「级别」/「浪中有浪」＝ 同一序列在**不同阈值**下的拐点层级（教材：波浪等级的划分）。
+SUB_LABELS = ["4-1", "4-2", "4-3", "4-4", "4-5"]
+SUB_FALLING = _envf("WOLF_WAVE_LADDER_SUB_FALLING", 0.02)   # 认定「下一段已在进行」的最小回落
+
+
+def degree_pivots(rows: Sequence[Tuple[str, float, float, float]],
+                  asof: str) -> Dict[str, List[Tuple[str, str, float, str]]]:
+    """三级拐点：D1 主级(20%) / D2 中继(10%) / D3 次级(5%) —— 对应他的「级别」。"""
+    return {name: pivots(rows, asof, pct) for name, pct in DEGREES}
+
+
+def sub_legs(rows: Sequence[Tuple[str, float, float, float]], asof: str,
+             st: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """把**主级顶之后的次级拐点**按他的编号标成 4-1…4-5（4-1＝第一段下跌、4-2＝反弹…）。
+
+    实测（000001.SH，as-of 2026-10-14，主级顶 2026-05-14 之后）：
+      4-1 = 3959.34(06-08 跌) / 4-2 = 4163.10(06-22 弹) / 4-3 = 3764.15(07-17 跌) / 4-4 = 3990.30(08-18 弹)，
+      其后回落 ⇒ 当前为 **4-5 形成中**（＝他 10-15 说“下跌1浪”前的那一段）。
+    他自己也是这个编号：08-04「一旦资金测试成功 **4-4** 就能走出来了」、08-11「如果不是 3900 的话那就直接
+    开启 **4-5**？」⇒ 编号口径一致 ✓（4-5 走完 = 调整末腿到位 ⇒ 他的「成功4-5」，即本模块 rung1 ✓）。"""
+    st = st or structural_levels(rows, asof)
+    pk, pk_d = st["prior_peak"], st["prior_peak_date"]
+    out: Dict[str, Any] = {"stage": "", "forming": "", "legs": [], "peak": pk, "peak_date": pk_d}
+    if not pk:
+        return out
+    after = [p for p in pivots(rows, asof, PCT_FINE) if p[1] > pk_d][:len(SUB_LABELS)]
+    for i, p in enumerate(after):
+        out["legs"].append({"label": SUB_LABELS[i], "kind": "down" if p[3] == "L" else "up",
+                            "date": p[1], "confirm": p[0], "value": p[2]})
+    if out["legs"]:
+        last = out["legs"][-1]
+        out["stage"] = last["label"]
+        nxt = len(out["legs"])
+        close = rows[-1][1] if rows else 0.0
+        if last["kind"] == "up" and nxt < len(SUB_LABELS) and close < last["value"] * (1 - SUB_FALLING):
+            out["forming"] = SUB_LABELS[nxt]
+    return out
+
+
 def structural_levels(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Dict[str, Any]:
     """铁律② 需要的结构位（全部**因果取** ✓，取不到就 None ⇒ 上层 fail-open）：
       · origin       = 回溯 `ORIGIN_BARS` 内**最低的主级 L** ＝ 本轮主升起点；
@@ -308,12 +348,15 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
     hi20 = max(r[1] for r in w)
     amt_prev = hist[-2][3]
     st = structural_levels(rows, asof)
+    sub = sub_legs(rows, asof, st)
     w1 = _env_pin_w1() or st["wave1_top"]
     return {
         "date": d, "close": close, "high": high, "prev_close": prev_close, "amount": amount,
         "wave1_top": w1, "wave1_top_date": st["wave1_top_date"], "wave1_top_minor": st["wave1_top_minor"],
-        "prior_peak": st["prior_peak"], "prev_peak": st["prev_peak"], "origin": st["origin"],
+        "prior_peak": st["prior_peak"], "prior_peak_date": st["prior_peak_date"],
+        "prev_peak": st["prev_peak"], "origin": st["origin"],
         "origin_date": st["origin_date"], "pivots": st["pivots"],
+        "sub_stage": sub["stage"], "sub_forming": sub["forming"], "sub_legs": sub["legs"],
         "break_wave1": bool(w1 and close < w1),
         "hi60_prev": hi60_prev, "lo60_prev": lo60_prev, "hi20": hi20, "lo20": lo20,
         "ma60": round(sum(r[1] for r in hist[-61:-1]) / 60, 2) if len(hist) >= 61 else 0.0,
@@ -379,13 +422,14 @@ def _reasons(f: Dict[str, Any], idx: int) -> str:
     if idx == RUNG_INDEX["w45_fail"]:
         return "近20日摸到前高%s的%s%%后回落%s%%（未创新高）" % (
             round(f["hi60_prev"], 2), round(f["hi20_ratio"] * 100, 1), round(f["fade"] * 100, 1))
+    sub = ("（%s%s 段）" % (f.get("sub_stage") or "-", "→" + f["sub_forming"] if f.get("sub_forming") else ""))
     if idx == RUNG_INDEX["w45_ok"]:
         if f["new_high60"]:
             return "收盘%s创60日新高(前高%s)" % (round(f["close"], 2), round(f["hi60_prev"], 2))
-        return "止跌确认：20日低点%s 冻结%d日 ∧ 距低+%s%% ∧ 站上MA20(%s)" % (
-            round(f["lo20"], 2), f["low_age"], round(f["off_low20"] * 100, 1), round(f["ma20"], 2))
-    return "无破位无新高（前高%s，近20日最高%s=%s%%）⇒ 仍在调整区间" % (
-        round(f["hi60_prev"], 2), round(f["hi20"], 2), round(f["hi20_ratio"] * 100, 1))
+        return "止跌确认：20日低点%s 冻结%d日 ∧ 距低+%s%% ∧ 站上MA20(%s)%s" % (
+            round(f["lo20"], 2), f["low_age"], round(f["off_low20"] * 100, 1), round(f["ma20"], 2), sub)
+    return "无破位无新高（前高%s，近20日最高%s=%s%%）⇒ 仍在调整区间%s" % (
+        round(f["hi60_prev"], 2), round(f["hi20"], 2), round(f["hi20_ratio"] * 100, 1), sub)
 
 
 # ─────────────────────────── 判定 ───────────────────────────
@@ -420,6 +464,7 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             "weights": [w1, w2, w3], "day_stage": raw, "reset": reset, "reset_reason": why,
             "degraded": bool(prev is not None and idx > prev and not reset),
             "reasons": _reasons(f, idx), "features": f,
+            "sub_stage": ("%s%s" % (f.get("sub_stage") or "", ("→" + f["sub_forming"]) if f.get("sub_forming") else "")),
             "levels": {"wave1_top": f["wave1_top"], "wave1_top_date": f["wave1_top_date"],
                        "wave1_top_minor": f["wave1_top_minor"], "prior_peak": f["prior_peak"],
                        "prev_peak": f["prev_peak"], "origin": f["origin"]}}

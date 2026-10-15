@@ -95,6 +95,16 @@ def main() -> int:
             d, e["rung_index"], e["name"], e["operation"], e["reasons"], quote) if e
             else "%s -> （区间外）| 他：%s" % (d, quote))
 
+    print("\n=== 4 浪内部腿标注（他的 4-1…4-5 口径；末段带“形成中”）===")
+    for d in ("20260401", "20260601", "20260731", "20260805", "20260901", "20261014"):
+        e = by.get(d)
+        if not e:
+            continue
+        f = e["features"]
+        legs = " ".join("%s:%s(%.0f)" % (l["label"], l["kind"], l["value"]) for l in f.get("sub_legs") or [])
+        print("  %s  主级顶=%s(%s)  %s  %s" % (d, f.get("prior_peak"), f.get("prior_peak_date"), legs,
+              ("→ 当前 %s 段" % e["sub_stage"]) if e.get("sub_stage") else ""))
+
     print("\n=== 结构检查 ===")
     days = collections.Counter(e["rung_index"] for e in evs)
     print("各档天数：", {W.RUNGS[k]["name"]: v for k, v in sorted(days.items())})
