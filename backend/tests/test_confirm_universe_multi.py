@@ -98,3 +98,29 @@ class TestDailyStart(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTraceStage(unittest.TestCase):
+    """逐阶段留痕（2026-10-15 ✓）：`status_out["stages"]` 必须记录「哪一步剔了谁」✓。"""
+
+    def test_records_kept_dropped_and_sample(self):
+        st = {}
+        WCP._trace_stage(st, "low_mid",
+                         [{"ts": "300475.SZ", "pos": "LOW", "leader": 0.9}],
+                         dropped=[{"ts": "002156.SZ", "pos": "HIGH", "leader": 0.39, "rs": -5.0}],
+                         note="要求 pos ∈ {LOW,MID}")
+        stg = st["stages"][0]
+        self.assertEqual(stg["stage"], "low_mid")
+        self.assertEqual(stg["kept"], 1)
+        self.assertEqual(stg["dropped"], 1)
+        self.assertEqual(stg["sample_dropped"][0]["ts"], "002156.SZ")
+        self.assertEqual(stg["sample_dropped"][0]["pos"], "HIGH")
+
+    def test_none_status_is_noop(self):
+        WCP._trace_stage(None, "scored", [{"ts": "X"}])   # 不抛 ✓
+
+    def test_sample_capped_at_10(self):
+        st = {}
+        WCP._trace_stage(st, "concept_top2", [], dropped=[{"ts": "T%02d" % i} for i in range(25)])
+        self.assertEqual(len(st["stages"][0]["sample_dropped"]), 10)
+        self.assertEqual(st["stages"][0]["dropped"], 25)

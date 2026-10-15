@@ -314,6 +314,29 @@ def latest_gate_date():
         if d > best: best = d
     return best or time.strftime("%Y%m%d")
 
+def _trace_stage(status_out, stage, rows, dropped=None, note=""):
+    """逐阶段留痕（2026-10-15 ✓）：把「哪一步剔了谁」结构化放进 `status_out["stages"]` ✓。
+
+    为什么要有它 ✗：实测 20260106，龙头（002156 通富微电 等）**有** as-of 日线却不在最终候选域，
+    而 `status_out` 只有 `status/reason/domain` ⇒ **无法回答"死在哪一步"** ✗，
+    只能靠外部探针反复试（且探针不传 `as_of` 会拿到"今天"= 未来函数 ✗，已踩过）。
+    本函数只记录 ✓：不筛选、不排序、不改任何判定 ✓；`WOLF_PICK_TRACE=1` 时额外打印 ✓。
+    """
+    if status_out is None:
+        return
+    _rows = list(rows or [])
+    _drop = list(dropped or [])
+    status_out.setdefault("stages", []).append({
+        "stage": stage, "kept": len(_rows), "dropped": len(_drop), "note": note,
+        "sample_dropped": [{"ts": r.get("ts"), "pos": r.get("pos"), "leader": r.get("leader"),
+                            "rs": r.get("rs"), "r20": r.get("r20")} for r in _drop[:10]],
+    })
+    if _drop and str(os.getenv("WOLF_PICK_TRACE", "0")).strip() in ("1", "true", "yes", "on"):
+        print("[WOLF_PICK_TRACE] %s 剔 %d 只（留 %d）%s 样例=%s"
+              % (stage, len(_drop), len(_rows), ("｜" + note) if note else "",
+                 [(r.get("ts"), r.get("pos"), r.get("leader")) for r in _drop[:6]]), file=sys.stderr)
+
+
 def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, debug=False,
             pool_n=None, dist_pct=None, dist5_pct=None, etf_fallback=None, tier2_gap=None, max_legs=None,
             pick_mode=None, rs_gate=None, rs_min=None, status_out=None):
@@ -451,6 +474,7 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                        "trig_price": round(lows[-1] * (1.0 + _dip_tol()), 3)})
     if not scored:
         return _st("no_scored", "成分域经板块/ST/成交额过滤后为空")
+    _trace_stage(status_out, "scored", scored, note="有 as-of 日线且过卫生/成交额门")
     def pct_rank(vals, key):
         """升序 → 百分位 0-1。**并列取平均名次**(P1-5b 配套修复)。
 
@@ -521,6 +545,8 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
                 if cur is None or _i < cur["rank_in_concept"]:
                     _pool[r["ts"]] = dict(r, concept=_c, rank_in_concept=_i)
         cand_pool = list(_pool.values())
+        _trace_stage(status_out, "concept_top2", cand_pool, dropped=[r for r in scored if r["ts"] not in _pool],
+                     note="每个子概念只取 leader 前 2（语料「绝不后排」）")
     else:
         cand_pool = [dict(r, concept="", rank_in_concept=1) for r in scored]
     # ── U9 主题容量约束（2026-09-11, 用户决策"相对分位"）──
@@ -531,15 +557,22 @@ def pick_v2(theme="农业", exclude=None, limit=2, concepts=None, as_of=None, de
     #   ② 放在 theme_r20(主题均值)算完之后 —— 主题均值必须按**全体成分**算, 否则会连带改掉 rs 闸的基准。
     _qcap = float(os.getenv("WOLF_THEME_QUANTILE_PCT", "50") or 0)
     if _qcap > 0:
+        _dropped_pre_cap = list(cand_pool)
         _kept, _qdrop, _qcut = theme_quantile_keep(cand_pool, pct=_qcap, key="leader")
         if _qdrop:
             print(f"[WOLF_THEME_CAP] {theme} 容量约束剔除 {_qdrop} 只"
                   f"(只取前 {_qcap:.0f}%, 门槛 leader={_qcut})", file=sys.stderr)
         cand_pool = _kept
+        _kept_ts = {r["ts"] for r in _kept}
+        _trace_stage(status_out, "theme_cap", _kept, dropped=[r for r in _dropped_pre_cap if r["ts"] not in _kept_ts],
+                     note="主题内 leader 分位前 %s%%" % _qcap)
     lowmid = [r for r in cand_pool if r["pos"] in ("LOW", "MID")
              and r["r20"] is not None and r["r20"] >= min_r20
              # P0-2 选择层闸: 只在强于主题的票上低吸(rs>=rs_min); WOLF_RS_GATE=0 关闭
              and (not rs_gate or (r.get("rs") is not None and r["rs"] >= rs_min))]
+    _lm_ts = {r["ts"] for r in lowmid}
+    _trace_stage(status_out, "low_mid", lowmid, dropped=[r for r in cand_pool if r["ts"] not in _lm_ts],
+                 note="要求 pos ∈ {LOW,MID} ∧ r20≥%s ∧ (rs_gate⇒rs≥%s)" % (min_r20, rs_min))
     _rs_rej = 0
     if rs_gate:
         _rs_rej = sum(1 for r in cand_pool if r["pos"] in ("LOW", "MID")
