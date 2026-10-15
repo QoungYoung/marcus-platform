@@ -94,7 +94,15 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
     const ohlc = bars.map((b) => [b.open, b.close, b.low, b.high]);
     const prevClose = (i: number) => (i > 0 ? bars[i - 1].close : bars[0].open);
 
-    // 浪型色带：把连续同档/同操作的交易日并成区间
+    // 浪型色带：把连续同档/同操作的交易日并成区间（稀有档在带顶打标签 ✓）
+    const RARE_LABEL: Record<string, { text: string; color: string }> = {
+      末段: { text: '末段·兑现降仓', color: '#d64545' },
+      '4-3': { text: '4-3筑底·可分批接', color: '#2f7cd3' },
+      '4-1': { text: '4-1回调初·观望降仓', color: '#8a5cf0' },
+      W底: { text: 'W底确认·建仓', color: '#2f9e6e' },
+      '3-3': { text: '主升3-3·建仓', color: '#2f9e6e' },
+      双头: { text: '双头/M顶·见顶防跌', color: '#d64545' },
+    };
     const areas: any[] = [];
     let start = 0;
     for (let i = 1; i <= bars.length; i++) {
@@ -103,10 +111,27 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
       const sameKey = !!nxt && !!cur && bandColor(nxt) === bandColor(cur) && nxt.operation === cur.operation;
       if (!sameKey) {
         if (cur) {
-          areas.push([
-            { xAxis: dates[start], itemStyle: { color: bandColor(cur), opacity: 0.09 } },
-            { xAxis: dates[Math.min(i, bars.length - 1)] },
-          ]);
+          // 这一带里出现的稀有档（取带内第一个命中的 ✓，带长 ≥3 天才显示，避免碎片化 ✗）
+          let tag: { text: string; color: string } | null = null;
+          for (let k2 = start; k2 < i && k2 < bars.length; k2++) {
+            const ww = wmap[bars[k2].date];
+            if (!ww) continue;
+            const hit = RARE_LABEL[ww.sub_level || ''];
+            if (hit) { tag = hit; break; }
+          }
+          const band = { xAxis: dates[start], itemStyle: { color: bandColor(cur), opacity: 0.09 } };
+          const bandEnd: any = { xAxis: dates[Math.min(i, bars.length - 1)] };
+          if (tag && (i - start) >= 3) {
+            bandEnd.label = {
+              show: true,
+              position: 'insideTop',
+              formatter: tag.text,
+              color: tag.color,
+              fontSize: 9,
+              fontWeight: 600,
+            };
+          }
+          areas.push([band, bandEnd]);
         }
         start = i;
       }
