@@ -40,7 +40,7 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
         sys.path.insert(0, str(skill_dir))
 
 from app.api import accounts
-from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy, main_wave
+from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy, main_wave, wave
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
 from app.api.t_account import router as t_account_router
@@ -213,6 +213,7 @@ app.include_router(panel.router, prefix="/api/v1")
 app.include_router(indicator.router, prefix="/api/v1")
 app.include_router(backtest.router, prefix="/api/v1")
 app.include_router(pool.router, prefix="/api/v1")
+app.include_router(wave.router, prefix="/api/v1")     # 浪型链 · 指数K线+历史浪型（portfolio 页卡片）
 app.include_router(lt_pool.router, prefix="/api/v1")
 app.include_router(monitor_log_router, prefix="/api/v1")
 app.include_router(direction.router, prefix="/api/v1")

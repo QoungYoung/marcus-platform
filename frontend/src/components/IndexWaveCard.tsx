@@ -1,0 +1,216 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import * as echarts from 'echarts';
+import { waveApi } from '../api/client';
+
+/* ═══════════════════════════════════════════════════════
+ * 上证指数 · 浪型链（portfolio 页卡片）
+ *   · K线：/api/v1/wave/index-history（后端优先东财 OHLC；退本地 CSV 时后端会标 csv_close_only ⛔）
+ *   · 色带：每个交易日的浪型档位（4浪调整/成功4-5/失败4-5/下跌1浪/主升3-3）连成区间
+ *   · 悬停：当日浪型 + 操作建议 + 依据（operation 语义照抄 wave_agent 原表）
+ * ═══════════════════════════════════════════════════════ */
+
+interface Bar { date: string; open: number; high: number; low: number; close: number; amount: number }
+interface Wave {
+  date: string; rung: number; name: string; level: string; sub_level: string;
+  operation: string; mode: string; expect: string; invest: number; main_up: string; reasons: string;
+}
+
+const UP_COLOR = '#e5484d';
+const DOWN_COLOR = '#27a06b';
+const INK = '#16324f';
+const MUTED = '#57718e';
+const LINE = '#a8cdee';
+const GRID = '#d4e7f9';
+
+// operation 语义（apps/main_line/wave_agent.py:322-327 照抄）
+const OP_CN: Record<string, string> = {
+  build: '建仓/追', t_only: '只做T·不新开', side: '观望·调仓换股', defense: '防御·不建仓', exit: '兑现降仓',
+};
+const OP_COLOR: Record<string, string> = {
+  build: '#e5484d', t_only: '#c98a12', side: '#2f7cd3', defense: '#e08b3a', exit: '#8a5cf0',
+};
+const RUNG_COLOR = ['#c98a12', '#2f7cd3', '#e08b3a', '#e5484d'];   // [0]4浪调整 [1]成功4-5 [2]失败4-5 [3]下跌1浪
+const MAINUP_COLOR = '#2f9e6e';                                     // 主升 3-3 叠加档
+
+function bandColor(w: Wave): string {
+  if (w.main_up === '3-3') return MAINUP_COLOR;
+  return RUNG_COLOR[w.rung] || MUTED;
+}
+
+export default function IndexWaveCard({ days = 250, height = 340 }: { days?: number; height?: number }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const [bars, setBars] = useState<Bar[]>([]);
+  const [waves, setWaves] = useState<Wave[]>([]);
+  const [src, setSrc] = useState('');
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    waveApi.getIndexHistory(days)
+      .then((r) => {
+        if (!alive) return;
+        const d = r.data || {};
+        setBars(d.bars || []);
+        setWaves(d.waves || []);
+        setSrc(d.ohlc_source || '');
+        setNote(d.note || '');
+        setErr((d.bars || []).length ? '' : '无指数数据');
+      })
+      .catch((e) => { if (alive) setErr(String((e && e.message) || e)); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [days]);
+
+  const last = useMemo(() => (waves.length ? waves[waves.length - 1] : null), [waves]);
+
+  useEffect(() => {
+    if (!ref.current || !bars.length) return;
+    if (!chartRef.current) chartRef.current = echarts.init(ref.current);
+    const ch = chartRef.current;
+    const wmap: Record<string, Wave> = {};
+    waves.forEach((w) => { wmap[w.date] = w; });
+
+    const dates = bars.map((b) => b.date);
+    const ohlc = bars.map((b) => [b.open, b.close, b.low, b.high]);
+    const prevClose = (i: number) => (i > 0 ? bars[i - 1].close : bars[0].open);
+
+    // 浪型色带：把连续同档/同操作的交易日并成区间
+    const areas: any[] = [];
+    let start = 0;
+    for (let i = 1; i <= bars.length; i++) {
+      const cur = wmap[bars[start].date];
+      const nxt = i < bars.length ? wmap[bars[i].date] : null;
+      const sameKey = !!nxt && !!cur && bandColor(nxt) === bandColor(cur) && nxt.operation === cur.operation;
+      if (!sameKey) {
+        if (cur) {
+          areas.push([
+            { xAxis: dates[start], itemStyle: { color: bandColor(cur), opacity: 0.09 } },
+            { xAxis: dates[Math.min(i, bars.length - 1)] },
+          ]);
+        }
+        start = i;
+      }
+    }
+
+    ch.setOption({
+      animation: false,
+      backgroundColor: 'transparent',
+      grid: { left: 52, right: 16, top: 26, bottom: 34 },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross', lineStyle: { color: LINE } },
+        backgroundColor: 'rgba(255,255,255,0.97)',
+        borderColor: LINE,
+        textStyle: { color: INK, fontSize: 11 },
+        formatter: (ps: any) => {
+          const p = Array.isArray(ps) ? ps.find((x: any) => x.seriesType === 'candlestick') || ps[0] : ps;
+          const i = p.dataIndex;
+          const b = bars[i];
+          if (!b) return '';
+          const w = wmap[b.date];
+          const chg = ((b.close / prevClose(i) - 1) * 100);
+          const chgColor = chg >= 0 ? UP_COLOR : DOWN_COLOR;
+          let html = '<div style="min-width:200px">';
+          html += '<div style="font-weight:600;color:' + INK + '">' + b.date + '</div>';
+          html += '<div>开 ' + b.open.toFixed(2) + ' 高 ' + b.high.toFixed(2) + ' 低 ' + b.low.toFixed(2) +
+                  ' 收 <b>' + b.close.toFixed(2) + '</b> <span style="color:' + chgColor + '">' +
+                  (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%</span></div>';
+          if (w) {
+            const oc = OP_COLOR[w.operation] || MUTED;
+            html += '<div style="margin-top:4px;border-top:1px dashed ' + GRID + ';padding-top:4px">';
+            html += '<div>浪型 <b>' + (w.name || '-') + '</b>　级别 <b>' + (w.level || '-') +
+                    (w.sub_level ? '/' + w.sub_level : '') + '</b>' + (w.main_up ? '　<span style="color:' + MAINUP_COLOR + '">主升3-3</span>' : '') + '</div>';
+            html += '<div>操作 <b style="color:' + oc + '">' + (OP_CN[w.operation] || w.operation || '-') + '</b>' +
+                    (w.invest != null ? '　投入系数 ' + Number(w.invest).toFixed(2) : '') +
+                    (w.mode ? '　模式 <b>' + w.mode + '</b>' : '') + '</div>';
+            if (w.expect) html += '<div style="color:' + MUTED + '">预期：' + w.expect + '</div>';
+            if (w.reasons) html += '<div style="color:' + MUTED + '">依据：' + w.reasons + '</div>';
+            html += '</div>';
+          } else {
+            html += '<div style="color:' + MUTED + '">（该日无浪型记录）</div>';
+          }
+          return html + '</div>';
+        },
+      },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        boundaryGap: true,
+        axisLine: { lineStyle: { color: LINE } },
+        axisLabel: { color: MUTED, fontSize: 9, formatter: (v: string) => v.slice(4, 6) + '/' + v.slice(6, 8) },
+      },
+      yAxis: {
+        scale: true,
+        position: 'left',
+        axisLine: { lineStyle: { color: LINE } },
+        splitLine: { lineStyle: { color: GRID, type: 'dashed' } },
+        axisLabel: { color: MUTED, fontSize: 9 },
+      },
+      dataZoom: [
+        { type: 'inside', start: Math.max(0, 100 - (120 / Math.max(bars.length, 1)) * 100), end: 100 },
+        { type: 'slider', height: 14, bottom: 6, borderColor: LINE, textStyle: { color: MUTED, fontSize: 8 } },
+      ],
+      series: [{
+        type: 'candlestick',
+        name: '上证指数',
+        data: ohlc,
+        itemStyle: {
+          color: UP_COLOR, color0: DOWN_COLOR,
+          borderColor: UP_COLOR, borderColor0: DOWN_COLOR,
+        },
+        markArea: { silent: true, data: areas },
+      }],
+    }, true);
+    return () => { /* 保留实例，随组件卸载由 effect 清理 */ };
+  }, [bars, waves]);
+
+  useEffect(() => () => { if (chartRef.current) { chartRef.current.dispose(); chartRef.current = null; } }, []);
+  useEffect(() => {
+    const onResize = () => chartRef.current && chartRef.current.resize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const lastColor = last ? (OP_COLOR[last.operation] || MUTED) : MUTED;
+  return (
+    <div className="cp-threat-card" style={{ padding: '10px 12px' }}>
+      <div className="cp-threat-head">
+        <span className="cp-threat-label">上证指数 · 浪型链</span>
+        <span className="cp-threat-en">SSE INDEX · WAVE LADDER</span>
+        {last && <span className="cp-threat-dot safe" />}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', margin: '2px 0 6px' }}>
+        {last ? (
+          <>
+            <span style={{ fontWeight: 700, color: INK }}>{last.name}</span>
+            <span style={{ color: MUTED, fontSize: 11 }}>
+              级别 {last.level}{last.sub_level ? ' / ' + last.sub_level : ''}
+              {last.main_up ? ' · 主升3-3' : ''}
+            </span>
+            <span style={{ color: lastColor, fontWeight: 700, fontSize: 12 }}>
+              {OP_CN[last.operation] || last.operation || '-'}
+            </span>
+            {last.mode && <span style={{ color: '#c98a12', fontWeight: 700 }}>模式 {last.mode}</span>}
+            {last.invest != null && <span style={{ color: MUTED, fontSize: 11 }}>投入系数 {Number(last.invest).toFixed(2)}</span>}
+          </>
+        ) : (
+          <span style={{ color: MUTED, fontSize: 11 }}>{loading ? '加载中…' : (err || '无数据')}</span>
+        )}
+      </div>
+      <div ref={ref} style={{ width: '100%', height, opacity: loading ? 0.4 : 1 }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 8, color: MUTED }}>
+          {bars.length ? bars[0].date + ' ~ ' + bars[bars.length - 1].date + '（' + bars.length + ' 根）' : ''}
+          {' '}色带＝当日浪型档位；悬停看当日浪型与操作建议
+        </span>
+        <span style={{ fontSize: 8, color: MUTED, textAlign: 'right' }}>
+          {src}{note ? '　' + note : ''}
+        </span>
+      </div>
+    </div>
+  );
+}

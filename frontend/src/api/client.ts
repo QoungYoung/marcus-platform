@@ -37,6 +37,11 @@ export const tradesApi = {
   getVoidedTrades: (account = 'stock') => api.get('/trades/voided', { params: { account } }),
 }
 
+// Wave APIs（浪型链 · 指数K线 + 历史浪型/操作建议）
+export const waveApi = {
+  getIndexHistory: (days = 250, code = '000001.SH') => api.get('/wave/index-history', { params: { days, code } }),
+}
+
 // Market APIs
 export const marketApi = {
   getIndices: () => api.get('/market/indices'),
