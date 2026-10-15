@@ -1285,7 +1285,15 @@ def main() -> int:
                     if not isinstance(L, dict):
                         continue
                     side = str(L.get("side") or "buy")
-                    if side != "buy":
+                    # ⚠️ 2026-10-15 ✓：原先这里**无条件** `if side != "buy": continue` ✗ ⇒
+                    # `bt_day_legs.py` 的 pathA 腿（`side="mainline"` ✗）**在到达武装分支前就被跳过** ✓
+                    # （实测 t68 0105：6 条腿里 4 条 pathA 全被丢弃 ✓，执行口只武装 switch_0818/trend ✗）。
+                    # 只在开关 `WOLF_ARM_PATHA_LINE=1` **且** `src=="pathA"` 时放行 ✓ ——
+                    # 其它 `side=mainline` 的腿**仍按原样跳过** ✓（避免误入 253/254 或 arm_0920 回退 ✓）。
+                    if side != "buy" and not (
+                            side == "mainline"
+                            and str(L.get("src") or "") == "pathA"
+                            and str(os.getenv("WOLF_ARM_PATHA_LINE", "0")).strip().lower() in ("1", "true", "yes", "on")):
                         continue
                     sym = L["symbol"]
                     if sym not in symbols:
