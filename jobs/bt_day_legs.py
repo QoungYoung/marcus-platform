@@ -687,6 +687,51 @@ def main() -> int:
             _TC.shadow_record(a.date, _trows, extra={"added": _tadd, "path": "bt_day_legs"})
             print("[legs] TREND_CHANNEL 候选=%d 加入=%d %s" % (len(_trows), _tadd,
                   [r.get("symbol") for r in _trows]), flush=True)
+            # ★ 2026-10-15 ✓（用户选 A）：**把"龙头"喂进【带量突破】那条路** ✓
+            #   病灶 ✗：线组/254 的触发表达式要求「vol_ratio ≤ 0.9（温和缩量）」✗ ⇒
+            #     实测龙头（生益科技 0108~0116 天天触价 ✓ / 兆易创新 5 天触价 ✓）**一条都不成交** ✓，
+            #     因为龙头回踩常伴**放量** ✗ ⇒ 条件永不成立 ✓（不是 bug ✗，是那条路本身不适用龙头 ✓）。
+            #   语料 ✓：「…等**突破**或回踩打满」／「带量**突破**空翻多则 50% 加到 80%」
+            #     ⇒ 突破这条路要的是**放量** ✓ —— 正是龙头能走的那条 ✓。
+            #   做法 ✓：对当日 **pathA（动量链龙头）**腿，用 `trend_channel` 的**同一个** `stage()` 判突破 ✓
+            #     （`level` = 它算出的参照位 ✓ **不自设任何参数** ✓），成立则追加一条 `src=trend` 腿 ⇒
+            #     执行口按既有的"现价 ≥ 突破位 ∧ ≤ +3%"挂 ✓，与趋势通道**完全同口径** ✓。
+            #   开关 `WOLF_TREND_LEADER_POOL`（**库内默认 0 ⇒ 逐字不变** ✓）
+            if str(os.getenv("WOLF_TREND_LEADER_POOL", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    _leads = [x for x in legs_out if str(x.get("src")) == "pathA"]
+                    _have2 = {x.get("symbol") for x in legs_out if str(x.get("src")) == "trend"}
+                    _add2, _skip2 = 0, 0
+                    for _l in _leads:
+                        _s = _l.get("symbol")
+                        if not _s or _s in _have2 or _s in held:
+                            continue
+                        if not arm.board_ok(_s):
+                            continue
+                        try:
+                            _cl, _vo, _am, _mv = _TC._daily(_s, cut, a.bars_db)
+                        except Exception:
+                            _skip2 += 1
+                            continue
+                        if not _cl or len(_cl) < 30:
+                            _skip2 += 1
+                            continue
+                        _st = _TC.stage(_cl, _vo)
+                        if str(_st.get("stage")) != _TC.STAGE_BREAK or not _st.get("level"):
+                            _skip2 += 1
+                            continue
+                        _have2.add(_s)
+                        legs_out.append({"symbol": _s, "chain": "趋势突破(龙头)", "side": "buy",
+                                         "type": "trend_break", "theme": "trend", "src": "trend",
+                                         "level": _st.get("level"),
+                                         "desc": "龙头进突破路: %s" % str(_st.get("desc"))[:70]})
+                        _add2 += 1
+                    print("[legs] TREND_LEADER 龙头进突破路：pathA 腿=%d 加入=%d 未过=%d %s"
+                          % (len(_leads), _add2, _skip2,
+                             [x.get("symbol") for x in legs_out if str(x.get("chain")) == "趋势突破(龙头)"]),
+                          flush=True)
+                except Exception as _el2:
+                    print("[legs] TREND_LEADER ERR %s" % str(_el2)[:110], flush=True)
     except Exception as _et:
         print("[legs] trend_channel ERR %s" % str(_et)[:110], flush=True)
 
@@ -730,12 +775,26 @@ def main() -> int:
     #   去重只删除**完全重复的 symbol** ✓（保留首次出现的来源 ✓，不改变被选中股票的**集合** ✓）。
     #   `WOLF_LEGS_DEDUP=0` 可关（默认 **1**：重复腿是缺陷、不是口径 ✓）。
     if str(os.getenv("WOLF_LEGS_DEDUP", "1")).strip().lower() not in ("0", "false", "no"):
-        _seen, _uniq, _dup = set(), [], []
+        # ★ 2026-10-15 ✓（用户选 A 的配套 ✓）：`WOLF_TREND_LEADER_POOL=1` 时，
+        #   同一 symbol 同时有 **pathA（线组/缩量回踩 ✗ 龙头永不触发）** 与 **trend（带量突破 ✓）**
+        #   两条腿 ⇒ **优先保留 trend 突破腿** ✓（否则"先出现的 pathA"会被保留 ✗、
+        #   龙头又被去重掉 ✓ —— 实测 0105：SZ002555 的突破腿就是这么消失的 ✓）。
+        #   开关关闭时**逐字保持原行为**（保留首次 ✓）。
+        _pref_trend = str(os.getenv("WOLF_TREND_LEADER_POOL", "0")).strip().lower() in ("1", "true", "yes", "on")
+        _seen, _uniq, _dup, _pos = set(), [], [], {}
         for _l in legs_out:
             _s = str(_l.get("symbol") or "")
-            if _s and _s in _seen:
+            if not _s:
+                _uniq.append(_l); continue
+            if _s in _seen:
+                if _pref_trend and str(_l.get("src") or "") == "trend" and _l.get("level"):
+                    _i = _pos.get(_s)
+                    if _i is not None and str(_uniq[_i].get("src") or "") != "trend":
+                        _dup.append(_s + "(换突破腿)")
+                        _uniq[_i] = _l
+                        continue
                 _dup.append(_s); continue
-            _seen.add(_s); _uniq.append(_l)
+            _seen.add(_s); _pos[_s] = len(_uniq); _uniq.append(_l)
         if _dup:
             print("[legs] DEDUP 去掉重复腿 %d 条: %s（保留首次来源 ✓）" % (len(_dup), _dup[:8]), flush=True)
         legs_out = _uniq
