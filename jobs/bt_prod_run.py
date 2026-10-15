@@ -1314,6 +1314,30 @@ def main() -> int:
                         except Exception as _eT:
                             print("TREND_ARM_ERR %s %s" % (sym, str(_eT)[:80]), file=sys.stderr)
                         continue
+                    # ⑲ **pathA 腿 ⇒ 按「他的线组」（255 ✓）挂单**（2026-10-15 ✓
+                    #   用户「买的还是那么几个股票，没买龙头」）────────────────────────────
+                    #   病灶 ✗：`bt_day_legs.py` 产出的 pathA/pathB 腿 `src=pathA` ✗ **不在武装白名单** ⇒
+                    #     实测 t68：产出 234 条腿里 **229 条是 pathA**（动量链选出的票全在这里 ✓），
+                    #     而执行口只武装 {switch_0818, trend} ✗ ⇒ **选股端的成果从未进入执行** ✓。
+                    #   买点用哪里 ✓：用**他的线组**（§9.495 实测 T+5 +1.29%/+0.73% ✓；254 负期望 ✗）——
+                    #     挂"收盘下方最近的那条均线（13/34/60/144）"价 ✓，与 `rotation_switch_arm` 的
+                    #     255 分支（kind=`custom_line_dip` ✓）同源 ✓。
+                    #   开关 `WOLF_ARM_PATHA_LINE`（**库内默认 0 ⇒ 生产逐位不变** ✓）
+                    if (str(L.get("src") or "") == "pathA"
+                            and str(os.getenv("WOLF_ARM_PATHA_LINE", "0")).strip().lower() in ("1", "true", "yes", "on")):
+                        _lnp = None
+                        try:
+                            _lnp = rsa.ma_line_price(sym, day)
+                        except Exception as _e_lnp:
+                            print("[prod] pathA 取线位失败 %s: %s" % (sym, str(_e_lnp)[:70]), file=sys.stderr)
+                        if _lnp and _lnp.get("v"):
+                            _r255 = rsa.arm(conn, cur, sym, "custom_line_dip", "buy",
+                                            rsa.ma_line_expr(_lnp["v"]), day)
+                            armed.append({"symbol": sym, "src": "pathA_line", "line": _r255,
+                                          "k": _lnp.get("k"), "price": round(float(_lnp["v"]), 3)})
+                        else:
+                            armed.append({"symbol": sym, "src": "pathA_noline"})
+                        continue
                     # ★ 埋伏腿（2026-09-26 用户「做掉」）：`stage=ambush` 的腿走**独立腿型**
                     #   `wolf_ambush_buy` ✓ —— 语义是「低位方向：找辨识度最高的老龙头**埋伏**」✓
                     #   （**先手建仓**，不是摊薄 ✗）⇒ 网关侧已豁免「低吸只在趋势票上做」那道闸 ✓
