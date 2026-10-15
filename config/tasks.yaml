@@ -1305,10 +1305,13 @@ tasks:
       · 深证成指/创业板指/沪深300/中证1000 → data/index_daily_<code>.json（浪型链 sync3「三大指数同时化解顶背离」读它 ✓）。
     ★ 为什么必须由 worker 侧跑：**backend 容器无外网**（实测东财 RemoteDisconnected ✗），worker 容器可直连 ✓。
     日线首选东财 push2his，失败退 tushare 中继（datahubco→promax）✓。
+    ★ 为什么是 16:40 不是 15:05：上游（东财/tushare 中继）当天日线一般要收盘后一段时间才有 ⇒
+      15:05 跑只能拿到**昨天**（卡片会永远落后一天 ✗）。16:40 紧跟 16:30 的 index_daily_refresh ✓；
+      19:00 再跑一趟兜底晚发布（同一脚本幂等，重复跑只覆盖当天 ✓）。
   enabled: true
   schedule:
     type: cron
-    expr: '5 15 * * mon-fri'
+    expr: '40 16,19 * * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/sync_index_daily_multi.py
