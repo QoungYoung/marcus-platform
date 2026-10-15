@@ -262,6 +262,40 @@ def test_walk_prefix_invariance_no_lookahead():
     assert checked >= 10, checked
 
 
+def _patch_amount(rows, i, amt):
+    rows[i] = (rows[i][0], rows[i][1], rows[i][2], amt)
+    return rows
+
+
+def test_w_bottom_confirm_gives_d1_build():
+    # W底：两低点相近(≤3%) + 中间颈线 + **今日放量收上颈线** ⇒ d1/W底/build + 重定浪 ✓
+    # （他 10-15 原话『需放量突破颈线才确认重仓 build』；原表 W底=确认建仓 / d1=底部确认后建仓）
+    rows = mk(FLAT + [88.0] + [92.0, 96.0, 100.0, 104.0] + [100.0, 95.0] + [90.5] + [95.0, 100.0] + [107.0])
+    for i in range(len(rows) - 20, len(rows)):
+        _patch_amount(rows, i, 1e12)
+    _patch_amount(rows, len(rows) - 1, 3e12)          # 今日放量 ⇒ vol_ratio20 = 3.0 ✓
+    ev = W.evaluate(rows, last(rows), prev=2)          # 就算上锁在 defense，W底确认也重定浪 ✓
+    assert ev["features"]["w_bottom"] is True, ev["features"].get("w_bottom_neck")
+    ws = W.to_wave_state(ev)
+    assert ws["level"] == "d1" and ws["sub_level"] == "W底" and ws["operation"] == "build", ws
+    assert "W底确认" in (ev.get("reasons") or ""), ev.get("reasons")
+
+
+def test_basis_43_gives_side():
+    # 4-3 筑底：4 浪调整档内 + 20 日低点冻结 ≥5 日 + 仍在低位(≤5%) + **缩量**(20日均额/60日均额 ≤0.8) ⇒ d4/4-3/side ✓
+    rows = mk(FLAT + [130.0] + [112.0] * 40 + [112.0 + 0.1 * i for i in range(20)])   # 末 20 日缓升 ⇒ close > lo20 ✓
+    _patch_amount(rows, len(rows) - 1, 60.0)
+    for i in range(len(rows) - 20, len(rows)):
+        _patch_amount(rows, i, 20e9)                   # 近 20 日缩量
+    for i in range(len(rows) - 60, len(rows) - 20):
+        _patch_amount(rows, i, 100e9)                  # 之前放量 ⇒ 比值 ≈0.2 ✓
+    ev = W.evaluate(rows, last(rows))
+    f = ev["features"]
+    assert f["basis_43"] is True and ev["rung_index"] == 0, (f["basis_43"], ev["rung_index"], f["vol_ratio60"])
+    ws = W.to_wave_state(ev)
+    assert ws["level"] == "d4" and ws["sub_level"] == "4-3" and ws["operation"] == "side", ws
+
+
 def test_main_up_33_requires_sync3(monkeypatch):
     """他的原话是「**三大指数同时**化解顶背离」⇒ sync3=False（三指数不同步）时**不许**给 3-3 ✓。"""
     rows = mk(FLAT + [103.0, 104.0, 105.0])

@@ -123,6 +123,25 @@ MAIN_UP_PB = {"key": "mainup_32", "name": "主升回调3-2", "level": "d3", "sub
 MAIN_UP_STREAK = int(_envf("WOLF_WAVE_LADDER_UP_STREAK", 3))   # 「站稳三天」
 MAIN_UP_VOL = _envf("WOLF_WAVE_LADDER_UP_VOL", 1.0)            # 量能不缩：当日额 ≥ 20 日均额 × 该系数
 MAIN_UP_PULLBACK = _envf("WOLF_WAVE_LADDER_UP_PB", 0.03)       # 主升中的回调幅度门槛（⛔ 代理）
+
+# ────────────── 补档 B（2026-10-15）：4-3 筑底 / W底确认 ──────────────
+# 依据（原表 + 他原话）：
+#   · 4-3 筑底 = `side`「可走 4-4 但别预期太高，**调仓换股分批接主线**，轻仓」（wave_agent.py:320）
+#     判据：4 浪调整档内 + 20 日低点已冻结 ≥LOW_AGE + 仍在低位(距低 ≤5%) + **缩量**(20 日均额 ≤ 60 日均额×0.8)
+#     ＋未破低（`close > lo20`）—— 就是他的「地量+缩量止跌=下跌动能衰竭→底部线索(可轻仓 side)」✓
+#   · W底确认 = `build`（原表「W底(确认建仓)」+ d1「反转大1浪(底部确认后建仓)」）
+#     判据：**两个相近低点（≤3%）+ 中间颈线** + 今日**放量收上颈线** —— 他 10-15 原话「**需放量突破颈线才确认重仓 build**」✓
+#     命中 ⇒ **重定浪**（底部确认推翻下跌结构 ✓）+ level=d1/sub=W底/op=build。
+BASE43_OFF = _envf("WOLF_WAVE_LADDER_43_OFF", 0.05)     # 4-3：距 20 日低点上限
+BASE43_VOL = _envf("WOLF_WAVE_LADDER_43_VOL", 0.8)       # 4-3：缩量门槛（20 日均额 / 60 日均额）
+WB_NEAR = _envf("WOLF_WAVE_LADDER_WB_NEAR", 0.03)        # W底：两低点相近度
+WB_VOL = _envf("WOLF_WAVE_LADDER_WB_VOL", 1.2)           # W底：突破颈线的放量倍数
+WB_WIN = int(_envf("WOLF_WAVE_LADDER_WB_WIN", 180))      # W底：形态回看窗口（交易日）
+
+BASE_43 = {"key": "basis_43", "name": "4-3筑底", "level": "d4", "sub_level": "4-3", "operation": "side",
+           "expect": "4-3 筑底：缩量止跌、可分批接主线（原表：调仓换股分批接主线、轻仓）"}
+W_BOTTOM = {"key": "w_bottom", "name": "W底确认", "level": "d1", "sub_level": "W底", "operation": "build",
+            "expect": "W底确认（放量过颈线）⇒ 底部反转，建仓（原表：W底确认=建仓 / d1=底部确认后建仓）"}
 _SYNC3: Optional[bool] = None   # features() 每轮写入：三指数同步状态（None=数据不全 ⇒ 退回单指数）
 _ROWS_CACHE: Dict[Any, Any] = {}   # (DATA, code) → rows
 # ★ 2026-10-15 修正（用户拍板 A）：下跌1浪拆成**两件事** ——
@@ -181,6 +200,29 @@ def sync3(asof: str, look: int = 3) -> Optional[bool]:
         if ok:
             return True
     return False
+
+
+def _w_bottom(pv: Sequence[Any], close: float, vol_ratio20: float, since_date: str = "") -> Tuple[bool, float]:
+    """W底确认：最近两个**相近**低点（差 ≤WB_NEAR）＋ 中间颈线（两低之间的最高 H）＋ 今日**放量收上颈线**。
+
+    只用 `pivots(rows, asof)` 的**已确认拐点** ⇒ 无未来函数 ✓（前缀截断不变性单测覆盖 ✓）。
+    返回 (是否确认, 颈线值)；不确认时颈线为 0。出处：原表「W底(确认建仓)」＋ 他 10-15「需放量突破颈线才确认重仓 build」✓
+    """
+    # 拐点元组 = (确认日, 拐点日, 值, 类型) —— 形态判定按**拐点日**排序，另要求形态足够近 ✓（无未来函数：只取已确认拐点 ✓）
+    lows = [p for p in pv if str(p[3]).upper() == "L" and (not since_date or str(p[1]) >= since_date)][-2:]
+    if len(lows) < 2:
+        return False, 0.0
+    d1, d2 = str(lows[0][1]), str(lows[1][1])
+    v1, v2 = lows[0][2], lows[1][2]
+    if not v1 or abs(v2 / v1 - 1) > WB_NEAR:
+        return False, 0.0
+    mids = [p for p in pv if d1 < str(p[1]) < d2 and str(p[3]).upper() == "H"]
+    if not mids:
+        return False, 0.0
+    neck = max(p[2] for p in mids)
+    if close > neck and vol_ratio20 >= WB_VOL:
+        return True, neck
+    return False, neck
 
 
 def _up33_in_window(hist: Sequence[Tuple[str, float, float, float]], win: int) -> bool:
@@ -441,6 +483,11 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
     global _SYNC3
     _SYNC3 = sync3(asof)          # None=数据不全 ⇒ 退回单指数口径（features 里可查 ✓）
     w1 = _env_pin_w1() or st["wave1_top"]
+    _vr20 = (sum(r[3] for r in hist[-21:-1]) / 20) if len(hist) >= 21 and sum(r[3] for r in hist[-21:-1]) else 0.0
+    # 注意：st["pivots"] 是**拐点个数**（int ✗），形态判定要用拐点列表 ⇒ 直接调 pivots()（同一因果函数 ✓）
+    _pv = pivots(rows, asof)
+    _wb_ok, _wb_neck = _w_bottom(_pv, close, (amount / _vr20) if _vr20 else 0.0,
+                                hist[-WB_WIN][0] if len(hist) >= WB_WIN else "")
     return {
         "date": d, "close": close, "high": high, "prev_close": prev_close, "amount": amount,
         "wave1_top": w1, "wave1_top_date": st["wave1_top_date"], "wave1_top_minor": st["wave1_top_minor"],
@@ -489,6 +536,21 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "near_prev_high": bool(hi60_prev and hi20 >= NEAR_MIN * hi60_prev),
         "fade": round(1 - close / hi20, 4) if hi20 else 0.0,
         "shrink": bool(amt_prev and amount < amt_prev),
+        # ── 补档 B 的量价特征 ──
+        "lo60_age": (len(hist[-HI_WIN:]) - 1 - min(range(len(hist[-HI_WIN:])), key=lambda i: hist[-HI_WIN:][i][1])
+                     if len(hist) >= HI_WIN else 0),
+        "off_lo60": round(close / lo60_prev - 1, 4) if lo60_prev else 0.0,
+        "vol_ratio60": (round((sum(r[3] for r in hist[-21:-1]) / 20) / (sum(r[3] for r in hist[-61:-1]) / 60), 2)
+                        if len(hist) >= 61 and sum(r[3] for r in hist[-61:-1]) else 0.0),
+        "basis_43": bool(len(w) >= 20
+                         and (len(w) - 1 - min(range(len(w)), key=lambda i: w[i][1])) >= LOW_AGE
+                         and lo20 and (close / lo20 - 1) <= BASE43_OFF
+                         and close > lo20
+                         and (not bool(close > hi60_prev))
+                         and (sum(r[3] for r in hist[-21:-1]) / 20) <= BASE43_VOL * (sum(r[3] for r in hist[-61:-1]) / 60)
+                         if len(hist) >= 61 and sum(r[3] for r in hist[-61:-1]) else False),
+        "w_bottom": _wb_ok,
+        "w_bottom_neck": _wb_neck,
     }
 
 
@@ -524,6 +586,12 @@ def _reasons(f: Dict[str, Any], idx: int) -> str:
         hits.append("收盘%s破前60日低位%s" % (round(f["close"], 2), round(f["lo60_prev"], 2)))
     if f["break_floor"]:
         hits.append("跌破关键位%s" % floor_level())
+    if f.get("w_bottom"):
+        hits.append("W底确认（放量%s倍收上颈线%s ⇒ 底部反转，原表 build）" % (
+            f.get("vol_ratio20"), round(f.get("w_bottom_neck") or 0, 2)))
+    elif f.get("basis_43"):
+        hits.append("4-3 筑底（低点冻结%d日 ∧ 距低%+.1f%% ∧ 缩量%.2f ⇒ 可分批接主线，原表 side）" % (
+            f.get("low_age", 0), 100 * (f.get("off_low20") or 0), f.get("vol_ratio60") or 0))
     if hits:
         return "；".join(hits)
     if idx == RUNG_INDEX["w45_fail"]:
@@ -555,7 +623,11 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
         return None
     raw = stage_of(f)
     reset, why = False, ""
-    if prev is not None and int(prev) > raw:
+    wb = bool(f.get("w_bottom"))
+    if wb:
+        # 补档 B：W底确认（放量过颈线）= **底部结构事件** ⇒ 重定浪（推翻下跌结构 ✓，他 10-15 原话口径 ✓）
+        reset, why = True, "W底确认（放量过颈线%s）⇒ 重定浪型" % (round(f.get("w_bottom_neck") or 0, 2))
+    elif prev is not None and int(prev) > raw:
         if f["new_high60"]:
             reset, why = True, "创60日新高 ⇒ 重定浪型"
         elif latch_start:
@@ -564,6 +636,12 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             if lo and hi / lo - 1 >= RESET_RALLY:
                 reset, why = True, "自低点反抽%.1f%% ⇒ 重定浪型" % ((hi / lo - 1) * 100)
     idx = raw if (reset or prev is None) else max(int(prev), raw)
+    # 补档 B 的档位改写：W底 ⇒ d1/W底/build（已重定浪 ✓）；4-3 筑底 ⇒ d4/4-3/side（**仅 4 浪调整档内** ✓）
+    ov = None
+    if wb:
+        ov = W_BOTTOM
+    elif f.get("basis_43") and idx == RUNG_INDEX["w4_adj"]:
+        ov = BASE_43
     r = RUNGS[idx]
     w1, w2, w3, invest = _ALLOC.get(r["operation"], (0.6, 0.25, 0.15, 1.0))
     return {"date": f["date"], "rung_index": idx, "key": r["key"], "name": r["name"],
@@ -574,9 +652,11 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             #   · 判据基于**上锁后的 rung**（不是当日档！首版用 raw ⇒ 10-09 那种"上锁 defense"的日子被放宽成 side ✗）；
             #   · **3-2 不做接管**：它跟 4 浪调整在价格上**不可区分**（2026-07-31 他叫"调整浪/4浪"，按 3-2 就会给 side ✗）
             #     —— 这是"等级不可分辨"问题的又一次实证，只能留作信息字段（`main_up_pb`）⛔。
+            "ov_spec": ov,
             "main_up": ("3-3" if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else ""),
             "main_up_pb_info": bool(f.get("main_up_pb")),
             "main_up_spec": (MAIN_UP if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else None),
+            "ov_expect": (ov or {}).get("expect"),
             "reasons": _reasons(f, idx), "features": f,
             "sub_stage": ("%s%s" % (f.get("sub_stage") or "", ("→" + f["sub_forming"]) if f.get("sub_forming") else "")),
             "levels": {"wave1_top": f["wave1_top"], "wave1_top_date": f["wave1_top_date"],
@@ -686,7 +766,7 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         return None
     key = ev.get("key") or ""
     fi = ev.get("features") or {}
-    mus = ev.get("main_up_spec") or {}          # 主升叠加档生效时用它改写 level/sub_level/operation ✓
+    mus = ev.get("ov_spec") or ev.get("main_up_spec") or {}   # 档位改写：W底/4-3 优先，其次主升 3-3 ✓
     sub = SUB_OF_RUNG.get(key, "")
     if key == "w4_adj" and fi.get("sub_stage"):
         sub = fi["sub_stage"] + (("→" + fi["sub_forming"]) if fi.get("sub_forming") else "")
