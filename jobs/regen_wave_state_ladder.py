@@ -47,13 +47,20 @@ def targets(roots):
 
 
 def root_files(include_archives=False):
-    """data/ 根下的 live + 带日期回填件（＋可选：_bt_* 下的 26.7 万归档副本）。"""
+    """★ **生产侧**目标（默认只动这些）：live + 带日期回填件 + wave_state_history/<sim8>.json。
+
+    wave_state_history/ 是 wave_gate.py:101 按**模拟日 sim8** 读的那份历史（生产侧）；
+    2026-10-15 首轮重建漏了它 ⇒ 这里补上（文件名 YYYYMMDD.json，day 直接取文件名 ✓）。
+    _bt_* 下的 26.7 万归档副本只有显式 --include-archives（且需 --include-backtests）才动 ✓。
+    """
     out = []
     live = os.path.join("data", "wave_state.json")
     if os.path.exists(live):
         out.append((live, None))
     for f in sorted(glob.glob(os.path.join("data", "wave_state_[0-9]*.json"))):
         out.append((f, os.path.basename(f).replace("wave_state_", "").replace(".json", "").replace("-", "")))
+    for f in sorted(glob.glob(os.path.join("data", "wave_state_history", "[0-9]*.json"))):
+        out.append((f, os.path.basename(f).replace(".json", "").replace("-", "")))
     if include_archives:
         for f in sorted(glob.glob(os.path.join("data", "_bt_*", "*", "wave_state_[0-9]*.json"))):
             out.append((f, os.path.basename(f).replace("wave_state_", "").replace(".json", "").replace("-", "")))
@@ -63,11 +70,16 @@ def root_files(include_archives=False):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
-    ap.add_argument("--roots", default="")
-    ap.add_argument("--include-archives", action="store_true")
+    ap.add_argument("--roots", default="", help="显式指定回测根（逗号分隔）")
+    ap.add_argument("--include-backtests", action="store_true",
+                    help="★ 动 _bt_* 回测沙箱（**默认不动**：2026-10-15 教训 —— 用户要的是重跑生产，")
+    ap.add_argument("--include-archives", action="store_true",
+                    help="连 _bt_*/<day>/wave_state_<日期>.json 归档副本（26.7 万份，需 --include-backtests）")
     args = ap.parse_args()
 
-    roots = [x for x in args.roots.split(",") if x] or sorted(glob.glob(os.path.join("data", "_bt_*")))
+    roots = [x for x in args.roots.split(",") if x]
+    if args.include_backtests and not roots:
+        roots = sorted(glob.glob(os.path.join("data", "_bt_*")))
     pairs = targets(roots) + root_files(args.include_archives)
     rows = W.load_rows()
     if not rows:
