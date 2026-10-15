@@ -19,7 +19,8 @@
     4浪调整 → 吃反抽、以安全带走利润为主（`t_only`；他 07-31~08-03 只做半导体 ETF ✓）
     成功4-5 → 调整结束、主升末段在走（`side`；他 08-05「按 4 接 5 做」✓）
     失败4-5 → 反抽夭折、不新建仓（`defense`；他 10-09~10-13 避海外链、只吃差价 ✓）
-    下跌1浪 → 自救、精简持仓（`exit`；他 10-15「操作策略转为自救」✓）
+    下跌1浪 → **不新建仓（`defense`，tier 目标 30%）＋ 存量自救（`mode=自救`）** —— 他 10-15「操作策略转为
+              自救」＋ 2025-09-09「熊市不做，什么都不做」（原表 down→defense；详见 docs/wave-operation-table.md §2）
 
 口径（带 ⛔ 的是我们的代理，他没给量化；**教材依据**见本文件「结构位（教材铁律②）」一节，出处
 中山证券投资者教育《波浪理论》https://www.zszq.com/tzzyd/article/292 —— 该页原文即“两条基本数浪规则”）:
@@ -43,7 +44,7 @@
   · 2026-07-31 [0] 4浪调整（`t_only`）—— 他「整波为调整浪」✓
   · 2026-08-05 [1] 成功4-5（`side`，「止跌确认：20日低点 3764.15 冻结13日 ∧ 距低+3.0% ∧ 站上MA20」）
     —— 他说「看到上面守了 3800 ⇒ 肯定按 4 接 5 做」并在半导体吃 20 个点 ✓✓
-  · 2026-10-09 ~ 10-14 [3] 下跌1浪（`exit`）—— 他「避海外链、只吃差价」→ 10-15「转为自救」✓
+  · 2026-10-09 ~ 10-14 [3] 下跌1浪（`defense` ＋ `mode=自救`）—— 他「避海外链、只吃差价」→ 10-15「转为自救」✓
   · **2026-08「偏保守」已修**（2026-10-15 第二轮）：rung1 不再只认「创 60 日新高」，改为**止跌确认**
     = 20 日低点**冻结 ≥5 日** ∧ **距低 ≥3%** ∧ **站上 MA20** ⇒ 2026-08-05（他说「按 4 接 5 做」的
     同一天）判出 [1] 成功4-5/`side` ✓。两窗口实测可分：8 月距低 +3.0~5.4% ∧ 低点自 07-17 冻结；
@@ -101,10 +102,16 @@ RUNGS: List[Dict[str, str]] = [
      "expect": "反抽夭折（冲高不过前高后回落）", "operation": "defense",
      "hold": "近20日摸到前高附近 ∧ 未创60日新高 ∧ 已回落达标"},
     {"key": "down1", "name": "下跌1浪",
-     "expect": "大B浪反弹（自救：只降不空）", "operation": "exit",
+     "expect": "大B浪反弹（自救窗口：借反弹出，不新建仓）", "operation": "defense",
      "hold": "未收回跳空 ∨ 收盘 < 主升 1 浪顶（铁律②失效）∨ 跌破关键位"},
 ]
 RUNG_INDEX = {r["key"]: i for i, r in enumerate(RUNGS)}
+# ★ 2026-10-15 修正（用户拍板 A）：下跌1浪拆成**两件事** ——
+#   「**不进**」= operation `defense`（禁新建仓；tier 目标 30% ⇐ 原表 down→defense ＋ 他「熊市不做，什么都不做」）
+#   「**怎么出**」= mode `自救`（存量借反弹/放量分批减；他 2026-10-15：「要出来光靠硬割不行 需要创造条件才能割肉」）
+#   原来压成一个 exit（invest 0.70）既比原表松、又丢了自救的执行语义 ✗。依据：docs/wave-operation-table.md §2。
+MODE_OF_RUNG = {"down1": "自救"}
+MODE_NOTE = {"自救": "禁新建仓；存量只借反弹/放量减仓或做T（不硬割、不新增）"}
 
 # 仓位/操作口径复用 wave_alloc（缺依赖时退回本地副本，值保持一致 ✓）
 try:  # pragma: no cover - 依赖环境
@@ -593,6 +600,8 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
             int(ev.get("rung_index", -1)), ev.get("name") or "?", ev.get("reasons") or "",
             ev.get("expect") or "", ev.get("operation") or "", float(ev.get("invest") or 0))),
         "features": fi,
+        "mode": MODE_OF_RUNG.get(key, ""),
+        "mode_note": MODE_NOTE.get(MODE_OF_RUNG.get(key, ""), ""),
         "source": "wave_ladder",
         "rung": {"key": key, "name": ev.get("name"), "index": ev.get("rung_index"),
                  "expect": ev.get("expect"), "degraded": ev.get("degraded"), "reset": ev.get("reset")},

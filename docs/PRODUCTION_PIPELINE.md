@@ -125,7 +125,9 @@
   **默认直接退出、不写盘**（`WOLF_WAVE_LEGACY_AGENT=1` 才恢复；容器外挂 cron 即使还在也无效 ✓）。
   · schema 不变：level(d1..down)/sub_level/operation/confidence/reasons/date/features（消费方一行未改）；
     另加 `source=wave_ladder` / `rung` / `levels` / `sub_legs` 供复盘。
-  · 档位：4浪调整(d4,t_only) → 成功4-5(d5,side) → 失败4-5(d5,defense) → 下跌1浪(**down**,exit)；
+  · 档位：4浪调整(d4,t_only) → 成功4-5(d5,side) → 失败4-5(d5,defense) → 下跌1浪(**down**, **defense ＋ mode=自救**)；
+    ★ 2026-10-15 修正：下跌1浪拆成「**不进** = defense（禁新建仓、布腿 invest 0.30）」＋「**怎么出** = mode=自救」；依据＝原表 down→defense
+    ＋他 2025-09-09「熊市不做，什么都不做」＋ 2026-10-15「策略转为自救」。逐消费点影响见 docs/wave-operation-table.md §2.1
     `sub_level` 用他的编号（4-3 / 4-5 / 失败5 / C杀）⇒ `level=='down'` 仍是指数大级别止损的判据 ✓。
   · 历史重生成：`jobs/regen_wave_state_ladder.py --apply`（5070 份：live + 60 带日期 + 5011 回测快照；
     备份 `data/_waveagent_backup/wave_states_*.tar.gz`；`_bt_*/<day>/wave_state_<date>.json` 26.7 万归档副本未动）。

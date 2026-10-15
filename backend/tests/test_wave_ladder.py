@@ -74,7 +74,7 @@ def test_shallow_rebound_is_not_rung2():
 def test_real_gap_goes_rung3():
     rows = mk(CHOP + [99.0], highs=[100.0] * (len(CHOP)) + [100.9])   # 高 100.9 < 前收 102.5
     ev = W.evaluate(rows, last(rows))
-    assert ev["rung_index"] == 3 and ev["operation"] == "exit", ev["reasons"]
+    assert ev["rung_index"] == 3 and ev["operation"] == "defense", ev["reasons"]   # ★ 2026-10-15：改 defense
 
 
 def test_trivial_gap_not_rung3():
@@ -211,7 +211,8 @@ def test_to_wave_state_level_mapping():
     assert set(("level", "sub_level", "operation", "confidence", "reasons", "date", "features")) <= set(ws0)
     flat = mk([100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0])
     ws3 = W.to_wave_state(W.evaluate(flat, last(flat)))
-    assert ws3["level"] == "down" and ws3["operation"] == "exit" and ws3["sub_level"] == "C杀"
+    assert ws3["level"] == "down" and ws3["operation"] == "defense" and ws3["sub_level"] == "C杀"
+    assert ws3["mode"] == "自救" and ws3["mode_note"], ws3
     high = mk([100.0] * 80 + [130.0])
     assert W.to_wave_state(W.evaluate(high, last(high)))["level"] == "d5"
 
