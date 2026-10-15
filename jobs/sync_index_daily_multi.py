@@ -34,7 +34,9 @@ def fetch_em(code: str, days: int):
     rows = []
     for line in kl:
         p = line.split(",")
-        rows.append([p[0].replace("-", ""), float(p[2]), float(p[3]), float(p[6])])   # date, close, high, amount
+        # 前 4 项与浪型链 load_rows 兼容（date/close/high/amount ✓），后 2 项是给前端 K线用的开/低 ✓
+        rows.append([p[0].replace("-", ""), float(p[2]), float(p[3]), float(p[6]),
+                     float(p[1]), float(p[4])])
     return rows
 
 
@@ -74,7 +76,11 @@ def main():
                 continue
         if not rows:
             continue
-        p = os.path.join(DATA, "index_daily_%s.json" % code.replace(".", "_"))
+        # ★ 主指数写到 **K线缓存专用文件名**（index_kline_*.json）：
+        #   浪型链的 index_daily_000001_SH.json 归既有流水线所有，写它=改主指数数据窗口 ✗（生产 backend 无外网、
+        #   由 worker 侧同步后供前端读 ✓）。其余指数写 index_daily_*.json（浪型链的 sync3 也读它们 ✓，多出的尾字段无害 ✓）。
+        fname = ("index_kline_%s.json" if code == PRIMARY else "index_daily_%s.json") % code.replace(".", "_")
+        p = os.path.join(DATA, fname)
         json.dump({"code": code, "src": src, "rows": rows}, open(p + ".tmp", "w", encoding="utf-8"),
                   ensure_ascii=False)
         os.replace(p + ".tmp", p)

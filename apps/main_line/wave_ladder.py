@@ -63,7 +63,9 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-DATA = os.environ.get("DATA_DIR", "data")
+# ★ DATA_DIR 可能是"设了但为空"（生产 backend 容器即如此：DATA_DIR= ✗）⇒ 空串必须回落 "data" ✓
+#   （os.environ.get("DATA_DIR", "data") 对空串**不会**取默认值 ✗，会把所有路径解析成 "./xxx" ）
+DATA = (os.environ.get("DATA_DIR") or "").strip() or "data"
 def _envf(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, "") or default)

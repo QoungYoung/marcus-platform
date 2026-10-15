@@ -1295,6 +1295,33 @@ tasks:
     pi_analysis: false
     channels:
     - qqbot
+
+- id: index_kline_sync
+  name: 多指数日线同步（上证K线缓存 + 深证/创业板/沪深300/中证1000）
+  description: |
+    收盘后同步 5 个指数日线（jobs/sync_index_daily_multi.py）：
+      · 主指数 000001.SH → data/index_kline_000001_SH.json（**K线缓存专用文件名**，供 /api/v1/wave/index-history
+        画蜡烛；绝不动浪型链的 index_daily_000001_SH.json ✗）；
+      · 深证成指/创业板指/沪深300/中证1000 → data/index_daily_<code>.json（浪型链 sync3「三大指数同时化解顶背离」读它 ✓）。
+    ★ 为什么必须由 worker 侧跑：**backend 容器无外网**（实测东财 RemoteDisconnected ✗），worker 容器可直连 ✓。
+    日线首选东财 push2his，失败退 tushare 中继（datahubco→promax）✓。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '5 15 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/sync_index_daily_multi.py
+    args: []
+  output:
+    log_file: logs/index_kline_sync_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
   depends_on: []
   retry:
     enabled: true
