@@ -95,6 +95,16 @@ backend/data/
 
 # agent 技能目录（openspec/hallmark 等生成物与机器本地标记，不提交）
 .agents/
+# ★ 例外（用户 2026-10-16 拍板「A」）：marcus-panel-tools 是**本项目的操作资产**
+#   （16 个只读数据工具的口径/示例/纪律，含「黄金坑已删除」「禁止照抄示例」等约定），
+#   要可追溯 ⇒ 单独纳入版本控制；其余技能（hallmark/main-wave-analyzer/openspec）仍忽略 ✓
+#   git 规则：父目录被忽略时子级 `!` 无效 ⇒ 必须**逐级**放开（放一层、再挡住其余 ✓）
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/marcus-panel-tools/
+!.agents/skills/marcus-panel-tools/**
 
 # DSH temp tooling
 .dsh-tmp/
