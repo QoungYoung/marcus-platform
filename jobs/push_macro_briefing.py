@@ -50,38 +50,39 @@ def main():
     day = a.date or time.strftime("%Y%m%d")
     # 两条推送线：① 宏观事件晨报（每日 08:35 前生成的 macro_briefing_<date>.md ✓）
     #            ② 重要事件 T-5/T-3/T-1 提醒（agent 生成 event_alert_<date>.md ✓ 2026-10-16 用户要求 ✓）
-    cand = [("macro", os.path.join(DATA, "macro_briefing_%s.md" % day)),
-            ("alert", os.path.join(DATA, "event_alert_%s.md" % day))]
-    p, txt, kind = "", "", ""
-    for k, path in cand:
-        t = _read(path)
-        if t:
-            kind, p, txt = k, path, t
-            break
-    if not txt:
-        print("[macro-brief] 当日既无晨报也无事件提醒 ⇒ 跳过（fail-open ✓ 节假日/无提醒日都走这里）")
-        return 0
+    cand = [("alert", os.path.join(DATA, "event_alert_%s.md" % day)),
+            ("macro", os.path.join(DATA, "macro_briefing_%s.md" % day))]
+    todo = [(k, p, _read(p)) for k, p in cand]
+    todo = [(k, p, t) for k, p, t in todo if t]
     st = {}
     try:
         st = json.load(open(STATE, encoding="utf-8"))
     except Exception:
         st = {}
-    key = "%s:%s" % (day, kind)
-    if st.get("last_pushed") == key and not a.dry:
-        print("[macro-brief] %s(%s) 已推送过 ⇒ 跳过（去重 ✓）" % (day, kind))
+    if not todo:
+        print("[macro-brief] 当日既无晨报也无事件提醒 ⇒ 跳过（fail-open ✓）")
         return 0
-    body = txt if len(txt) <= MAX_LEN else txt[:MAX_LEN] + "\n…（已截断，全文见 %s）" % p
     if a.dry:
-        print("[macro-brief][dry] 将推送 %d 字符：\n%s" % (len(body), body[:400]))
+        for k, p, t in todo:
+            print("[macro-brief][dry] %s 将推送 %d 字符：\n%s" % (k, len(t), t[:300]))
         return 0
-    ok = _push_qq(body)
-    if ok:
-        st["last_pushed"] = key
-        st["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        try:
-            json.dump(st, open(STATE, "w", encoding="utf-8"), ensure_ascii=False)
-        except Exception:
-            pass
+    sent = 0
+    for kind, p, txt in todo:
+        key = "%s:%s" % (day, kind)
+        if st.get("last_pushed") == key:
+            print("[macro-brief] %s(%s) 已推送过 ⇒ 跳过（去重 ✓）" % (day, kind))
+            continue
+        body = txt if len(txt) <= MAX_LEN else txt[:MAX_LEN] + "\n…（已截断，全文见 %s）" % p
+        if _push_qq(body):
+            st["last_pushed"] = key
+            st.setdefault("history", []).append(key)
+            st["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            sent += 1
+            try:
+                json.dump(st, open(STATE, "w", encoding="utf-8"), ensure_ascii=False)
+            except Exception:
+                pass
+    print("[macro-brief] 本次送出 %d 条" % sent)
     return 0
 
 
