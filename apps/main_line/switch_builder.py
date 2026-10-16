@@ -532,6 +532,9 @@ def build_plan():
                     today = _dt9.now().strftime("%Y%m%d")
                 except Exception:
                     today = ""
+                # ⚠️ 第三处连锁残留 ✗（`埋伏候选并入失败: name '_sel_skipped' is not defined` ✓）：
+                #   同一段代码从 `_arm_legs()` 搬来时还引用着它的跳过明细表 ✓ ⇒ 本作用域自建 ✓
+                _sel_skipped = []
                 if _sel_block is not None:
                     _why_sel2 = _sel_block(_c6, day=today)
                     if _why_sel2:
