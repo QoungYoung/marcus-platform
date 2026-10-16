@@ -97,11 +97,26 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
     // 浪型色带：把连续同档/同操作的交易日并成区间（稀有档在带顶打标签 ✓）
     const RARE_LABEL: Record<string, { text: string; color: string }> = {
       末段: { text: '末段·兑现降仓', color: '#d64545' },
-      '4-3': { text: '4-3筑底·可分批接', color: '#2f7cd3' },
+      // ★ 2026-10-16 修正：原写「4-3筑底·可分批接」（＝原表「分批接主线」口径），但本链 4-3 的日子
+      //   **全部**是 operation=t_only（精确 4-3 共 104 天、进行中 4-2→4-3 共 27 天，无一例外 ✓）
+      //   ⇒ 标签与带内的操作建议自相矛盾 ✗，改为本链口径「只做T」。
+      '4-3': { text: '4-3筑底·只做T', color: '#2f7cd3' },
       '4-1': { text: '4-1回调初·观望降仓', color: '#8a5cf0' },
       W底: { text: 'W底确认·建仓', color: '#2f9e6e' },
       '3-3': { text: '主升3-3·建仓', color: '#2f9e6e' },
       双头: { text: '双头/M顶·见顶防跌', color: '#d64545' },
+    };
+    // 「进行中」写法（sub_level = 已确认段→进行段，如 `4-2→4-3`）：档位**尚未确认** ⇒ 单独文案 ✓
+    // （旧版只认精确匹配 ⇒「4-2→4-3」命不中，2024-04-25 之后卡片再没打过 4-3 标 ✗）
+    const RARE_FORMING: Record<string, { text: string; color: string }> = {
+      '4-3': { text: '4-3筑底中（未确认）', color: '#2f7cd3' },
+    };
+    const rareOf = (subLevel?: string) => {
+      const slv = subLevel || '';
+      const exact = RARE_LABEL[slv];
+      if (exact) return exact;
+      const forming = slv.includes('→') ? (slv.split('→').pop() || '') : '';
+      return forming ? RARE_FORMING[forming] || RARE_LABEL[forming] || null : null;
     };
     const areas: any[] = [];
     let start = 0;
@@ -116,7 +131,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
           for (let k2 = start; k2 < i && k2 < bars.length; k2++) {
             const ww = wmap[bars[k2].date];
             if (!ww) continue;
-            const hit = RARE_LABEL[ww.sub_level || ''];
+            const hit = rareOf(ww.sub_level);
             if (hit) { tag = hit; break; }
           }
           const band = { xAxis: dates[start], itemStyle: { color: bandColor(cur), opacity: 0.09 } };
