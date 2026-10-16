@@ -1261,6 +1261,7 @@ def main() -> int:
             #   开关 `WOLF_ARM_CARRY_DAYS`（**库内默认 0 ⇒ 逐字不变** ✓）：置 N ⇒ 把**前 N 个交易日**
             #   的 `legs.jsonl` 也一并读进来（同口径挂单 ✓），让龙头的回踩单有机会成交 ✓。
             _LV = {}
+            _leg_files = [os.path.join(day_dir, "legs_switch.jsonl"), os.path.join(day_dir, "legs.jsonl")]
             # ★ 2026-10-16 ✓（用户「买的还是太多了，能做个优先级排序，限制下吗」→ **N=3**）：
             #   埋伏腿**每日上限**：只武装「**低位 ∧ 大市值**」分数最高的前 N 条 ✓
             #   排序键依据 ✓：语料「低位方向：找辨识度最高的**老龙头**埋伏」✓；实测（33 天 / 1069 候选 ✓）
@@ -1328,7 +1329,6 @@ def main() -> int:
                               % (_amb_max, _amb_max, sorted(_amb_top), len(_amb_syms)), file=sys.stderr)
                     else:
                         _amb_top = set(_amb_syms[:_amb_max])
-            _leg_files = [os.path.join(day_dir, "legs_switch.jsonl"), os.path.join(day_dir, "legs.jsonl")]
             try:
                 _carry = int(float(os.getenv("WOLF_ARM_CARRY_DAYS", "0") or 0))
             except (TypeError, ValueError):
