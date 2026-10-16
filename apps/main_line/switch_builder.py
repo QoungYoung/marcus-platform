@@ -128,7 +128,14 @@ def board_ok(symbol_or_code):
         return True
     try:
         import sys as _s6
-        _jr = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # <repo>/jobs
+        # ⚠️ 2026-10-15 修 ✗：原来少了一层 dirname ⇒ 算出的是 **<repo>/apps** ✗（不是 <repo>/jobs ✓）
+        #   ⇒ `rotation_switch_arm` **永远导不进来** ✗ ⇒ 每次都落 `alerts.jsonl`：
+        #      `silent:switch_builder.py:119 | No module named 'rotation_switch_arm'` ✓
+        #   ⇒ 本函数的 docstring 要求"**三处共用同一条口径**"✓（选股 / 09:20 布腿 / 08:18 switch ✓）
+        #     而失败后会退到 `wolf_confirm_pick.board_allowed` ✗ ⇒ **退路与主路是两套实现** ✗
+        #   ⇒ 修法：补一层 dirname，指向 **<repo>/jobs** ✓（不动任何判据 ✓，只是让主路真的生效 ✓）
+        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _jr = os.path.join(_root, "jobs")
         if _jr not in _s6.path:
             _s6.path.append(_jr)
         from rotation_switch_arm import board_ok as _bk
