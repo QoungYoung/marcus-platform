@@ -43,6 +43,43 @@ def fetch(path, key=""):
         return json.loads(r.read().decode("utf-8", "ignore"))
 
 
+CN_STATS_URL = "https://www.stats.gov.cn/sj/fbrc/bnxxfb/"
+
+
+def fetch_cn_stats_schedule():
+    """抓**统计局年度发布日程表**，解析「居民消费价格指数月度报告」的每月发布日期 ✓。
+
+    为什么要它（2026-10-16 实测教训 ✗）：中国 CPI 的发布日**不规则**（近 12 个月是 9/11/9/10/11/10/9/9/9/**14**/9/9 日 ⇒
+    2026 年 9 月数据实际 **10-14** 发布），而我们原来的规则写死「每月 9 日」⇒ 偏了 5 天 ✗；
+    美元事件（CPI/FOMC）能用 FXMacroData 日历 ✓，中国数据需 key ✗ ⇒ 用官方日程补齐 ✓。
+
+    返回 {"202610": 14, ...}（键 = %Y%m，值 = 日 ✓，时间固定 09:30 ✓）；抓不到 ⇒ 返回 {}（fail-open ✓ 上层回落到规则 ✓）。
+    """
+    import re, urllib.request
+    try:
+        req = urllib.request.Request(CN_STATS_URL, headers={"User-Agent": "Mozilla/5.0"})
+        t = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "ignore")
+    except Exception:
+        return {}
+    t = re.sub(r"<script.*?</script>", " ", t, flags=re.S)
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = re.sub(r"\s+", " ", t)
+    i = t.find("居民消费价格指数月度报告")
+    if i < 0:
+        return {}
+    seg = t[i:i + 600]
+    days = [int(m.group(1)) for m in re.finditer(r"(\d{1,2})\s*/\s*[\u4e00-\u9fa5]", seg)][:12]
+    if len(days) < 12:
+        return {}
+    import datetime as dt
+    y = dt.date.today().year
+    out = {}
+    for m in range(1, 13):
+        # 表里的 12 个日期是"当月发布上上月数据"的**发布日期**；跨年时 1 月的日期属上一年 12 月数据 ⇒ 键用发布日期 ✓
+        out["%04d%02d" % (y, m)] = days[m - 1]
+    return out
+
+
 def load_policy_calendar(months_ahead=18):
     """把 config/policy_calendar.yaml 的 rules 展开成具体日期 + 合并 explicit（src=manual-policy ✓）。
 
@@ -57,13 +94,21 @@ def load_policy_calendar(months_ahead=18):
     d = yaml.safe_load(open(p, encoding="utf-8")) or {}
     out, today = [], dt.date.today()
     end = today + dt.timedelta(days=31 * months_ahead)
+    sched = fetch_cn_stats_schedule()          # 统计局官方日程（CPI 实际发布日 ✓ 不规则）
+    if sched:
+        print("  已解析统计局官方日程：%d 个月（例：2026-10 → %s 日 ✓）" % (len(sched), sched.get("202610", "?")))
     for r in d.get("rules") or []:
         months = r.get("months") or ([r["month"]] if r.get("month") else list(range(1, 13)))
         y, m = today.year, today.month
         for _ in range(months_ahead + 1):
             if m in months:
+                # ★ CPI 类优先用**官方日程**（按发布日期的主键 %Y%m 查 ✓）；其它条目仍用规则 ✓
+                dom = None
+                if r.get("release") == "cny_cpi" and sched.get("%04d%02d" % (y, m)):
+                    dom = sched["%04d%02d" % (y, m)]
+                dom = dom or r.get("day_of_month") or 1
                 try:
-                    day = dt.date(y, m, int(r.get("day_of_month") or 1))
+                    day = dt.date(y, m, int(dom))
                 except Exception:
                     day = None
                 if day and today <= day <= end:
