@@ -1321,9 +1321,22 @@ def main() -> int:
                     if _sc9:
                         _posl = sorted(v[0] for v in _sc9.values())
                         _mvl = sorted(v[1] for v in _sc9.values())
-                        _rank9 = sorted(_sc9.items(),
-                                        key=lambda kv: -(0.5 * _bs9.bisect_left(_posl, kv[1][0]) / max(1, len(_posl) - 1)
-                                                         + 0.5 * _bs9.bisect_left(_mvl, kv[1][1]) / max(1, len(_mvl) - 1)))
+                        # ★ 2026-10-16 ✓（用户「纯市值那还是埋伏吗」→ 量化后选 **D**）：
+                        #   排序键可切换 ✓：`mv` = **在低位池内按市值挑**（= 语料「低位方向：找**辨识度
+                        #     最高的老龙头**埋伏」的第二段 ✓）；`low_mv` = 低位∧市值各半（旧口径 ✓）。
+                        #   量化（314 天 / 12929 候选 / 真实市值 ✓）：
+                        #     D 纯市值 ⇒ 前向5/10/20 = **+0.59%/+1.93%/+6.13%** ✓、龙头命中 **38%** ✓、
+                        #                可成交天数 **14%** ✓（**三项全胜** ✓）
+                        #     B 各半（旧 ✓）⇒ +0.10%/+0.97%/+1.58% ✓、13% ✓、5% ✗
+                        #     E 纯低位 ⇒ **负收益** ✗（−0.11%/−0.22%）⇒ 位置再筛是**重复筛选** ✗
+                        #   开关 `WOLF_AMBUSH_RANK_KEY`（库内默认 `low_mv` ⇒ 逐字保持旧口径 ✓）
+                        _rkey9 = str(os.getenv("WOLF_AMBUSH_RANK_KEY") or "low_mv").strip().lower()
+                        if _rkey9 == "mv":
+                            _rank9 = sorted(_sc9.items(), key=lambda kv: -kv[1][1])
+                        else:
+                            _rank9 = sorted(_sc9.items(),
+                                            key=lambda kv: -(0.5 * _bs9.bisect_left(_posl, kv[1][0]) / max(1, len(_posl) - 1)
+                                                             + 0.5 * _bs9.bisect_left(_mvl, kv[1][1]) / max(1, len(_mvl) - 1)))
                         _amb_top = {k for k, _v in _rank9[:_amb_max]}
                         print("[prod] 埋伏腿每日上限 %d ⇒ 取前 %d: %s（共 %d 条候选）"
                               % (_amb_max, _amb_max, sorted(_amb_top), len(_amb_syms)), file=sys.stderr)
