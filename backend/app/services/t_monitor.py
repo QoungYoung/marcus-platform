@@ -1610,6 +1610,7 @@ class TMonitor:
                     #   实测（drabj13 全窗）：无底仓正T买腿 89 条 T+3 −2.66%(t=−4.20)、有底仓 66 条 +0.71%；
                     #   且无底仓腿在网关侧会退化成"重新建仓"（首开非底仓 → 转人工/超时取消，2026-03-24 即此）。
                     _defer_nobase = False
+                    _okb = True          # ⚠️ 先置默认 ✗：下面 try 里才赋值 ⇒ 异常时不会 NameError ✓
                     try:
                         from app.services import wolf_t_base_gate as _tbg
                         _okb, _whyb = _tbg.allow(self._held_today(sym))
@@ -1618,11 +1619,35 @@ class TMonitor:
                             if (sym, today) not in self._nobase_deferred:
                                 self._nobase_deferred.add((sym, today))
                                 print("[TMonitor] 无底仓→不发正T买腿 %s: %s" % (sym, str(_whyb)[:110]), flush=True)
+
                     except Exception as _eN7:
                         # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
                         from app.services import gate_alarm as _gaNote
                         _gaNote.note("t_monitor:line983", _eN7)
                         pass
+                    # ★ 2026-10-16 ✓（用户「T出要有T回对应」→「埋伏腿怎么还低吸了」）：
+                    #   病灶 ✗（dec1/1203 实录）：日志 `做T」）→ 跳过 sell high_sell` ⇒ 当天**没有 T出** ✗
+                    #     随后 `T回挂单价检查 SH600584: 待回补价=0.000 现表内=0 只`（= 无待回补 ✗）
+                    #     却仍然买入 300 股 @37.10 ✗ ⇒ 「**只有 T回、没有 T出**」✓
+                    #   修法 ✓：开关 `WOLF_T_PAIR_REQUIRE`（**库内默认 0 ⇒ 逐字保持旧行为** ✓）
+                    #     打开后：T回必须在"**待回补**"表里（= 近期有**确认制T出** ✓，沿用 A1 口径 ✓）
+                    if _okb and os.getenv("WOLF_T_PAIR_REQUIRE", "0").strip().lower() in ("1", "true", "yes", "on"):
+                        try:
+                            from app.services import wolf_t_base_gate as _tbgs2
+                            _acct2 = getattr(self, "account_id", None) or getattr(self, "account", None) or ""
+                            _pend2 = _tbgs2.pending_refill_symbols(_acct2) or {}
+                            _hit2 = sym in _pend2 or sym.upper() in _pend2 or sym.lower() in _pend2
+                            if not _hit2:
+                                _defer_nobase = True
+                                _seen2 = getattr(self, "_nopair_deferred", None)
+                                if _seen2 is None:
+                                    _seen2 = self._nopair_deferred = set()
+                                if (sym, today) not in _seen2:
+                                    _seen2.add((sym, today))
+                                    print("[TMonitor] 无 T出配对→不发 T回 %s（语料「T出要有T回对应」；"
+                                          "待回补表 %d 只）" % (sym, len(_pend2)), flush=True)
+                        except Exception:
+                            pass
                     # ★ 2026-10-15 ✓（用户「改吧」）：**T回 = 挂被动单在"卖出位置"** ✓
                     #   语料 ✓（`docs/wolf-behavior-blueprint.md:232`）：
                     #     「**被动挂单回补** | 已止损出局、等回到卖出位置 → **挂被动单、不盯分时**
