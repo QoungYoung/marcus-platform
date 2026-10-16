@@ -69,7 +69,9 @@ def main():
     sent = 0
     for kind, p, txt in todo:
         key = "%s:%s" % (day, kind)
-        if st.get("last_pushed") == key:
+        # 去重按**历史集合**判断 ✓（2026-10-16 教训：原来只看单个 last_pushed 字段 ✗，
+        # 清键时会连带把它清空 ⇒ 已经推过的线被重推一次 ✗）
+        if key in (st.get("history") or []):
             print("[macro-brief] %s(%s) 已推送过 ⇒ 跳过（去重 ✓）" % (day, kind))
             continue
         body = txt if len(txt) <= MAX_LEN else txt[:MAX_LEN] + "\n…（已截断，全文见 %s）" % p
