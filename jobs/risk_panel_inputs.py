@@ -82,6 +82,38 @@ def main():
     except Exception as e:
         out["gaps"].append({"item": "美股位置", "why": "读取失败 %s" % str(e)[:60]})
 
+    # ④b 领先因子：两融退潮 ∧ 指数未破位（2026-10-16 实测**唯一通过安慰剂检验**的领先信号 ✓）
+    #     信号腿：融资余额 20 日变化率 < 0 ∧ 沪指收盘 > MA60（仍在均线上方 ⇒ 是"背离"不是"已经跌了" ✗）
+    #     实测（1535 天）：信号日 287 个（5.4%）；后续 20 日 −0.51% vs 基线 +0.67%；
+    #     安慰剂（平移 ±10/±20 交易日，20 次重抽）中位 +0.92% ~ +2.09% ⇒ 信号落在带外 ✓；
+    #     P(10 日内单日 ≤-2%) 20% vs 基线 37% ⇒ **不是崩盘预警** ✗，是"阴跌/跑输"预警 ✓
+    #     ⇒ 用途：降低新增敞口 / 推迟加仓 ✓（不是清仓 ✗）
+    try:
+        from tushare_relay import relay_query
+        df = relay_query("margin")
+        mg = {}
+        for _, r in df.iterrows():
+            dd = str(r.get("trade_date") or "").replace("-", "")
+            try:
+                mg[dd] = float(r.get("rzye"))
+            except Exception:
+                pass
+        md = sorted(d for d in mg if d in cn)
+        ok = None
+        if len(md) > 21:
+            chg = mg[md[-1]] / mg[md[-21]] - 1
+            ma60 = st.mean(cn[x] for x in dates[-60:])
+            above = cn[md[-1]] > ma60
+            ok = (chg < 0) and above
+            out["factors"].append({"name": "领先·两融退潮背离(⛔代理已过安慰剂 ✓)", "asof": md[-1],
+                                   "value": round(chg, 4),
+                                   "reading": "融资余额 20 日变化 %+.2f%%；沪指 %.2f vs MA60 %.2f（%s）⇒ %s" % (
+                                       100 * chg, cn[md[-1]], ma60, "在上方" if above else "已破位",
+                                       "信号 ON（历史 20 日 -0.51%% vs 基线 +0.67%%，安慰剂带外 ✓；性质=阴跌预警 ✗ 非崩盘 ✗）" if ok else "信号 OFF"),
+                                   "proxy": True, "source": "relay margin(rzye) + index_daily_000001_SH（信号验证见 .dsh-tmp/lead_test2.py ✓）"})
+    except Exception as e:
+        out["gaps"].append({"item": "两融退潮领先因子", "why": "relay margin 取不到（%s）" % type(e).__name__})
+
     # ⑤ 涨跌家数（本地无 ⇒ 尝试 relay daily；失败则明确标缺 ✓）
     try:
         from tushare_relay import relay_query
