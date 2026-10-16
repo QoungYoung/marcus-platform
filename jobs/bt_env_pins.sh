@@ -168,6 +168,12 @@ export WOLF_FUND_ROOT="$PWD/data/_bt_fund"
 #   量化（台账「续5」）：影响面 4%、剔除集净 −9,216（剔除会赚）、6/8 臂改善；
 #   命中票：天津普林 13 条 −8,987、国星光电 −1,195、格尔软件 +967。缺业绩/PE ⇒ 放行（fail-open）。
 export WOLF_LOWDIP_JUNK_GATE='1'
+# ★ 2026-10-16 ✓（用户「埋伏腿能不能先过基本面筛选」→ 选 ① 补层）：
+#   窄杂毛门补一层：**业绩 bad ∧ PE 缺失/≤0**（= 亏损或估值取不到）⇒ 拦 ✓
+#   量化（低吸腿 episode 1906 条/54 臂 ✓）：影响面 16% ✓、剔除集净 **−52,944**（这批在亏钱 ✓）、
+#   补后总口径 18% ✓、臂级 **改善 22 / 恶化 14** ✓。
+#   ⚠️ 不可按"没 PE 就拦"✗（净 +53,809 ✗ 反向 ✓）⇒ 只在**业绩也差**时拦 ✓
+export WOLF_LOWDIP_JUNK_LOSS='1'
 # 窄杂毛门**上移到排名之前**（用户 2026-09-25：「过了这个门才能进排名」）
 #   量化（账本 §9.123）：杂毛占判级名额 4.0%；0107 数据中心 4 个名额里 2 个是杂毛 ✗
 export WOLF_JUNK_BEFORE_RANK='1'
@@ -1105,3 +1111,16 @@ export WOLF_UNIVERSE_EXCLUDE='1'
 #     开关 off ⇒ 与语料一致 6/9 = 67% ✗；开关 on ⇒ **9/9 = 100%** ✓（+33pp）
 #   ⇒ 回测臂默认开启 ✓；**生产默认仍为 0（off）** ⇒ 生产行为零变化 ✓，待用户拍板再开 ✓
 export WOLF_T_BUY_CORPUS_RULES='1'
+
+# ★ §9.875 ✓（2026-10-14 用户「统一用 deepseek-flash」✓）：**把模型写在明面上** ✗
+#   为什么必须显式 ✗：`/chat` 实测**忽略请求里的 model 参数** ✓（传一个故意不存在的模型名
+#     `__no_such_model__` 仍返回 HTTP 200 正常回答 ✓）⇒ 波浪/member/low_logic 这些走 dsh 的调用，
+#     **只用 dsh 容器启动时的 env** 决定模型 ✗ —— 容器一旦被别人以别的 env 重启 ✓，
+#     回测就会**悄悄换模型** ✗ 而不自知 ✓（历史上就发生过：本地容器是 v4-flash ✓、服务器是 flash ✗）。
+#   口径 ✓：三个变量统一 `deepseek-flash` ✓（与服务器口径一致 ✓ ⇒ 与历史跑可比 ✓）。
+#   ⚠️ 残余差距 ✗：本机 `marcus-dsh` 容器自己的 env 是 `DEEPSEEK_TRADE_MODEL=deepseek-v4-flash` ✗
+#     ⇒ 真正切换 wave 路径要**带这份 env 重启容器** ✗（而本会话的 harness 就跑在它里面 ✗✗
+#     重启会直接干掉当前会话 ⇒ 必须由用户安排 ✓）+ 之后重跑臂 ✓。
+export DEEPSEEK_MODEL="deepseek-flash"          # ★ 硬赋值（用户「统一用 deepseek-flash」✓；要实验请显式改这一行 ✗）
+export DEEPSEEK_TRADE_MODEL="deepseek-flash"          # ★ 硬赋值（用户「统一用 deepseek-flash」✓；要实验请显式改这一行 ✗）
+export BACKTEST_DEFAULT_MODEL="deepseek-flash"          # ★ 硬赋值（用户「统一用 deepseek-flash」✓；要实验请显式改这一行 ✗）

@@ -144,9 +144,33 @@ def blocked(symbol: Any, day: Optional[str] = None,
     flag = str(e.get("flag") or "")
     if flag not in earn_flags():
         return False, ""
+    # ★ 2026-10-16 ✓（用户「埋伏腿能不能先过基本面筛选、垃圾股也能买入吗」→ 选 ①）：
+    #   **补一层**：`业绩 bad` 且 **PE 缺失/≤0**（= 亏损 或 估值取不到）⇒ **拦** ✓
+    #   量化（低吸腿 episode **1906 条 / 54 个臂** ✓，口径同台账「续5」✓）：
+    #     · 缺口面 = **16%（307/1906）** ✓ ｜ 剔除集净 **−52,944** ✓（= 这批票整体在亏钱 ✓）
+    #     · 补后总口径 = 18% ✓ ｜ 剔除集净 **−49,311** ✓ ｜ 臂级 **改善 22 / 恶化 14** ✓
+    #     · 反例警戒 ✓：**不能**按"没 PE 就拦"✗（那会把赚钱的票也拦掉 ✓，净 +53,809 ✗ 反向 ✓）
+    #       ⇒ 所以只在**业绩也差**时才拦 ✓（交集思路不变 ✓）
+    #   开关 `WOLF_LOWDIP_JUNK_LOSS`（**库内默认 0 ⇒ 逐字保持现状** ✓）
+    _loss_gate = str(os.getenv("WOLF_LOWDIP_JUNK_LOSS", "0")).strip().lower() in ("1", "true", "yes", "on")
     try:
         v = F.val_state(sym, d, tag or (os.getenv("WOLF_FUND_TAG") or os.getenv("SZ_TAG") or ""))
     except Exception:
+        v = None
+    if _loss_gate:
+        if not v or not v.get("ok"):
+            return True, "杂毛门(补): 业绩=%s ∧ PE缺失 ⇒ 拦" % flag
+        _pe0 = v.get("pe_ttm")
+        if _pe0 is None:
+            return True, "杂毛门(补): 业绩=%s ∧ PE缺失 ⇒ 拦" % flag
+        try:
+            _pe0 = float(_pe0)
+        except Exception:
+            return True, "杂毛门(补): 业绩=%s ∧ PE不可解析 ⇒ 拦" % flag
+        if _pe0 <= 0:
+            return True, "杂毛门(补): 业绩=%s ∧ PE≤0(亏损) ⇒ 拦" % flag
+        if _pe0 > max_pe():
+            return True, "杂毛门: 业绩=%s ∧ PE=%.0f>%.0f" % (flag, _pe0, max_pe())
         return False, ""
     if not v or not v.get("ok"):
         return False, ""                      # 没估值数据 ⇒ 放行
