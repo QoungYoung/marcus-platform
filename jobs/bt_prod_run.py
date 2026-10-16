@@ -1306,12 +1306,27 @@ def main() -> int:
                             _cl9 = [float(x[1]) for x in sorted(_rr9, key=lambda x: str(x[0])) if x[1]]
                             _mv9 = 0.0
                             try:
-                                for _b9 in (_wc9.gz("daily_basic", {"trade_date": _today()}, "ts_code,total_mv") or []):
+                                # ⚠️ 2026-10-16 修 ✗：这里原来写 `_today()` —— **该名字不存在** ✗
+                                #   ⇒ 被 `except` 吞掉 ⇒ **市值项静默失效** ✗ ⇒ 排序退化成"位置分并列 0.5" ✓
+                                #   （用户告警原文：`bt_prod_run.py:817 | raise×1：name \'_today\' is not defined`）
+                                #   正确取法 ✓：本模块开头已 `_pin_clock_dynamic()` 把 `datetime.today()/now()`
+                                #   钉到**模拟日** ✓ ⇒ 直接用 `datetime.now()` ✓（与模块其它处同源 ✓）
+                                _day9 = datetime.now().strftime("%Y%m%d")
+                                _rows9 = _wc9.gz("daily_basic", {"trade_date": _day9}, "ts_code,total_mv") or []
+                                for _b9 in _rows9:
                                     if str(_b9[0]) == _tsc9:
                                         _mv9 = float(_b9[1] or 0)
                                         break
-                            except Exception:
+                                if not _rows9:
+                                    print("[prod] ⚠️ 埋伏排序取市值返回空（%s）⇒ 该票市值按 0 计" % _day9,
+                                          file=sys.stderr)
+                                elif _mv9 <= 0:
+                                    print("[prod] ⚠️ 埋伏排序未取到 %s 市值（%s 行）⇒ 按 0 计"
+                                          % (_tsc9, len(_rows9)), file=sys.stderr)
+                            except Exception as _emv9:
                                 _mv9 = 0.0
+                                print("[prod] ⚠️ 埋伏排序取市值异常（改为不参与市值分）: %s"
+                                      % str(_emv9)[:80], file=sys.stderr)
                             if len(_cl9) >= 60:
                                 _lo9 = min(_cl9[-250:]); _hi9 = max(_cl9[-250:])
                                 _pos9 = (_cl9[-1] - _lo9) / (_hi9 - _lo9) if _hi9 > _lo9 else 0.5
