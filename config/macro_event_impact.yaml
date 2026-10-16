@@ -1,0 +1,147 @@
+# 宏观事件 → A 股关联（知识库；供「事件提醒 agent」引用 ✓ 可追溯、可修订 ✓）
+#
+# 纪律（很重要）：
+#  · 本文件是**定性的关联说明**（传导路径 + 典型敏感板块 ✓），不是历史统计 ✗；
+#  · 「典型敏感」是市场共识层面的经验描述（⛔ 未经我们自己的数据验证），引用时必须保留这句限定 ✓；
+#  · 事件**方向**不可预知 ✗（我们只做仓位与节奏 ✓）；任何"历史上该事件后涨跌 X%"必须另有出处 ✓ 否则不许写 ✓。
+#  · 板块名单对应 A 股常用分类；与项目持仓/主线链的交集由 agent 结合实时数据补充 ✓。
+meta:
+  updated: '2026-10-16'
+  owner: marcus-platform
+  note: 新增事件类型时同步补这里的条目 ✓ 并保持 release 键与 data/macro_calendar.json 的 release 字段一致 ✓
+
+events:
+  policy_rate:
+    name: 美联储 FOMC 政策利率决议
+    what: 联邦基金利率目标区间与声明/点阵图；全球无风险利率之锚 ✓
+    watch: 是否加息/降息、声明措辞、点阵图、主席发布会 ✓
+    transmit:
+      - 美债利率与实际利率 ⇒ 全球贴现率 ⇒ 高估值成长股估值分母 ✓
+      - 美元指数 ⇒ 人民币汇率 ⇒ 北向资金/出口链汇兑 ✓
+      - 全球风险偏好 ⇒ 外资对新兴市场（含 A 股）配置意愿 ✓
+    sectors_typical:
+      high_sensitivity: [成长股/创业板, 半导体, 军工, 创新药, 券商（风险偏好 β）]
+      beneficiary_when_hawkish: [银行, 保险（利差/配置）, 高股息/红利]
+      pressure_when_hawkish: [地产链, 黄金/有色（实际利率上行 ✗）, 航空/造纸（美元负债）]
+    local_hooks: 与 LPR/MLF 的联动、汇率压力下的政策空间 ✓
+    common_misread: 把"加息预期升温"直接读成"明天必跌" ✗ —— 公告日平均收益并不差（公告溢价/pre-FOMC drift），且方向取决于超预期 vs 定价 ✓
+
+  inflation:
+    name: 美国 CPI（消费者物价指数）
+    what: 通胀读数（同比/环比、核心）✓ 直接改变加息路径定价 ✓
+    watch: 核心环比（最重要 ✓）、同比、超预期幅度 ✓
+    transmit:
+      - 通胀超预期 ⇒ 加息预期升温 ⇒ 实际利率上行 ⇒ 杀估值（尤其高久期）✓
+      - 美元/美债收益率波动 ⇒ 人民币与外资流向 ✓
+    sectors_typical:
+      high_sensitivity: [半导体/AI 算力链（久期最长）, 创业板指, 券商]
+      pressure_when_hot: [黄金, 有色的金融属性部分]
+      resilient: [红利/银行（低估值现金流）, 内需消费（受美债影响小）]
+    local_hooks: 与国内 CPI/PPI、以及政策对冲节奏的相互作用 ✓
+    common_misread: 只盯同比不看核心环比 ✗；把"热 CPI ⇒ 我们该清仓"当结论 ✗（我们只调上限与节奏 ✓）
+
+  core_inflation:
+    name: 美国核心 CPI
+    what: 剔除食品能源的通胀 ✓ 更能反映趋势 ✓
+    watch: 环比是否超预期 ✓
+    transmit: 同 inflation ✓（权重更高的加息路径定价 ✓）
+    sectors_typical: {high_sensitivity: [成长/半导体], resilient: [红利/银行]}
+    common_misread: 与 CPI 同日发布时重复计价 ✗（两条数据要合并看 ✓）
+
+  non_farm_payrolls:
+    name: 美国非农就业
+    what: 新增就业/失业率/时薪 ✓ 决定"经济强弱 ⇒ 加息或衰退"两条叙事 ✓
+    watch: 新增就业 vs 预期、时薪同比 ✓
+    transmit:
+      - 强就业 ⇒ 加息预期上行（利空久期）但经济韧性支撑风险偏好（多空交织 ✓）
+      - 弱就业 ⇒ 衰退担忧 ⇒ 全球风险偏好下行 ⇒ 出口链承压 ✓
+    sectors_typical:
+      high_sensitivity: [出口链（家电/纺服/机械）, 半导体, 有色]
+      domestic: [内需消费, 红利/银行（相对脱敏）]
+    common_misread: 单向解读"非农强=跌"或"非农弱=涨" ✗（两种情形都可能是利空 ✓）
+
+  unemployment_rate:
+    name: 美国失业率
+    what: 与就业报告同日 ✓ 触发"萨姆规则"式衰退叙事的往往就是它 ✓
+    watch: 是否连续上行 ✓
+    transmit: 衰退担忧 ⇒ 全球风险偏好下行 ⇒ 出口链与顺周期承压 ✓
+    sectors_typical: {high_sensitivity: [出口链, 有色, 半导体], resilient: [红利, 医药]}
+    common_misread: 忽略它与非农的背离 ✗
+
+  gdp:
+    name: 美国 GDP
+    what: 增长读数 ✓ 影响"软着陆/衰退"叙事 ✓
+    transmit: 增长预期 ⇒ 全球需求 ⇒ 出口链 ✓
+    sectors_typical: {high_sensitivity: [出口链, 有色/化工], resilient: [内需消费]}
+    common_misread: 季度数据的滞后性 ✗
+
+  pce:
+    name: 美国 PCE 物价
+    what: 美联储最看重的通胀指标 ✓（比 CPI 更贴近政策反应函数 ✓）
+    watch: 核心 PCE 环比 ✓
+    transmit: 同 inflation ✓
+    sectors_typical: {high_sensitivity: [成长/半导体], resilient: [红利/银行]}
+    common_misread: 以为 PCE 不如 CPI 重要 ✗（对政策路径其实更关键 ✓）
+
+  retail_sales:
+    name: 美国零售销售
+    what: 消费动能 ✓ 影响"经济强弱 ⇒ 加息路径"✓
+    transmit: 消费 ⇒ 全球需求 ⇒ 出口链与大宗 ✓
+    sectors_typical: {high_sensitivity: [出口链, 有色, 消费电子]}
+    common_misread: 忽略与通胀数据的组合含义 ✗
+
+  cny_cpi:
+    name: 中国 CPI/PPI 月度数据
+    what: 国内通胀与工业品价格 ✓ 影响宽松空间与"通缩/再通胀"叙事 ✓
+    watch: PPI 转正/回落、CPI 与 PPI 剪刀差 ✓
+    transmit:
+      - 通胀偏低 ⇒ 宽松空间打开 ✓（利好成长/顺周期弹性）
+      - PPI 改善 ⇒ 上游/中游制造盈利修复 ✓
+    sectors_typical:
+      high_sensitivity: [上游资源（煤炭/有色/化工）, 中游制造, 消费（CPI 相关：食品/养殖）]
+      policy_linked: [地产链, 券商（宽信用预期）]
+    local_hooks: 与 LPR/MLF/政治局会议的**连续叙事**一起看 ✓（单点数据意义有限 ✓）
+    common_misread: 只看 CPI 不看 PPI ✗（PPI 对企业盈利更直接 ✓）
+
+  cny_lpr:
+    name: LPR 报价
+    what: 贷款市场报价利率 ✓ 直接影响按揭与企业融资成本 ✓
+    watch: 1 年/5 年是否下调 ✓
+    transmit: 5 年期下调 ⇒ 地产链与宽信用预期 ✓；不下调 ⇒ 政策空窗期 ✓
+    sectors_typical:
+      beneficiary_if_cut: [地产链（开发/建材/家居）, 银行（量升价降，需看结构）, 券商]
+      watch: [高股息（利率下行背景的相对优势）]
+    common_misread: 把"没降"读成利空 ✗（预期差才是关键 ✓）
+
+  cny_mlf:
+    name: MLF 操作
+    what: 中期借贷便利（量+价 ✓）—— LPR 的先行指标 ✓
+    watch: 是否超额续作、利率是否调整 ✓
+    transmit: 流动性投放 ⇒ 银行间利率与宽信用预期 ✓
+    sectors_typical: {beneficiary_if_easing: [银行, 地产链, 券商, 成长股]}
+    common_misread: 只看价格不看量 ✗
+
+  cn_two_sessions:
+    name: 全国两会（政府工作报告）
+    what: 年度增长目标、赤字率、专项债、产业政策定调 ✓
+    watch: 赤字率、专项债额度、新增提法（新质生产力/AI ✓）
+    transmit: 政策定调 ⇒ 全年主线与主题投资 ✓
+    sectors_typical:
+      policy_driven: [基建(建筑/建材), 军工, 新能源, 半导体/信创（自主可控 ✓）, 消费（以旧换新）]
+    common_misread: 把"提法"当"订单" ✗
+
+  cn_cewc:
+    name: 中央经济工作会议
+    what: 次年经济政策总基调（财政/货币/地产/产业 ✓）✓
+    watch: 措辞变化（"适度宽松/稳健"、地产表述、风险化解 ✓）
+    transmit: 定调 ⇒ 跨年行情的主线与风格 ✓
+    sectors_typical: {policy_driven: [地产链, 基建, 券商（资本市场表述 ✓）, 消费, 科技自主可控]}
+    common_misread: 忽略与政治局会议的**递进关系** ✗
+
+  cn_politburo:
+    name: 政治局会议（经济议题）
+    what: 季度经济定调会（4/7/12 月 ✓）—— 中央经济工作会议的前奏 ✓
+    watch: 对经济形势的判断（"稳中向好" ↔ "下行压力" ✓）、新增政策提法 ✓
+    transmit: 定调 ⇒ 政策预期 ⇒ 顺周期与地产链 ✓
+    sectors_typical: {policy_driven: [地产链, 基建, 银行, 券商, 消费]}
+    common_misread: 把例会读成"大新闻" ✗（要看措辞的**边际变化** ✓）

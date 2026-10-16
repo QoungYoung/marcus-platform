@@ -67,6 +67,28 @@ def main():
         facts["wave_state"] = {k: ws.get(k) for k in ("date", "level", "sub_level", "operation", "mode")}
     except Exception:
         pass
+    # 事件关联知识库 ✓（config/macro_event_impact.yaml：是什么/看什么/传导路径/关联板块 ✓）
+    #   注意：那是**定性说明**（⛔ 未经我们数据验证的经验描述）⇒ 引用时必须带这句限定 ✓，不许当统计用 ✗
+    try:
+        import yaml
+        imp = yaml.safe_load(open(os.path.join("config", "macro_event_impact.yaml"), encoding="utf-8"))["events"]
+        rel = str(ev["release"])
+        key = rel if rel in imp else None
+        if not key:
+            for k in imp:
+                for tok in str(k).replace("/", " ").replace("_", " ").split():
+                    if tok and tok in rel.replace("_", " "):
+                        key = k
+                        break
+                if key:
+                    break
+        if key:
+            facts["impact"] = imp[key]
+        else:
+            facts["impact_gap"] = "knowledge_base_missing: %s" % rel
+    except Exception as e:
+        facts["impact_gap"] = "load_failed: %s" % str(e)[:80]
+
     out = os.path.join(DATA, "event_alert_%s.json" % today)
     json.dump(facts, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print("写入 %s ✓（建议文案请写 data/event_alert_%s.md ⇒ 由 push_macro_briefing 推 QQ ✓）" % (out, today))
