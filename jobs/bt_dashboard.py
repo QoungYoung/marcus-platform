@@ -955,6 +955,46 @@ class Store:
             self._proc_seen[pid] = (cpu, io)
         return out
 
+    def resolve_window(self):
+        """★ 2026-10-16 重构 ✓（用户「看板还是坏的，能重构吗」）：**唯一**的窗口解析器
+
+        为什么必须收敛 ✗：窗口/进度原先散在 **19 处**各自推导
+          （日志头部 ✗ / `run_manifest.json` 残留 ✗ / 活动天 ✗ / PG ✗ 混用 ✓）
+          ⇒ 修一处、其余照旧 ⇒ 表现为"到处都坏" ✓（实测 78 个引用点 / 19 个赋值点 ✓）
+        优先级 ✓（**产物事实优先**，日志只作最后回退 ✓）：
+          ① `<root>/_summary/prod_*.json` ⇒ 真的跑完的天 ✓（文件事实 ✓）
+          ② `.dsh-tmp/wolfbt/console_run.json` ⇒ 臂自报窗口 ✓（**root 匹配才采用** ✓）
+          ③ 主日志 span / 清单 / 活动天 ✓（回退 ✓）
+        返回 dict：start / end / done(list) / done_n / source
+        """
+        import glob as _g13
+        done = []
+        try:
+            done = sorted({os.path.basename(x).split("prod_")[-1][:8] for x in _g13.glob(
+                os.path.join(str(self.root), "_summary", "prod_*.json"))})
+            done = [d for d in done if len(d) == 8 and d.isdigit()]
+        except Exception:
+            done = []
+        cs_start = cs_end = None
+        try:
+            import json as _js13
+            _cs13 = _js13.load(open(os.path.join(REPO, ".dsh-tmp", "wolfbt", "console_run.json"),
+                                    encoding="utf-8")) or {}
+            if os.path.abspath(str(_cs13.get("root") or "")) == os.path.abspath(str(self.root or "")):
+                cs_start = compact_day(_cs13.get("start"))
+                cs_end = compact_day(_cs13.get("end"))
+        except Exception:
+            cs_start = cs_end = None
+        try:
+            info = self.log_info() or {}
+        except Exception:
+            info = {}
+        src = "products" if done else ("console" if (cs_start or cs_end) else "log")
+        start = (done[0] if done else None) or cs_start or compact_day(info.get("last_started")) \
+            or (self.manifest_start_day() or None)
+        end = (done[-1] if done else None) or cs_end or compact_day(info.get("last_completed"))
+        return {"start": start, "end": end, "done": done, "done_n": len(done), "source": src}
+
     def manifest_start_day(self) -> str:
         """运行清单里的**逻辑起点**（`run_manifest.json` 的 start_day；续跑时继承上一次）。
 
@@ -1295,7 +1335,12 @@ class Store:
             run_end = cal[-1]
         # 窗口起点：清单逻辑起点优先（续跑继承 20260105），否则回退日志头部起点。
         # 否则续跑后窗口从续跑那天开始，之前已重放的日子（0105-0120）整段消失（实测曲线只剩 1 点）。
-        _wstart = self.manifest_start_day() or run_start
+        # ★ 2026-10-16 重构 ✓：窗口起点/终点/已完成天数 ⇒ **统一走解析器** ✓
+        _rw = self.resolve_window()
+        if _rw.get("end"):
+            run_end = _rw["end"]
+        _wstart = _rw.get("start") or run_start
+        _done_days = _rw.get("done") or []
         window = [d for d in cal if _wstart and run_end and _wstart <= d <= run_end]
         # ★ 2026-10-16 ✓（用户「回测监控还是上一个回测」）：**续跑**时日志头部写的是
         #   "续跑起点 → 终点"（实测 dec1：`41 个交易日：20251203 → 20260130` ✗）
@@ -1312,10 +1357,9 @@ class Store:
             _done_days = sorted({os.path.basename(x).split("prod_")[-1][:8] for x in _g9.glob(_pat)})
         except Exception:
             _done_days = []
-        days_total = max(int(log.get("days_total") or 0), len(window) or 0) or None
-        last_completed = log.get("last_completed") or (active_days[-1] if active_days else None)
-        if _done_days:
-            last_completed = max(last_completed or "", _done_days[-1]) or None
+        days_total = (len(window) or None) or max(int(log.get("days_total") or 0), 0) or None
+        last_completed = (_done_days[-1] if _done_days else None) \
+            or log.get("last_completed") or (active_days[-1] if active_days else None)
         days_done = len([d for d in window if last_completed and d <= last_completed]) or None
         if days_done is None and _done_days:
             days_done = len(_done_days)
@@ -1414,9 +1458,15 @@ class Store:
 
         # ── 净值重建（口径见页脚/覆盖率面板）───────────────────────────────
         symbols = sorted({t["symbol"] for t in trades_pg} | {p["symbol"] for p in pg["positions"]})
-        curve_start = (self.manifest_start_day() or run_start
-                       or (active_days[0] if active_days else None))
-        curve_end = last_completed or (active_days[-1] if active_days else None)
+        # ★ 2026-10-16 ✓（用户：看板"净值曲线 0 个交易日 / 日盈亏无数据" ✗）：
+        #   病灶：`curve_start` 用 `manifest_start_day()`（**旧跑残留的清单起点** ✗，实测 20260105 ✓）
+        #     优先级**高于**本臂的真实起点 ✗ ⇒ 与 `curve_end`（本臂进度 20251208 ✓）**倒挂** ✗
+        #     ⇒ `cal_win` 为空 ⇒ 曲线/日盈亏/触发区**整页 0 天** ✓✓
+        #   修法：**臂自己的状态优先** ✓（`.dsh-tmp/wolfbt/console_run.json`，root 匹配才采用 ✓；
+        #     起臂脚本每次都会把本臂写进去 ✓），清单与日志只作后备 ✓；并保证不倒挂 ✓。
+        # ★ 2026-10-16 重构 ✓：曲线窗口同样走**唯一解析器** ✓（不再各处自推 ✗）
+        curve_start = _rw.get("start") or run_start or (active_days[0] if active_days else None)
+        curve_end = _rw.get("end") or last_completed or (active_days[-1] if active_days else None)
         # 曲线要覆盖「窗口内全部交易日」，并且必须含**进行中的那一天**：PG 里当天已有成交，
         # 若曲线停在昨天，重建现金与账户可用现金就不是同口径（差额会被当成误差）。
         pg_last_day = None
@@ -2550,7 +2600,7 @@ def arm_payload() -> dict:
     st["driver"] = ({"pid": _drv[0][0], "cmd": _drv[0][3]} if _drv else None)
     try:
         if st.get("root") and os.path.isdir(st["root"]):
-            pr = day_progress(st["root"], st.get("account") or "")
+            pr = canonical_progress(st["root"], day_progress(st["root"], st.get("account") or ""))
             st["day"] = pr.get("day")
             st["day_index"] = pr.get("day_index")
             st["days_total"] = pr.get("days_total")
@@ -2610,8 +2660,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(GSAP_PATH, "application/javascript; charset=utf-8",
                                   cache="public, max-age=3600")
             if route == "/api/progress":
-                return self._json(day_progress(self.store.root, getattr(self.store, "account", "") or "",
-                                                getattr(self.store, "log_path", "") or ""))
+                # ★ 2026-10-16 重构 ✓：统一走 `canonical_progress()`（产物优先 ✓）
+                return self._json(canonical_progress(
+                    self.store.root,
+                    day_progress(self.store.root, getattr(self.store, "account", "") or "",
+                                 getattr(self.store, "log_path", "") or "")))
             if route == "/api/snapshot":
                 return self._json(self.store.snapshot())
             if route == "/api/symbol":
@@ -2863,6 +2916,56 @@ def runs_payload() -> dict:
     return {"running": procs, "roots": _run_roots(), "logs": logs[:80], "now": now_iso()}
 
 
+def canonical_progress(root: str, pr: dict) -> dict:
+    """★ 2026-10-16 重构 ✓：把 `day_progress()` 的**日志回退口径**收敛到"**产物优先**" ✓
+
+    为什么 ✗：`day_progress()` 按 §9.852「以日志为准」找"正在跑哪天" ✓，
+      但**日志里可能混着别的跑的日期** ✗ —— 实测 dec1 报 `20260105` ✗（那是 t68 的首日 ✗）
+      ⇒ 页面进度与曲线/持仓**互相矛盾** ✓（"到处都坏"的最后一处 ✓）
+    优先级 ✓：① 正在跑的 `bt_prod_run --day <日>`（**本 root** ✓）
+              ② `<root>/_summary/prod_*.json` 的**最大已完成日** ✓
+              ③ 原 `day_progress` 的结论 ✓（回退 ✓）
+    `day_index` 用"**已完成天数**" ✓（诚实口径 ✓，不再依赖日志窗口 ✗）
+    """
+    out = dict(pr or {})
+    done = []
+    try:
+        import glob as _g15
+        done = sorted({os.path.basename(x)[5:13] for x in
+                       _g15.glob(os.path.join(str(root), "_summary", "prod_*.json"))})
+        done = [d for d in done if len(d) == 8 and d.isdigit()]
+    except Exception:
+        done = []
+    tag = os.path.basename(os.path.normpath(str(root or "")))
+    cur = None
+    try:
+        for _d15 in os.listdir("/proc"):
+            if not _d15.isdigit():
+                continue
+            try:
+                _c15 = open("/proc/%s/cmdline" % _d15, "rb").read().decode("utf-8", "replace").replace("\0", " ")
+            except Exception:
+                continue
+            if "bt_prod_run" in _c15 and tag and tag in _c15:
+                _m15 = re.search(r"--day\s+(\d{8})", _c15)
+                if _m15:
+                    cur = _m15.group(1)
+                    break
+    except Exception:
+        pass
+    if done:
+        out["days_done"] = len(done)
+        out["day_index"] = len(done)
+    if cur:
+        out["day"] = cur
+    elif done:
+        out["day"] = done[-1]
+    if done and (out.get("days_total") or 0) < len(done):
+        out["days_total"] = len(done)
+    out["progress_source"] = "products" if (done or cur) else "log"
+    return out
+
+
 def day_progress(root: str, account: str = "", log_path: str = "") -> dict:
     """**当日进度 + 事件时间线**（账本 §9.588 ✓）——「走到什么时刻、发生了什么事」✓
 
@@ -2927,12 +3030,22 @@ def day_progress(root: str, account: str = "", log_path: str = "") -> dict:
             out["days_total"] = len(_wd) if _wd else len(day_dirs)
         else:
             out["days_total"] = len(day_dirs)
-        done = {os.path.basename(p)[5:13] for p in _g.glob(os.path.join(summ, "prod_2026*.json"))}
+        # ★ 2026-10-16 修 ✗（用户「看板还是坏的」）：原来写死 **`prod_2026*.json`** ✗
+        #   ⇒ 跑 **2025-12** 的臂（dec1 ✓）"已完成的天"恒为空 ✗ ⇒ `/api/progress` 永远显示错 ✓
+        #   （实测：dec1 已完成 12 天，进度却报"第 1/43 天、当前 20260105" ✗）
+        #   修法 ✓：**不限年份**，取所有 `prod_<8位日期>.json` ✓（与 `resolve_window()` 同口径 ✓）
+        _done_all = set()
+        for _p in _g.glob(os.path.join(summ, "prod_*.json")):
+            _t = os.path.basename(_p)[5:13]
+            if len(_t) == 8 and _t.isdigit():
+                _done_all.add(_t)
+        done = _done_all
         _stepped = set()
-        for _p in _g.glob(os.path.join(summ, "*_2026*.log")):
+        for _p in _g.glob(os.path.join(summ, "*.log")):
             _b = os.path.basename(_p)
             for _tok in _b.replace(".", "_").split("_"):
-                if len(_tok) == 8 and _tok.isdigit() and _tok[:4] == "2026":
+                # ★ 同上 ✓：不限年份 ✓（原来只认 2026 ✗ ⇒ 2025-12 的臂进度全错 ✓）
+                if len(_tok) == 8 and _tok.isdigit() and _tok[:2] == "20":
                     _stepped.add(_tok)
         out["stepped_days"] = sorted(_stepped)
         _in_prog = sorted(d for d in _stepped if d not in done and d in day_dirs)
