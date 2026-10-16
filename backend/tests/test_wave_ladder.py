@@ -383,3 +383,19 @@ def test_artifact_roundtrip(tmp_path, monkeypatch):
     assert W.write_artifact(ev, "wl_test.json") is True
     got = W.read_ladder("wl_test.json")
     assert got and got["rung_index"] == 0 and got["switch"] == "shadow"
+
+
+def test_window_defaults_unchanged():
+    """硬约束守护：窗口参数的**默认值**必须一字不改（生产零影响 ✓）。
+
+    等级模型（E1/E1b）要按「度」重标跑周线 ⇒ 这些参数改成**可环境变量覆盖**；
+    默认值一旦被顺手改动，生产 `wave_state.json` 的档位就会跟着挪 ⇒ 本测钉死默认值 ✓。
+    """
+    import subprocess
+    code = ("import sys;sys.path.insert(0, %r);import wave_ladder as W;"
+            "print(W.MIN_BARS, W.HI_WIN, W.RALLY_WIN, W.ORIGIN_BARS)"
+            % os.path.join(ROOT, "apps", "main_line"))
+    env = {k: v for k, v in os.environ.items() if not k.startswith("WOLF_WAVE_LADDER")}
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "80 60 20 900", out.stdout
