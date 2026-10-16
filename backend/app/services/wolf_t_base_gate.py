@@ -85,6 +85,46 @@ def refill_enabled() -> bool:
     return os.getenv("WOLF_T_OUT_REFILL", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def ambush_exclude_enabled() -> bool:
+    """埋伏仓不做T（`WOLF_T_EXCLUDE_AMBUSH`，库内默认 0 = 关闭）✓"""
+    return str(os.getenv("WOLF_T_EXCLUDE_AMBUSH", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def ambush_held_symbols(account_id: str, days: int = 30) -> set:
+    """返回「**埋伏仓**」标的集合 ✓（用户 2026-10-16：「**埋伏腿不该有T出T入**」）
+
+    口径 ✓（一句话）：该票**最近一笔买入**的理由里含 `wolf_ambush_buy` ⇒ 这是埋伏建仓 ⇒ **不做 T** ✓
+      为什么用"最近一笔买入"✗：埋伏是**建仓**语义 ✓（低位先手 ✓），做T是"趋势票/T仓"的事 ✓
+        （语料：「低吸只在**趋势票**上摊薄」「尽量不要把做T的仓位**变加仓**」✓）；
+        若之后又被低吸/T回买过 ⇒ 说明已进入做T链 ⇒ 不再算纯埋伏仓 ✓（保守 ✓）。
+      大小写：臂里 symbol 是 `SH600584`、触发是 `sh600584` ⇒ 统一大写放入集合 ✓
+      纯只读 ✓；任何异常 ⇒ 空集 ⇒ **退化为旧行为** ✓（绝不影响主链路 ✓）
+    """
+    out = set()
+    try:
+        if not ambush_exclude_enabled():
+            return out
+        from sqlalchemy import text as _text
+        from app.database import SessionLocal
+        n = int(days or 30)
+        with SessionLocal() as db:
+            rows = db.execute(_text(
+                "SELECT symbol, reason, trade_date FROM paper_trades "
+                "WHERE account_id = :a AND direction = '买入' "
+                "ORDER BY trade_date DESC, id DESC LIMIT 4000"), {"a": account_id}).fetchall()
+        seen = set()
+        for sym, reason, _d in rows or []:
+            s_up = str(sym or "").strip().upper()
+            if not s_up or s_up in seen:
+                continue
+            seen.add(s_up)                     # 每个票只看**最近一笔买入** ✓
+            if "wolf_ambush_buy" in str(reason or ""):
+                out.add(s_up)
+        return out
+    except Exception:
+        return set()
+
+
 def pending_refill_symbols(account_id: str, days: Optional[int] = None) -> Dict[str, int]:
     """返回 {symbol: 待回补股数} ✓ ——「有过确认制T出 ∧ 之后未足额买回 ∧ 仍有持仓」✓。
 

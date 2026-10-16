@@ -1414,6 +1414,25 @@ class TMonitor:
                         print("[TMonitor] T出待回补并入做T宇宙 %d 只: %s" % (len(_add), _add[:8]), flush=True)
             except Exception as _eR:
                 pass
+            # ★ 2026-10-16 ✓（用户：「**埋伏腿不该有T出T入**」）：
+            #   埋伏 = **建仓**语义 ✓（低位先手 ✓）；做T = 趋势票/T仓的事 ✓
+            #   （语料：「低吸只在**趋势票**上摊薄」「尽量不要把做T的仓位**变加仓**」✓）
+            #   ⇒ 在**做T宇宙入口**一次性排除「埋伏仓」✓（不在各闸上打补丁 ✓）：
+            #     口径 = 该票**最近一笔买入**含 `wolf_ambush_buy` ⇒ 不做 T ✓（T出/T回都不发 ✓）
+            #   开关 `WOLF_T_EXCLUDE_AMBUSH`（**库内默认 0 ⇒ 逐字不变** ✓）
+            try:
+                from app.services import wolf_t_base_gate as _tbg_a
+                if _tbg_a.ambush_exclude_enabled():
+                    _amb2 = _tbg_a.ambush_held_symbols(T_MONITOR_ACCOUNT)
+                    if _amb2:
+                        _keep = [s for s in syms if str(s).strip().upper() not in _amb2]
+                        _drop = [s for s in syms if str(s).strip().upper() in _amb2]
+                        if _drop:
+                            print("[TMonitor] 埋伏仓不做T ⇒ 移出做T宇宙 %d 只: %s"
+                                  % (len(_drop), _drop[:8]), flush=True)
+                        syms = _keep
+            except Exception:
+                pass
             if not syms:
                 return
             quotes = fetch_tencent_quote([_normalize_symbol(s) for s in syms])
