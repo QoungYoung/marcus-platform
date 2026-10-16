@@ -609,8 +609,39 @@ def main():
                             except Exception:
                                 _old = []
                             _merged = list(dict.fromkeys(list(_old) + [str(x) for x in _pb]))
+                            # ★ 2026-10-15 ✓（用户选 ①）：**把"代码→主题"一并写进名单文件** ✓
+                            #   病灶 ✗（实测 dec1/1203）：埋伏候选是**从"名额之外"的池里挑的** ✓
+                            #     （`_rest = _ordered[MAX_STOCKS-K:]` ✓）⇒ **天然不在 `stocks` 里** ✗
+                            #     ⇒ 08:18 的 `switch_builder` 按"判级主题"查 `stock_confirm_result.json`
+                            #       **必然查不到** ✗ ⇒ 静默 continue ⇒ **一只都并不进买入列表** ✓
+                            #     ⇒ 腿里永远没有 `stage="ambush"` ✗（t37 时代有 2~4 条/天 ✓）
+                            #   为什么这样修 ✓：名单与主题**同源同写** ✓，builder 只读不改判据 ✓。
+                            _theme_map = {}
+                            try:
+                                _old_t = {}
+                                try:
+                                    _old_t = dict((_js2.load(open(_ap, encoding="utf-8")) or {}).get("themes") or {})
+                                except Exception:
+                                    _old_t = {}
+                                from wolf_context import theme_of_symbol as _tos
+                                for _c in _pb:
+                                    _s6 = "".join(ch for ch in str(_c) if ch.isdigit())[:6]
+                                    if not _s6:
+                                        continue
+                                    _th = _old_t.get(_s6)
+                                    if not _th:
+                                        try:
+                                            _th = _tos(("SH" if _s6[0] == "6" else "SZ") + _s6)
+                                        except Exception:
+                                            _th = None
+                                    if _th:
+                                        _theme_map[_s6] = str(_th)
+                                _theme_map = dict(_old_t, **_theme_map)
+                            except Exception as _etm:
+                                print("[stock_confirm] 埋伏名单主题表失败(不影响名单 ✓): %s" % str(_etm)[:70],
+                                      file=sys.stderr)
                             _js2.dump({"day": os.getenv("WOLF_ASOF_DAY") or "",
-                                       "symbols": _merged},
+                                       "symbols": _merged, "themes": _theme_map},
                                       open(_ap, "w", encoding="utf-8"), ensure_ascii=False)
                             print("[stock_confirm] 埋伏候选落盘：本趟 %d 只 ⇒ 累计 %d 只"
                                   % (len(_pb), len(_merged)), file=sys.stderr)

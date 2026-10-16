@@ -486,6 +486,19 @@ def build_plan():
                 except Exception as _e2:
                     _judged_theme = None
                 if not _judged_theme:
+                    # ★ 2026-10-15 ✓（用户选 ①）：退到**名单文件自带的主题表** ✓
+                    #   背景 ✗：埋伏候选取自"名额之外"，**天然不在 `stock_confirm_result.json` 的
+                    #     `stocks` 里** ⇒ 判级主题查不到 ⇒ 静默 continue ⇒ 一只都并不进 ✓（实测 0 条 ✓）
+                    #   开关 `WOLF_AMBUSH_THEME_FROM_FILE`（**库内默认 0 ⇒ 逐字不变** ✓）
+                    try:
+                        if str(os.getenv("WOLF_AMBUSH_THEME_FROM_FILE", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                            _ap9 = os.path.join(os.environ.get("DATA_DIR") or "data", "ambush_candidates.json")
+                            import json as _js9
+                            _tmap = (_js9.load(open(_ap9, encoding="utf-8")) or {}).get("themes") or {}
+                            _judged_theme = _tmap.get(_c6) or None
+                    except Exception as _e9:
+                        _judged_theme = None
+                if not _judged_theme:
                     continue
                 # 2026-09-26 修（用户「都按你说的来」✓）：主题必须**同时是该票自己的主题** ✓
                 #   实测 SZ002028：判级归入[半导体/芯片] ✗，而**执行口**按 `wolf_context.theme_of_symbol`
