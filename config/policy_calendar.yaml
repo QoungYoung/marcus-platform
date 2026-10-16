@@ -1,0 +1,47 @@
+# 政策/会议日历（人工维护 + 规则生成）—— 补 FXMacroData 缺的「非数据发布类」事件
+#
+# 为什么单独放这里：FXMacroData 覆盖的是**数据发布**（CPI / 利率决议 / 非农…）✓；
+#   而「政治局会议 / 两会 / 中央经济工作会议」这类**会议**不在其日历里 ✗，
+#   中国数据（CNY）又需要 Individual API key ✗ ⇒ 用规则 + 少量人工日期补齐 ✓。
+#
+# 生成规则：rules 里的条目按 day_of_month / month 展开成**未来 18 个月**的名义日期
+#   （遇非交易日由消费端就近处理 ✓）；explicit 用于人工指定（优先级最高 ✓）。
+# 纪律：任何条目都要能追到出处（政策惯例 / 官方预告 ✓）；拿不准就写进 explicit 并注明 ✗ 不臆造。
+
+rules:
+  - name: 中国 CPI/PPI 月度数据
+    release: cny_cpi
+    day_of_month: 9            # 统计局惯例：每月 9-10 日发布上月数据
+    tier: 3
+    note: 惯例区间 9~10 日；遇节假日顺延（真实日期以统计局公告为准，确定后补 explicit）
+  - name: MLF 操作
+    release: cny_mlf
+    day_of_month: 15           # 惯例：每月 15 日（遇节假日顺延）
+    tier: 2
+  - name: LPR 报价
+    release: cny_lpr
+    day_of_month: 20           # 惯例：每月 20 日上午 9:15
+    tier: 2
+  - name: 两会（政府工作报告）
+    release: cn_two_sessions
+    month: 3
+    day_of_month: 5            # 惯例：3 月 5 日开幕
+    tier: 2
+  - name: 中央经济工作会议
+    release: cn_cewc
+    month: 12
+    day_of_month: 11           # 惯例：12 月中旬（政治局会议后一周内）
+    tier: 3
+  - name: 政治局会议（经济议题）
+    release: cn_politburo
+    months: [4, 7, 12]         # 惯例：4 月底 / 7 月底 / 12 月初
+    day_of_month: 30
+    tier: 3
+
+explicit: []
+# 例（真实日期确定后填，优先级高于 rules ✓）：
+#  - date: "2026-10-20"
+#    name: LPR 报价
+#    release: cny_lpr
+#    tier: 2
+#    note: 央行公告

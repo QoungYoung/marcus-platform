@@ -1322,6 +1322,34 @@ tasks:
     args: []
   output:
     log_file: logs/index_kline_sync_{date}.log
+
+- id: macro_calendar_sync
+  name: 宏观事件日历同步（FXMacroData：CPI/FOMC/非农 + 政策会议）
+  description: |
+    每天 06:30 同步宏观事件日历 → data/macro_calendar.json（供「事件前减仓规避」用 ✗ 尚未接入决策，先做数据面 ✓）：
+      · FXMacroData /v1/calendar/usd（**免 key ✓**，实测 415 条、覆盖到 2027-12、point_in_time_safe ✓）；
+      · CNY（中国 CPI/利率）与**预测值**需要 Individual API key ⇒ 设 FXMACRODATA_API_KEY 后自动带上 ✓；
+      · config/policy_calendar.yaml 的规则（中国 CPI/MLF/LPR/两会/中央经济工作会议/政治局会议 ✓ 会议类不在 FXMacroData 里 ✗）
+        展开成名义日期一并合并（src=manual-policy ✓）。
+    ⚠️ 注意：本任务只**产出日历**，不改任何 operation / 不参与决策 ✓ ——
+    「事件前减仓」是否真有效必须先过 jobs/eval_event_windows.py 的验证（基线 + 安慰剂 ✓ 见 docs）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '30 6 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/sync_macro_calendar.py
+    args: []
+  output:
+    log_file: logs/macro_calendar_sync_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
     append: true
   notifications:
     on_success: false
