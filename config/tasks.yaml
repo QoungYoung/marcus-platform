@@ -632,7 +632,11 @@ tasks:
   depends_on:
 - depends_on: []
   description: 每周一 8:10 上证指数结构+量能/资金/GJD/历史锚点/主线 -> 狼大两级浪型判定 -> 写入 wave_state.json;交易gate按(level,sub_level)->operation->gate防御
-  enabled: true
+  # ⛔ 2026-10-15 起停用（用户「切换到新的浪型，旧的不用了」）—— 已被 `wave_ladder_state`(08:10) 取代。
+  # 旧 LLM agent 已退役、默认不写盘，但本任务仍每天跑它 ⇒ 只打一行退役提示，且因 on_success=true
+  # 每天推一条「波浪判定」通知（看起来像失败 ✗，2026-10-16 用户反馈）+ 白跑一次 pi_analysis ✗。
+  # 恢复旧判定：把本任务改回 true，并给 worker 设 WOLF_WAVE_LEGACY_AGENT=1 ✓。
+  enabled: false
   id: wave_judge
   name: 波浪判定
   notifications:

@@ -382,9 +382,11 @@ def main():
     #   教材铁律②），消费方 schema 不变。这里默认**直接退出、不写盘**（避免旧 LLM 档位覆盖新结果 ✗）；
     #   需要临时恢复旧判定：WOLF_WAVE_LEGACY_AGENT=1。
     if os.getenv('WOLF_WAVE_LEGACY_AGENT', '0').strip() not in ('1', 'true', 'yes'):
+        # 打到 **stdout**（不是 stderr ✗）：退役是正常状态、不是错误 ——
+        # 原来打 stderr ⇒ 调度器当错误处理，且旧任务 on_success 通知每天推一次（2026-10-16 用户反馈）✓
         print('[wave] ⛔ 已退役：wave_state.json 现由浪型链写入 —— 请改用 '
               'python apps/main_line/wave_ladder.py --write --dated'
-              '（临时恢复旧 LLM 判定：WOLF_WAVE_LEGACY_AGENT=1）', file=_s.stderr)
+              '（临时恢复旧 LLM 判定：WOLF_WAVE_LEGACY_AGENT=1）')
         raise SystemExit(0)
     date=None
     if len(_s.argv)>1 and _s.argv[1].startswith('--date'):
