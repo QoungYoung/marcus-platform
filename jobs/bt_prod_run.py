@@ -1428,7 +1428,15 @@ def main() -> int:
                     #   `wolf_ambush_buy` ✓ —— 语义是「低位方向：找辨识度最高的老龙头**埋伏**」✓
                     #   （**先手建仓**，不是摊薄 ✗）⇒ 网关侧已豁免「低吸只在趋势票上做」那道闸 ✓
                     #   为什么单列：普通分支只布 m5dump/prevlow 两种腿型 ✗ ⇒ 埋伏腿拿不到自己的身份 ✓
-                    if str(L.get("stage")) == "ambush" or str(L.get("type")) == "wolf_ambush_buy":
+                    # ★ 2026-10-15 ✓（用户选 B′）：**档位字段也能触发埋伏分支** ✓
+                    #   背景 ✗：腿的 `stage` 现写确认阶段名（缩量止跌/结构到位… ✓），
+                    #     而档位（`tier=ambush` ✓）另存一个字段 ⇒ 这里必须一并认 ✓，
+                    #     否则埋伏腿退化成普通 253/254 低吸腿 ✗（实测 t37 有 4 条 `stage=ambush` ✓，
+                    #     现在 0 条 ✗ ⇒ 埋伏独有的 `index.m5_dump≥0.4 ∧ quote.m5_dump≤-3.0` 语义丢失 ✗）
+                    #   开关 `WOLF_LEG_TIER_FIELD`（**库内默认 0 ⇒ 逐字不变** ✓）
+                    if (str(L.get("stage")) == "ambush" or str(L.get("type")) == "wolf_ambush_buy"
+                            or (str(os.getenv("WOLF_LEG_TIER_FIELD", "0")).strip().lower() in ("1", "true", "yes", "on")
+                                and str(L.get("tier") or "") == "ambush")):
                         #   历史（T35 全窗实测）：挂的"大盘急杀"式条件（`index.m5_dump ≥ 0.4`）
                         #   **只触发 3 次** ✗ ⇒ 21 条条件单全部 expired、**0 次成交** ✗
                         # 2026-09-26 用户「改掉」：**去掉自设的 253（大盘急杀 ✗ 无语料依据）**，

@@ -206,8 +206,27 @@ def main() -> int:
         for b in plan.get("buy_new") or []:
             code = str(b["code"])
             sym = ("SH" if code[:1] == "6" else "SZ") + code
-            recorded["buy_new"].append({"symbol": sym, "code": code, "theme": b.get("theme"),
-                                        "stage": b.get("stage"), "type": "buy_253/254"})
+            # ★ 2026-10-15 ✓（用户选 B′）：**给腿补一个 `tier` 字段** ✓ ——
+            #   病灶 ✗（实测对照 t37 vs t68，同一天 20260105）：
+            #     · t37 的 4 条埋伏腿 `stage="ambush"` ✓ ⇒ 执行口的埋伏分支（认 `stage=="ambush"` ✓）能接管 ✓
+            #     · 现在腿的 `stage` 一律写**确认阶段名**（缩量止跌/结构到位… ✓）✗
+            #       而档位只留在 `plan["tiers"]` 里 ✗ ⇒ 执行口看不见 ⇒ 埋伏腿退化成普通 253/254 低吸腿 ✗
+            #   为什么另立字段 ✗：`stage`（标的**状态** ✓）与 `tier`（我们的**档位/姿态** ✓）是两套词表 ✓，
+            #     混写在一个字段里正是这次踩坑的根 ✓
+            #   开关 `WOLF_LEG_TIER_FIELD`（**库内默认 0 ⇒ 逐字不变** ✓）
+            _tier_v = None
+            try:
+                if str(os.getenv("WOLF_LEG_TIER_FIELD", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                    _tv = (plan.get("tiers") or {})
+                    _rec_t = _tv.get(sym) or _tv.get(code) or {}
+                    _tier_v = _rec_t.get("tier") or None
+            except Exception:
+                _tier_v = None
+            _leg = {"symbol": sym, "code": code, "theme": b.get("theme"),
+                    "stage": b.get("stage"), "type": "buy_253/254"}
+            if _tier_v:
+                _leg["tier"] = _tier_v
+            recorded["buy_new"].append(_leg)
         return [{"type": "bt_noop", "n_sell": len(recorded["sell_old"]), "n_buy": len(recorded["buy_new"])}]
 
     sb_mod._arm_legs = _record_only
