@@ -1643,6 +1643,12 @@ class TMonitor:
                                 self._tsell_px_cache = _tsp
                             _lv_ts = float(_tsp.get(sym) or 0)
                             _cur_q = float(q.get("current") or 0)
+                            # 诊断（每个标的每天一次 ✓）：本闸到底有没有被走到 ✓
+                            if (sym, today) not in getattr(self, "_atsell_seen", set()):
+                                self._atsell_seen = getattr(self, "_atsell_seen", set())
+                                self._atsell_seen.add((sym, today))
+                                print("[TMonitor] T回挂单价检查 %s: 待回补价=%.3f 现价=%.3f 表内=%d 只"
+                                      % (sym, _lv_ts, _cur_q, len(_tsp)), flush=True)
                             if _lv_ts > 0:
                                 if _cur_q < _lv_ts:
                                     _defer_atsell = True
@@ -5334,7 +5340,19 @@ class TMonitor:
                             and str(side).lower() in ("buy", "买入")):
                         try:
                             from app.services.wave_gate import classify_buy_leg as _cbl2
-                            _bvai = _cbl2(trigger_kind) in ("build", "ambush")
+                            # ★ 2026-10-15 ✓（用户：「**埋伏腿不需要过 agent**」）：
+                            #   2026-10-13 拍板的是"**建仓类过 AI**"✓（trend_break_buy / *ambush_buy / 253-254 ✓）；
+                            #   现在为**埋伏档**开例外 ✓ ⇒ 命中判据即自动下单 ✓（其余建仓类不变 ✓）。
+                            #   ⚠️ 回测里这条会**大幅改变 AI 调用量** ✓：实测 dec1 一天 **640 次**唤醒 ✗
+                            #      （≈21 分钟/天 ✗）⇒ 埋伏不过 AI 后应降到个位数 ✓。
+                            #   开关 `WOLF_AMBUSH_VIA_AI`（**默认 1 ⇒ 逐字保持现状** ✓；置 0 ⇒ 埋伏不过 agent ✓）
+                            _cls2 = _cbl2(trigger_kind)
+                            if (_cls2 == "ambush"
+                                    and str(os.getenv("WOLF_AMBUSH_VIA_AI", "1")).strip().lower()
+                                    in ("0", "false", "no", "off")):
+                                _bvai = False
+                            else:
+                                _bvai = _cls2 in ("build", "ambush")
                         except Exception as _ebv:
                             _bvai = False
                             print("[TMonitor] 建仓过AI判定异常(按不过AI ✓): %s" % str(_ebv)[:60], flush=True)
