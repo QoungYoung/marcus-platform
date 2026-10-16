@@ -2648,6 +2648,32 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     t_db.update_trigger_status(int(trigger_id), "blocked", reason=_why_one[:250])
                 return {"status": "blocked", "reason": _why_one, "level": "AMBUSH_ONE_PER_DAY"}
 
+    # ★ 2026-10-16 ✓（用户贴成交：「2025-12-12 买 33.54 wolf_ambush_buy / 2025-12-15 买 32.16 wolf_ambush_buy
+    #   ⇒「**有两次埋伏**」✓）：埋伏 = 「低位方向**埋伏一仓**」✓ ⇒ **同一只票已持仓就不该再埋伏** ✗
+    #   病灶 ✗：原规则只有**同日**去重（`WOLF_AMBUSH_ONE_PER_DAY` ✓）⇒ **跨日会重复建仓** ✓
+    #     （实测该票 12-12 与 12-15 各建一仓 ✓；加仓本应走「**埋伏转正加仓**」那条路 ✓）
+    #   修法 ✓：`WOLF_AMBUSH_HOLD_DEDUPE`（**库内默认 0 ⇒ 逐字不变** ✓；pins 置 1 ✓）
+    #     —— 只要账本里该票**还有持仓**（volume>0 ✓），就不发第二笔埋伏 ✓（清仓后可再埋伏 ✓）
+    if (side == "buy" and str(os.getenv("WOLF_AMBUSH_HOLD_DEDUPE", "0")).strip().lower() in ("1", "true", "yes", "on")):
+        try:
+            _k_hd = _turnover_kind(trigger_id, condition_id) if trigger_id else ""
+        except Exception:
+            _k_hd = ""
+        if str(_k_hd) == "wolf_ambush_buy":
+            from sqlalchemy import text as _t2
+            with SessionLocal() as _s2:
+                _held2 = _s2.execute(_t2(
+                    "SELECT COALESCE(SUM(volume),0) FROM paper_positions "
+                    "WHERE account_id=:a AND symbol=:s AND volume>0"),
+                    {"a": account_id, "s": symbol}).scalar() or 0
+            if int(_held2) > 0:
+                _why_hd = ("埋伏腿去重：本票**已有持仓 %d 股** ⇒ 不再埋伏（埋伏＝只建一仓；"
+                           "加仓走「埋伏转正加仓」；WOLF_AMBUSH_HOLD_DEDUPE=1）" % int(_held2))
+                print("[gateway] %s %s" % (symbol, _why_hd), flush=True)
+                if trigger_id:
+                    t_db.update_trigger_status(int(trigger_id), "blocked", reason=_why_hd[:250])
+                return {"status": "blocked", "reason": _why_hd, "level": "AMBUSH_HOLD_DEDUPE"}
+
     # ── 0.2e8) **埋伏腿的"加仓三项"**（狼大三条硬规则 ✓；三个开关**库内默认 0 = 关** ✓）──
     #   语料（逐字 ✓）：
     #     · 「**分批加法点，不到点位不加**」／「价格必须到位——要到他设定的**第一/第二加法点**，
