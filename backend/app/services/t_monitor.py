@@ -752,10 +752,28 @@ class TMonitor:
                     if _alt:
                         _live, _src = _alt, "腾讯日线"
                 if _live:
-                    if _last:
-                        print(f"[TMonitor] _daily_dated 本地缓存过期({sym} 停在 {_last}) → {_src}补齐 "
-                              f"{len(_live)} 根(至 {_live[-1]['date']})")
-                    out = sorted(_live, key=lambda x: x['date'])[-n:]
+                    # ★ 2026-10-16 修 ✗（alerts 实录：`where=t_monitor.py:758` × `raise×1：'date'` ✓）：
+                    #   病灶 ✗：**兜底源的日线行不一定带 `'date'` 键** ✗
+                    #     ⇒ `_live[-1]['date']`（上一行打印 ✓）与 `sorted(key=x['date'])` ✗ ⇒ KeyError ✓
+                    #     ⇒ 整个 `_daily_dated` 抛异常 ⇒ 「碰新高/转正/纪律」判定恒失效 ✗（静默 ✗）
+                    #   修法 ✓：先**归一化**（`date` / `trade_date` / `day` ✓）+ **丢弃无日期的行** ✓，再打印/排序 ✓
+                    _norm = []
+                    for _r in _live:
+                        if not isinstance(_r, dict):
+                            continue
+                        _d8 = str(_r.get('date') or _r.get('trade_date') or _r.get('day') or '') \
+                            .replace('-', '')[:8]
+                        if not _d8:
+                            continue
+                        _r2 = dict(_r)
+                        _r2['date'] = _d8
+                        _norm.append(_r2)
+                    _live = _norm
+                    if _live:
+                        if _last:
+                            print(f"[TMonitor] _daily_dated 本地缓存过期({sym} 停在 {_last}) → {_src}补齐 "
+                                  f"{len(_live)} 根(至 {_live[-1]['date']})")
+                        out = sorted(_live, key=lambda x: x['date'])[-n:]
                 elif _last:
                     print(f"[TMonitor] _daily_dated 实时源全部失败 {sym} → 用本地缓存(停在 {_last})")
         self._dated_cache[ck] = out
