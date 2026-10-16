@@ -1027,7 +1027,12 @@ class Store:
             try:
                 with open(self.log_path, "r", encoding="utf-8", errors="replace") as fh:
                     for line in fh:
-                        m2 = re.match(r"\[days\]\s+(\d{8})\s+cut=", line)
+                        # ★ 2026-10-15 ✓（用户「回测监控台是不是没更新」）：
+                        #   续跑时臂打印的是 `[days] <日期> seed 复用（已有沙箱 cut=<前一日>）` ✓
+                        #   ⇒ 旧的 `match(...\s+cut=)` 要求"日期后紧跟 cut=" ✗ ⇒ 匹配不上
+                        #   ⇒ `days_done/current_day` 恒为空 ⇒ 面板看起来"不更新" ✗。
+                        #   改为 search ✓（`[days] <8位日期>` 且同行**任意位置**出现 `cut=` ✓）。
+                        m2 = re.search(r"\[days\]\s+(\d{8})\b.*?cut=", line)
                         if m2:
                             completed.append(m2.group(1))
                             continue
@@ -1292,11 +1297,44 @@ class Store:
         # 否则续跑后窗口从续跑那天开始，之前已重放的日子（0105-0120）整段消失（实测曲线只剩 1 点）。
         _wstart = self.manifest_start_day() or run_start
         window = [d for d in cal if _wstart and run_end and _wstart <= d <= run_end]
-        days_total = log.get("days_total") or (len(window) or None)
+        # ★ 2026-10-16 ✓（用户「回测监控还是上一个回测」）：**续跑**时日志头部写的是
+        #   "续跑起点 → 终点"（实测 dec1：`41 个交易日：20251203 → 20260130` ✗）
+        #   ⇒ `days_total` 偏小 ✗、且 `last_completed` 解析不到（行形态不同 ✗）
+        #   ⇒ 进度区显示成"像停在上一跑" ✓。修法：**以产物为准** ✓
+        #     · 完成天数 = 该 root 下 `_summary/prod_*.json` 的天数 ✓（文件事实 ✓，不靠日志解析 ✓）
+        #     · 总天数   = 交易历里 [窗口起点, 终点] 的长度 ✓（与日志取大者 ✓）
+        #     · 当前日   = 正在跑的 `bt_prod_run --day` ✓（`prod_proc_day` ✓）
+        _done_days = []
+        try:
+            import glob as _g9
+            _pat = os.path.join(str(getattr(self, "root_dir", None) or getattr(self, "root", "") or ""),
+                               "_summary", "prod_*.json")
+            _done_days = sorted({os.path.basename(x).split("prod_")[-1][:8] for x in _g9.glob(_pat)})
+        except Exception:
+            _done_days = []
+        days_total = max(int(log.get("days_total") or 0), len(window) or 0) or None
         last_completed = log.get("last_completed") or (active_days[-1] if active_days else None)
+        if _done_days:
+            last_completed = max(last_completed or "", _done_days[-1]) or None
         days_done = len([d for d in window if last_completed and d <= last_completed]) or None
+        if days_done is None and _done_days:
+            days_done = len(_done_days)
         started_day = log.get("last_started")
         prod_proc_day = next((p["day"] for p in procs_live if p["kind"] == "bt_prod_run" and p["day"]), None)
+        if not prod_proc_day:
+            # ★ 2026-10-16 ✓：进程扫描有时取不到 `--day` ✗ ⇒ 直接从**命令行**里正则取 ✓
+            #   （只认命令行里带本臂 root 标记的那个执行口进程 ✓，避免串到别的臂 ✓）
+            try:
+                _tag9 = os.path.basename(os.path.normpath(str(self.root or "")))
+                for _p9 in (procs_live or []):
+                    _cl9 = str(_p9.get("cmdline") or "")
+                    if "bt_prod_run" in _cl9 and _tag9 and _tag9 in _cl9:
+                        _m9 = re.search(r"--day\s+(\d{8})", _cl9)
+                        if _m9:
+                            prod_proc_day = _m9.group(1)
+                            break
+            except Exception:
+                pass
         candidates = [d for d in (prod_proc_day, started_day) if d and last_completed and d > last_completed]
         current_day = max(candidates) if candidates else None
 
@@ -1514,6 +1552,18 @@ class Store:
 
         # ── 持仓 ────────────────────────────────────────────────────────────
         positions = []
+        # ★ 2026-10-16 ✓（用户贴持仓表：现价/浮动/持有全是 "—" ✗）：`curve_start/curve_end` 若为空或
+        #   倒挂 ✗ ⇒ `close_map` 为空 ⇒ 每只持仓的 `last/pnl/days_held` 全变 None ✗（页面显示 "—" ✓）。
+        #   兜底 ✓：用**本 root 自己的产物天**（`_summary/prod_*.json` ✓ = 真实已完成交易日 ✓）定窗口 ✓。
+        try:
+            import glob as _g10
+            _dd10 = sorted({os.path.basename(x).split("prod_")[-1][:8]
+                            for x in _g10.glob(os.path.join(str(self.root), "_summary", "prod_*.json"))})
+            if _dd10 and (not curve_end or not curve_start or str(curve_start) > str(curve_end)):
+                curve_start, curve_end = _dd10[0], _dd10[-1]
+                print("[dashboard] 持仓定价窗口兜底 ⇒ %s..%s" % (curve_start, curve_end), flush=True)
+        except Exception:
+            pass
         last_day_iso = iso_day(curve_end)
         close_map = {}
         if symbols and curve_start and curve_end:
