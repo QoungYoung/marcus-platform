@@ -48,18 +48,27 @@ def main():
     ap.add_argument("--dry", action="store_true", help="只打印不推送 ✓")
     a = ap.parse_args()
     day = a.date or time.strftime("%Y%m%d")
-    p = os.path.join(DATA, "macro_briefing_%s.md" % day)
-    txt = _read(p)
+    # 两条推送线：① 宏观事件晨报（每日 08:35 前生成的 macro_briefing_<date>.md ✓）
+    #            ② 重要事件 T-5/T-3/T-1 提醒（agent 生成 event_alert_<date>.md ✓ 2026-10-16 用户要求 ✓）
+    cand = [("macro", os.path.join(DATA, "macro_briefing_%s.md" % day)),
+            ("alert", os.path.join(DATA, "event_alert_%s.md" % day))]
+    p, txt, kind = "", "", ""
+    for k, path in cand:
+        t = _read(path)
+        if t:
+            kind, p, txt = k, path, t
+            break
     if not txt:
-        print("[macro-brief] 无当日晨报 %s ⇒ 跳过（fail-open ✓；节假日或 agent 未跑都走这里）" % p)
+        print("[macro-brief] 当日既无晨报也无事件提醒 ⇒ 跳过（fail-open ✓ 节假日/无提醒日都走这里）")
         return 0
     st = {}
     try:
         st = json.load(open(STATE, encoding="utf-8"))
     except Exception:
         st = {}
-    if st.get("last_pushed") == day and not a.dry:
-        print("[macro-brief] %s 已推送过 ⇒ 跳过（去重 ✓）" % day)
+    key = "%s:%s" % (day, kind)
+    if st.get("last_pushed") == key and not a.dry:
+        print("[macro-brief] %s(%s) 已推送过 ⇒ 跳过（去重 ✓）" % (day, kind))
         return 0
     body = txt if len(txt) <= MAX_LEN else txt[:MAX_LEN] + "\n…（已截断，全文见 %s）" % p
     if a.dry:
@@ -67,7 +76,7 @@ def main():
         return 0
     ok = _push_qq(body)
     if ok:
-        st["last_pushed"] = day
+        st["last_pushed"] = key
         st["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         try:
             json.dump(st, open(STATE, "w", encoding="utf-8"), ensure_ascii=False)
