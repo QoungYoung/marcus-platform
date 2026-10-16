@@ -1311,7 +1311,11 @@ def main() -> int:
                                 #   （用户告警原文：`bt_prod_run.py:817 | raise×1：name \'_today\' is not defined`）
                                 #   正确取法 ✓：本模块开头已 `_pin_clock_dynamic()` 把 `datetime.today()/now()`
                                 #   钉到**模拟日** ✓ ⇒ 直接用 `datetime.now()` ✓（与模块其它处同源 ✓）
-                                _day9 = datetime.now().strftime("%Y%m%d")
+                                # ⚠️ 2026-10-16 修 ✗（第二次）：本模块是 `import datetime as _dt` ✓
+                                #   ⇒ 既没有 `_today()` ✗ 也没有裸 `datetime` ✗
+                                #   ⇒ 改用**紧邻上文已在用**的 `day_dir` ✓（1264 行的 `_leg_files` 就基于它 ✓）
+                                #     它的 basename 正是**模拟交易日** ✓（`day_dir = <root>/<YYYYMMDD>` ✓）
+                                _day9 = os.path.basename(str(day_dir).rstrip("/"))
                                 _rows9 = _wc9.gz("daily_basic", {"trade_date": _day9}, "ts_code,total_mv") or []
                                 for _b9 in _rows9:
                                     if str(_b9[0]) == _tsc9:
