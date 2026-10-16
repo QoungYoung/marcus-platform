@@ -220,6 +220,16 @@ def main() -> int:
                     _tv = (plan.get("tiers") or {})
                     _rec_t = _tv.get(sym) or _tv.get(code) or {}
                     _tier_v = _rec_t.get("tier") or None
+                    if not _tier_v:
+                        # ⚠️ 实测 ✗：`plan["tiers"]` 只在 `held_positions()` 循环里赋值 ✓
+                        #   ⇒ **只含已持仓标的** ✗ ⇒ 新买候选取不到档位 ✓
+                        #   ⇒ 这里对买入腿**直接调与系统同源的** `tranche_ladder.tier_for()` ✓
+                        #     （同一函数、同一判据 ✓，不是新口径 ✓）
+                        try:
+                            from tranche_ladder import tier_for as _tf
+                            _tier_v = (_tf(sym) or [None])[0]
+                        except Exception:
+                            _tier_v = None
             except Exception:
                 _tier_v = None
             _leg = {"symbol": sym, "code": code, "theme": b.get("theme"),
