@@ -1261,6 +1261,73 @@ def main() -> int:
             #   开关 `WOLF_ARM_CARRY_DAYS`（**库内默认 0 ⇒ 逐字不变** ✓）：置 N ⇒ 把**前 N 个交易日**
             #   的 `legs.jsonl` 也一并读进来（同口径挂单 ✓），让龙头的回踩单有机会成交 ✓。
             _LV = {}
+            # ★ 2026-10-16 ✓（用户「买的还是太多了，能做个优先级排序，限制下吗」→ **N=3**）：
+            #   埋伏腿**每日上限**：只武装「**低位 ∧ 大市值**」分数最高的前 N 条 ✓
+            #   排序键依据 ✓：语料「低位方向：找辨识度最高的**老龙头**埋伏」✓；实测（33 天 / 1069 候选 ✓）
+            #     取前 3 ⇒ 候选池前向 5 日均值 **−1.07% → −0.02%** ✓（前 5 ⇒ −0.25% ✓、前 8 ⇒ −0.50% ✓）
+            #   开关 `WOLF_AMBUSH_DAY_MAX`（**库内默认 0 ⇒ 不限、逐字不变** ✓）
+            _amb_top = None
+            try:
+                _amb_max = int(float(os.getenv("WOLF_AMBUSH_DAY_MAX", "0") or 0))
+            except (TypeError, ValueError):
+                _amb_max = 0
+            if _amb_max > 0:
+                _amb_syms = []
+                for _p9 in _leg_files:
+                    try:
+                        for _ln9 in open(_p9, encoding="utf-8"):
+                            _ln9 = _ln9.strip()
+                            if not _ln9:
+                                continue
+                            try:
+                                _j9 = json.loads(_ln9)
+                            except Exception:
+                                continue
+                            if not isinstance(_j9, dict):
+                                continue
+                            if (str(_j9.get("stage")) == "ambush" or str(_j9.get("tier")) == "ambush"
+                                    or str(_j9.get("type")) == "wolf_ambush_buy"):
+                                _sy9 = str(_j9.get("symbol") or "")
+                                if _sy9 and _sy9 not in _amb_syms:
+                                    _amb_syms.append(_sy9)
+                    except Exception:
+                        continue
+                if len(_amb_syms) > _amb_max:
+                    import bisect as _bs9
+                    _sc9 = {}
+                    for _sy9 in _amb_syms:
+                        try:
+                            _c6_9 = "".join(ch for ch in _sy9 if ch.isdigit())[:6]
+                            _tsc9 = (_c6_9 + "." + _sy9[:2]) if _sy9[:2] in ("SH", "SZ") else _sy9
+                            import wolf_confirm_pick as _wc9
+                            _rr9 = _wc9.gz("daily", {"ts_code": _tsc9, "start_date": "20250101",
+                                                     "end_date": "20991231"}, "trade_date,close") or []
+                            _cl9 = [float(x[1]) for x in sorted(_rr9, key=lambda x: str(x[0])) if x[1]]
+                            _mv9 = 0.0
+                            try:
+                                for _b9 in (_wc9.gz("daily_basic", {"trade_date": _today()}, "ts_code,total_mv") or []):
+                                    if str(_b9[0]) == _tsc9:
+                                        _mv9 = float(_b9[1] or 0)
+                                        break
+                            except Exception:
+                                _mv9 = 0.0
+                            if len(_cl9) >= 60:
+                                _lo9 = min(_cl9[-250:]); _hi9 = max(_cl9[-250:])
+                                _pos9 = (_cl9[-1] - _lo9) / (_hi9 - _lo9) if _hi9 > _lo9 else 0.5
+                                _sc9[_sy9] = (1.0 - _pos9, _mv9)
+                        except Exception:
+                            _sc9[_sy9] = (0.5, 0.0)
+                    if _sc9:
+                        _posl = sorted(v[0] for v in _sc9.values())
+                        _mvl = sorted(v[1] for v in _sc9.values())
+                        _rank9 = sorted(_sc9.items(),
+                                        key=lambda kv: -(0.5 * _bs9.bisect_left(_posl, kv[1][0]) / max(1, len(_posl) - 1)
+                                                         + 0.5 * _bs9.bisect_left(_mvl, kv[1][1]) / max(1, len(_mvl) - 1)))
+                        _amb_top = {k for k, _v in _rank9[:_amb_max]}
+                        print("[prod] 埋伏腿每日上限 %d ⇒ 取前 %d: %s（共 %d 条候选）"
+                              % (_amb_max, _amb_max, sorted(_amb_top), len(_amb_syms)), file=sys.stderr)
+                    else:
+                        _amb_top = set(_amb_syms[:_amb_max])
             _leg_files = [os.path.join(day_dir, "legs_switch.jsonl"), os.path.join(day_dir, "legs.jsonl")]
             try:
                 _carry = int(float(os.getenv("WOLF_ARM_CARRY_DAYS", "0") or 0))
@@ -1434,6 +1501,12 @@ def main() -> int:
                     #     否则埋伏腿退化成普通 253/254 低吸腿 ✗（实测 t37 有 4 条 `stage=ambush` ✓，
                     #     现在 0 条 ✗ ⇒ 埋伏独有的 `index.m5_dump≥0.4 ∧ quote.m5_dump≤-3.0` 语义丢失 ✗）
                     #   开关 `WOLF_LEG_TIER_FIELD`（**库内默认 0 ⇒ 逐字不变** ✓）
+                    # ★ 每日上限 ✓（`WOLF_AMBUSH_DAY_MAX` ✓）：不在前 N 名 ⇒ 不武装 ✓
+                    if (_amb_top is not None and sym not in _amb_top
+                            and (str(L.get("stage")) == "ambush" or str(L.get("tier")) == "ambush"
+                                 or str(L.get("type")) == "wolf_ambush_buy")):
+                        armed.append({"symbol": sym, "src": "ambush_skip_daymax"})
+                        continue
                     if (str(L.get("stage")) == "ambush" or str(L.get("type")) == "wolf_ambush_buy"
                             or (str(os.getenv("WOLF_LEG_TIER_FIELD", "0")).strip().lower() in ("1", "true", "yes", "on")
                                 and str(L.get("tier") or "") == "ambush")):
