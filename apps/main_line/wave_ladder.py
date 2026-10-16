@@ -73,9 +73,12 @@ def _envf(name: str, default: float) -> float:
         return default
 
 
-MIN_BARS = 80                      # 少于这个根数不给结论（fail-open）
-HI_WIN = 60                        # 新高/破位窗口
-RALLY_WIN = 20                     # 反弹窗口
+# ★ 2026-10-16（等级模型 E1）：三个窗口改成**可用环境变量覆盖** ⇒ 同一套链能按"度"重标跑在不同周期上 ✓
+#   （默认值一字未改 ⇒ 生产行为不变 ✓）。周线做"大级别"时的原则性取值见 jobs/eval_degree_weekly.py：
+#   RALLY_WIN≈26 周（半年）/ HI_WIN≈104 周（两年）/ ORIGIN_BARS≈200 周（≈4 年，与日线 900 日 ≈3.5 年同量级 ✓）
+MIN_BARS = int(_envf("WOLF_WAVE_LADDER_MIN_BARS", 80))   # 少于这个根数不给结论（fail-open）
+HI_WIN = int(_envf("WOLF_WAVE_LADDER_HI", 60))           # 新高/破位窗口
+RALLY_WIN = int(_envf("WOLF_WAVE_LADDER_RALLY", 20))     # 反弹窗口
 RALLY_MIN = 0.03                   # ⛔ 代理：认定“冲出过一段”
 FADE_MIN = 0.03                    # ⛔ 代理：认定“已经回落”
 NEAR_MIN = _envf("WOLF_WAVE_LADDER_NEAR", 0.98)    # ⛔ 代理：认定“摸到前高附近”

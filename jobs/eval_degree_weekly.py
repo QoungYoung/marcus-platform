@@ -1,44 +1,72 @@
 # -*- coding: utf-8 -*-
-"""等级模型·第一实验（纯测量）：**同一套链跑在周线上**，看它能不能把"3-2(主升内回调)"与"4浪(大级别调整)"分开。
+"""E1 v3：按**度**拆开比 —— 大级别标注 ↔ 周线档；子级别标注 ↔ 日线档（各自对各自 ✓）。
 
-对照样本（他亲口、且明确说是看**周线图**）：
-  · 2025-10-19「这是大盘**周线级别**的图…双底后形成趋势级别反转 → 反转大1浪 → 调整大2浪 → 现在是主升级别大3浪」+「最强3-2」
-  · 2026-07-31「整波为调整浪」「按 4-2→4-3 来看」
-  · 2026-05-15/08-05「B反」「二卖点」
+并修 v2 的映射错误：rung1（成功4-5）不能一律算 up ✗ —— 它有两种成因：
+  · new_high60（创 60 日新高）⇒ 真上行 ⇒ up ✓
+  · bottom_ok（止跌确认，还在调整区间里）⇒ 仍属 adjust ✓
 """
-import json, sys
+import importlib, json, os, sys
 sys.path.insert(0, "apps/main_line")
 import wave_ladder as W
+
+LAB = json.load(open("data/_degree_labels.json", encoding="utf-8"))
+BIG = {"大1浪", "大2浪", "大3浪", "大4浪", "主升级别", "趋势级别反转"}
+SUB = {"3-2", "3-3", "4-2", "4-3", "4-4", "失败5", "末段", "C杀", "下跌1浪", "主跌1浪", "调整浪", "震荡"}
+
 
 def load_weekly(code="000001.SH"):
     d = json.load(open("data/index_weekly_%s.json" % code.replace(".", "_"), encoding="utf-8"))
     return [(r[0], r[1], r[2], r[3]) for r in d["rows"]]
 
-rows = load_weekly()
-print("周线：%s → %s（%d 根）" % (rows[0][0], rows[-1][0], len(rows)))
-evs = W.walk(rows)
-by = {e["date"]: e for e in evs}
-print("周线档序列长度 %d ｜ 状态切换次数 %d" % (len(evs), sum(1 for i in range(1, len(evs)) if evs[i]["rung_index"] != evs[i-1]["rung_index"])))
 
-print("\n=== 关键日期上的**周线档**（他标注 vs 我们）===")
-labels = {"20251017": "他：主升级别大3浪（内部=最强3-2）",
-          "20260731": "他：整波为调整浪（4-2→4-3）",
-          "20260515": "他：B反 / 二卖点",
-          "20240930": "他：周线双底 → 趋势级别反转（大1浪起点区）",
-          "20260323": "他：下跌1浪（失败配置）"}
-for d in sorted(labels):
-    e = by.get(d) or max([x for x in evs if x["date"] <= d], key=lambda x: x["date"], default=None)
-    if not e:
-        print("  %s → 无（早于周线起点）" % d); continue
-    ws = W.to_wave_state(e)
-    print("  %s ｜ 周线档 rung%d %-6s → level=%-4s sub=%-6s op=%-8s ｜ %s" % (
-        d, e["rung_index"], e.get("name"), ws.get("level"), ws.get("sub_level"), ws.get("operation"), labels[d]))
+def pol_of(ev, weekly=False):
+    ov = (ev.get("ov_spec") or {}).get("key") or ""
+    if ov == "w_bottom" or ev.get("main_up") == "3-3":
+        return "up"
+    if ov in ("top_sell", "dtop"):
+        return "down"
+    if ov in ("basis_41", "basis_43"):
+        return "adjust"
+    r = ev["rung_index"]
+    if r == 3:
+        return "down"
+    if r == 1:
+        return "up" if (ev["features"] or {}).get("new_high60") else "adjust"
+    return "adjust"
 
-print("\n=== 2025-06 ~ 2025-11 周线档（看他 10-19 那段之前之后怎么切）===")
-for e in evs:
-    if "20250601" <= e["date"] <= "20251130":
-        f = e["features"]
-        print("  %s rung%d %-8s op=%-8s ｜ 距60周高 %+.1f%% 距20周低 %+.1f%% 缩量新高=%s 长上影=%s" % (
-            e["date"], e["rung_index"], e.get("name"), e["operation"],
-            100 * (f["close"] / f["hi60_prev"] - 1), 100 * (f["close"] / f["lo20"] - 1),
-            f.get("shrink_high"), f.get("upper_shadow")))
+
+def run(env, rows, labels, tag):
+    for k in ("WOLF_WAVE_LADDER_RALLY", "WOLF_WAVE_LADDER_HI", "WOLF_WAVE_LADDER_ORIGIN_BARS",
+              "WOLF_WAVE_LADDER_MIN_BARS"):
+        os.environ.pop(k, None)
+    os.environ.update(env)
+    importlib.reload(W)
+    evs = W.walk(rows)
+    hit = tot = 0
+    base = 0
+    from collections import Counter
+    majors = Counter(L["pol"] for L in labels).most_common(1)[0]
+    for L in labels:
+        prev = [e for e in evs if e["date"] <= L["date"]]
+        if not prev:
+            continue
+        tot += 1
+        hit += 1 if pol_of(prev[-1]) == L["pol"] else 0
+        base += 1 if L["pol"] == majors[0] else 0
+    print("  %-26s 样本 %3d ｜ 吻合 %3d（%3.0f%%）｜ 多数类基线 %3.0f%%（%s）" % (
+        tag, tot, hit, 100.0 * hit / max(tot, 1), 100.0 * base / max(tot, 1), majors[0]))
+    return hit, tot
+
+
+big = [L for L in LAB if L["kw"] in BIG]
+sub = [L for L in LAB if L["kw"] in SUB]
+print("标注拆分：大级别 %d 条 ｜ 子级别 %d 条（其余 %d 条不参与 ✓）" % (
+    len(big), len(sub), len(LAB) - len(big) - len(sub)))
+print("\n=== 大级别：周线（按度重标）vs 日线 ===")
+run({"WOLF_WAVE_LADDER_RALLY": "26", "WOLF_WAVE_LADDER_HI": "104", "WOLF_WAVE_LADDER_ORIGIN_BARS": "200",
+     "WOLF_WAVE_LADDER_MIN_BARS": "60"}, load_weekly(), big, "周线（大级别口径）")
+run({}, W.load_rows(), big, "日线（生产口径）")
+print("\n=== 子级别：日线 vs 周线 ===")
+run({}, W.load_rows(), sub, "日线（生产口径）")
+run({"WOLF_WAVE_LADDER_RALLY": "26", "WOLF_WAVE_LADDER_HI": "104", "WOLF_WAVE_LADDER_ORIGIN_BARS": "200",
+     "WOLF_WAVE_LADDER_MIN_BARS": "60"}, load_weekly(), sub, "周线（大级别口径）")
