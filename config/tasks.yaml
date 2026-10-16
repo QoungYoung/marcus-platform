@@ -1343,6 +1343,31 @@ tasks:
     args: []
   output:
     log_file: logs/macro_calendar_sync_{date}.log
+
+- id: macro_briefing_push
+  name: 宏观事件晨报推送（把 DSH agent 的晨报推 QQ）
+  description: |
+    08:35 读 data/macro_briefing_<当日>.md（由 DSH agent 任务「宏观事件晨报」在 08:20 生成 ✓）并推 QQ ✓。
+    分工刻意分开：**分析**在 DSH agent（它会调 marcus-panel-tools 的只读数据工具 + 读持仓 ✓）；
+    **投递**在平台侧（DSH 没有推送端点 ✗）。无当日晨报 ⇒ 直接退出 0（fail-open ✓ 节假日/agent未跑都走这条 ✓）；
+    data/_macro_briefing_pushed.json 去重 ⇒ 同日重复跑不会重复推 ✓。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '35 8 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/push_macro_briefing.py
+    args: []
+  output:
+    log_file: logs/macro_briefing_push_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: false
+    pi_analysis: false
+    channels:
+    - qqbot
     append: true
   notifications:
     on_success: false
