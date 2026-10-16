@@ -907,7 +907,14 @@ def _ambush_position(account_id: str, symbol: str) -> bool:
         from sqlalchemy import text as _t2
         with SessionLocal() as _s2:
             _n = _s2.execute(_t2(
-                "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND symbol=:s "
+                # ⚠️ 2026-10-16 修 ✗（用户「埋伏腿怎么还在转正前卖出去了呢」）：
+                #   病灶 = **大小写** ✗：触发侧的 symbol 是小写（`sh600105` ✓ 日志实录 ✓），
+                #   而 `paper_trades.symbol` 存大写（`SH600105` ✓）⇒ `UPPER(symbol)=UPPER(:s)` 精确匹配 ⇒
+                #   `COUNT(*)=0` ⇒ 判"**不是埋伏仓**"✗ ⇒ 总闸**不拦** ✗
+                #   实证 ✓（同一天两笔同类卖腿）：`sh600105`（小写）**成交了** ✗；
+                #     `SH600183`（大写）被 `[gateway] 埋伏仓卖出总闸` **拦下** ✓
+                #   ⇒ 与本次会话早先修的 `_CiLedger`（账本大小写 ✗）是同一类 ✓
+                "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) "
                 "AND COALESCE(voided,0)=0 AND direction LIKE '买%' "
                 "AND COALESCE(reason,'') LIKE :p"),
                 {"a": account_id, "s": symbol, "p": "%wolf_ambush_buy%"}).scalar() or 0
@@ -929,12 +936,12 @@ def _lowdip_trend_ok(account_id: str, symbol: str) -> bool:
         with SessionLocal() as _s:
             _held = _s.execute(_t(
                 "SELECT COALESCE(SUM(CASE WHEN direction LIKE '买%' THEN volume ELSE -volume END),0) "
-                "FROM paper_trades WHERE account_id=:a AND symbol=:s AND COALESCE(voided,0)=0"),
+                "FROM paper_trades WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND COALESCE(voided,0)=0"),
                 {"a": account_id, "s": symbol}).scalar() or 0
             if int(_held) <= 0:
                 return False
             _n = _s.execute(_t(
-                "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND symbol=:s "
+                "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) "
                 "AND COALESCE(voided,0)=0 AND direction LIKE '买%' AND COALESCE(reason,'') LIKE :p"),
                 {"a": account_id, "s": symbol, "p": "%trend_break%"}).scalar() or 0
             return int(_n) > 0
@@ -2576,7 +2583,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     with SessionLocal() as _s5:
                         _avg_t = float((_s5.execute(_t5(
                             "SELECT COALESCE(AVG(price),0) FROM paper_trades WHERE account_id=:a "
-                            "AND symbol=:s AND direction LIKE '买%' AND COALESCE(reason,'') LIKE :p"),
+                            "AND UPPER(symbol)=UPPER(:s) AND direction LIKE '买%' AND COALESCE(reason,'') LIKE :p"),
                             {"a": account_id, "s": symbol, "p": "%wolf_ambush_buy%"}).scalar()) or 0)
                     if _avg_t > 0 and float(price or 0) > 0:
                         _drop_t = (1 - float(price) / _avg_t) * 100.0          # 距持仓均价的跌幅% ✓
@@ -2636,7 +2643,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             from sqlalchemy import text as _t1
             with SessionLocal() as _s1:
                 _n_today = _s1.execute(_t1(
-                    "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND symbol=:s "
+                    "SELECT COUNT(*) FROM paper_trades WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) "
                     "AND trade_date=:d AND direction LIKE '买%' "
                     "AND COALESCE(reason,'') LIKE :p"),
                     {"a": account_id, "s": symbol,
@@ -2663,8 +2670,9 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
             from sqlalchemy import text as _t2
             with SessionLocal() as _s2:
                 _held2 = _s2.execute(_t2(
+                    # ⚠️ 同上 ✗：symbol 大小写必须归一化 ✓（否则小写触发会绕过本闸 ✓）
                     "SELECT COALESCE(SUM(volume),0) FROM paper_positions "
-                    "WHERE account_id=:a AND symbol=:s AND volume>0"),
+                    "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND volume>0"),
                     {"a": account_id, "s": symbol}).scalar() or 0
             if int(_held2) > 0:
                 _why_hd = ("埋伏腿去重：本票**已有持仓 %d 股** ⇒ 不再埋伏（埋伏＝只建一仓；"
@@ -2700,7 +2708,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     with SessionLocal() as _s3:
                         _hist = _s3.execute(_t3(
                             "SELECT trade_date, price FROM paper_trades "
-                            "WHERE account_id=:a AND symbol=:s AND direction LIKE '买%' "
+                            "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND direction LIKE '买%' "
                             "AND COALESCE(reason,'') LIKE :p ORDER BY id"),
                             {"a": account_id, "s": symbol, "p": "%wolf_ambush_buy%"}).fetchall()
                 except Exception:
@@ -2723,7 +2731,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                             with SessionLocal() as _s4:
                                 _avg = float((_s4.execute(_t4(
                                     "SELECT COALESCE(AVG(price),0) FROM paper_trades WHERE account_id=:a "
-                                    "AND symbol=:s AND direction LIKE '买%' AND COALESCE(reason,'') LIKE :p"),
+                                    "AND UPPER(symbol)=UPPER(:s) AND direction LIKE '买%' AND COALESCE(reason,'') LIKE :p"),
                                     {"a": account_id, "s": symbol, "p": "%wolf_ambush_buy%"}).scalar()) or 0)
                         except Exception:
                             _avg = 0.0
@@ -2906,7 +2914,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                 with _SH2() as _sh2:
                     _r2 = _sh2.execute(_th2(
                         "SELECT COALESCE(volume,0) FROM paper_positions "
-                        "WHERE account_id=:a AND symbol=:s"), {"a": account_id, "s": symbol}).fetchone()
+                        "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s)"), {"a": account_id, "s": symbol}).fetchone()
                     _pos = int((_r2[0] if _r2 else 0) or 0)
             except Exception:
                 _pos = 0
@@ -2939,10 +2947,10 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                         with _SH2() as _sh3:
                             _r3 = _sh3.execute(_th2(
                                 "SELECT COALESCE(SUM(volume),0) FROM paper_trades "
-                                "WHERE account_id=:a AND symbol=:s AND direction LIKE '卖%' "
+                                "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND direction LIKE '卖%' "
                                 "AND COALESCE(voided,0)=0 AND trade_date >= ("
                                 "  SELECT MIN(trade_date) FROM paper_trades WHERE account_id=:a "
-                                "  AND symbol=:s AND direction LIKE '买%' AND COALESCE(voided,0)=0)"),
+                                "  AND UPPER(symbol)=UPPER(:s) AND direction LIKE '买%' AND COALESCE(voided,0)=0)"),
                                 {"a": account_id, "s": symbol}).fetchone()
                             _sold = int((_r3[0] if _r3 else 0) or 0)
                     except Exception:
@@ -3161,7 +3169,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     with SessionLocal() as _s7:
                         _rr = _s7.execute(_t7(
                             "SELECT COALESCE(highest_price,0), COALESCE(avg_price,0) FROM paper_positions "
-                            "WHERE account_id=:a AND symbol=:s AND COALESCE(volume,0)>0"),
+                            "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND COALESCE(volume,0)>0"),
                             {"a": account_id, "s": symbol}).fetchone()
                     if _rr and float(_rr[1] or 0) > 0:
                         _promo_ok = float(_rr[0] or 0) < float(_rr[1]) * (1 + _pp / 100.0)
