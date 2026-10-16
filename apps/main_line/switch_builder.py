@@ -512,6 +512,26 @@ def build_plan():
                     print("[switch_builder] 埋伏候选跳过（主题口径不一致）：%s 判级=%s 自身=%s"
                           % (_c6, _judged_theme, ",".join(sorted(_own))[:40]), flush=True)
                     continue
+                # ★ 2026-10-15 修 ✗（用户「以前为什么能正常呢」→ 一路查到根 ✓）：
+                #   病灶：`_sel_block` 定义在 `_arm_legs()` 作用域 ✓，而**本循环在 `build_plan()`** ✓
+                #     ⇒ 跨函数引用 ⇒ `NameError: name '_sel_block' is not defined` ✗
+                #     ⇒ 被本段的 `except` 吞掉 ⇒ 只留一行 `埋伏候选并入失败: …` ✗
+                #     ⇒ `plan["ambush"]` **恒为空** ⇒ 埋伏腿从未进过买入列表 ✓
+                #     （实测 build_plan ✓：文件读到 67 只 ✓、并入 0 只 ✗、buy_new 里 stage=ambush = 0 ✓）
+                #   根因指向 §9.844「把位置/涨幅条件**前移到选股端**」✓ —— 它挪动了 `_sel_block` 的定义位置 ✗
+                #   修法：在本作用域内**自带**一次导入 ✓（与 `_arm_legs` 同源、同语义 ✓）
+                try:
+                    from app.services.build_position_filter import block_reason as _sel_block
+                except Exception:
+                    _sel_block = None
+                # ⚠️ 同一处搬移造成的第二个 NameError ✗：`today` 原先只在 `_arm_legs()` 里定义 ✓
+                #   （`today = datetime.now().strftime("%Y%m%d")` ✓，而臂里时钟已打桩 ⇒ 取到模拟日 ✓）
+                #   ⇒ 本作用域自取一次 ✓（与 `_arm_legs` 同源同义 ✓）
+                try:
+                    from datetime import datetime as _dt9
+                    today = _dt9.now().strftime("%Y%m%d")
+                except Exception:
+                    today = ""
                 if _sel_block is not None:
                     _why_sel2 = _sel_block(_c6, day=today)
                     if _why_sel2:
