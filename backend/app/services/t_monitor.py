@@ -1470,6 +1470,22 @@ class TMonitor:
                         {"a": acct, "d": today, "r": "%T仓轮动%"}).fetchall()
                 for _sy0, _dir0, _px0 in _r0 or []:
                     _ts_map.setdefault(str(_sy0).upper(), []).append((_dir0, _px0))
+                # ★ 2026-10-18 ✓（夜里自查）：**每票每天最多 2 次尝试** ✓
+                #   病灶 ✗：腿被拦时状态不变 ⇒ 每 30 分钟重试 ⇒ 一天最多 13 次 ✗
+                #     ⇒ 触发噪音大、还会撞"同轮累计已达持仓一半"上限 ✗（实测 blocked 26 ✗）
+                _ts_tries = {}
+                try:
+                    from sqlalchemy import text as _tT
+                    from app.database import SessionLocal as _SLT
+                    with _SLT() as _dbT:
+                        for _syT, _nT in _dbT.execute(_tT(
+                            "SELECT UPPER(symbol), COUNT(*) FROM t_triggers "
+                            "WHERE account_id=:a AND trade_date=:d AND event_type LIKE '%sleeve%' "
+                            "GROUP BY UPPER(symbol)"),
+                            {"a": T_MONITOR_ACCOUNT, "d": datetime.now().strftime('%Y-%m-%d')}).fetchall():
+                            _ts_tries[str(_syT)] = int(_nT or 0)
+                except Exception:
+                    _ts_tries = {}
             except Exception:
                 _ts_map = {}
             quotes = fetch_tencent_quote([_normalize_symbol(x) for x in syms]) or {}
@@ -1493,6 +1509,8 @@ class TMonitor:
                                 st["last_buy_px"] = float(_pxS or 0)
                     except Exception:
                         pass
+                    if int((_ts_tries or {}).get(str(sym).upper(), 0)) >= int(os.getenv("WOLF_T_SLEEVE_TRIES", "2") or 2):
+                        continue
                     act, why = _ts.decide(px, pos, st, today, cost=cost)
                     if _diag:
                         print("[TSleeve] %-10s 现价%.3f 持仓%d ⇒ %s: %s"
