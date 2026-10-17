@@ -333,6 +333,25 @@ def sell_floor_cap(account_id: str, symbol: str, volume: int,
         if sel <= 0:
             return v, "底仓floor未介入（无券可卖）"
         floor = int(base_floor_shares(account_id, symbol, volume=sel) or 0)
+        # ★ 2026-10-16 ✓（用户「世纪华通/三七互娱 也没做T」→ 「一起改」）：
+        #   病灶 ✗：**底仓认账记录是旧口径留下的**（NO_DOWN 只升不降 ⇒ 记成**整仓** ✓）
+        #     实测 SZ002602：`可卖 1500 − 底仓 1500 ⇒ 只放行 T 仓 0 股` ✗ ⇒ 物理上做不了 T ✓
+        #     （我的 B 修法只影响**新计算** ✓，旧记录仍在 ✗）
+        #   修法 ✓：`WOLF_FLOOR_RECOMPUTE=1` ⇒ 若 底仓 ≥ 持仓×95%（整仓锁死 ✗）
+        #     ⇒ 按 **持仓 × 底仓目标%** 重算 ✓（80% ⇒ 留 20% 做T ✓，且至少 1 手 ✓）
+        try:
+            if str(os.getenv("WOLF_FLOOR_RECOMPUTE", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                if sel > 0 and floor >= int(sel * 0.95):
+                    from app.services import t_capacity as _capR
+                    _pctR = float(_capR.base_floor_pct()) / 100.0
+                    _newR = int(int(sel * _pctR) // 100 * 100)
+                    _newR = min(_newR, max(sel - 100, 0))
+                    if _newR != floor:
+                        print("[gateway] 底仓重算(旧口径整仓锁死) %s：%d → %d 股（持仓 %d × %.0f%%）"
+                              % (symbol, floor, _newR, sel, _pctR * 100), flush=True)
+                        floor = _newR
+        except Exception:
+            pass
         room = max(sel - floor, 0)
         room = (room // 100) * 100
         if v > room:

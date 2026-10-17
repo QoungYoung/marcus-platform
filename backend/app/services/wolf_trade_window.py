@@ -108,6 +108,15 @@ def allowed(now: Optional[datetime] = None) -> Tuple[bool, str]:
 def directive() -> str:
     """给上下文的提示句（当前是否在窗口内）。
 
+    # ★ 2026-10-16 ✓（用户选 B／「一起改」）：`WOLF_TW_DECISION_ONLY=1` ⇒ 决策层**不再否决** ✓
+    #   病灶 ✗：实测 SZ002555 high_sell 被 `做T时段窗：10:35 不在 09:45-10:00,14:00-14:30` 拦 **32 次** ✗
+    #     而代码里触发层只有**买侧**两处窗口闸 ✓ ⇒ 这条否决来自**决策/playbook 层** ✓
+    #   他的原话 ✓：「只做这两个时间段的交易…避免平稳时间的来回T」＋「**挂被动单**…不盯分时」
+    #     ⇒ 窗口约束"决策/挂单"✓，**被动单成交可在任意时刻** ✓
+    if str(os.getenv("WOLF_TW_DECISION_ONLY", "0")).strip().lower() in ("1", "true", "yes", "on"):
+        return "做T时段：现按「**决策/挂单**」约束（WOLF_TW_DECISION_ONLY=1）——被动单可在窗口外成交 ✓"
+
+
     ⚠️ 2026-09-11：关闭（`WOLF_TRADE_WINDOW=0`）时**不得**再输出"时段…允许"——
     那会被读成"时间窗仍在生效"。改为明确说明已关闭。
     """
