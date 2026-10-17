@@ -60,9 +60,19 @@ def _bars(symbol: str, day: str, n: int = 15) -> List[Dict[str, Any]]:
         import sqlite3
         db = os.path.join(os.path.dirname(__file__), "..", "data", "_bt_full", "bars.sqlite")
         c = sqlite3.connect("file:%s?mode=ro" % os.path.abspath(db), uri=True)
+        # ⚠️ `bars` 表的代码列是 **`ts_code`**（形如 `605589.SH` ✓），不是 `symbol` ✗
+        #   （实测列：ts_code/trade_date/open/high/low/close/pre_close/pct_chg/vol/amount/…）
+        _ts = symbol
+        try:
+            _d = "".join(ch for ch in symbol if ch.isdigit())[:6]
+            _ex = "SH" if symbol.upper().startswith("SH") else ("SZ" if symbol.upper().startswith("SZ") else "")
+            if _d and _ex:
+                _ts = "%s.%s" % (_d, _ex)
+        except Exception:
+            _ts = symbol
         cur = c.execute("SELECT trade_date, open, high, low, close, vol FROM bars "
-                        "WHERE symbol=? AND trade_date < ? ORDER BY trade_date DESC LIMIT ?",
-                        (symbol, str(day), int(n)))
+                        "WHERE ts_code=? AND trade_date < ? ORDER BY trade_date DESC LIMIT ?",
+                        (_ts, str(day), int(n)))
         out = [dict(date=r[0], open=r[1], high=r[2], low=r[3], close=r[4], vol=r[5]) for r in cur.fetchall()]
         c.close()
         return list(reversed(out))
