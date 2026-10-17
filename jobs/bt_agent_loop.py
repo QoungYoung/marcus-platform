@@ -456,10 +456,6 @@ class BtAgentLoop:
                     # ★ 2026-10-16 ✓（用户 A2 + ①查实 ✓）：`agent_review_and_execute` **绝不下单** ✗
                     #   ⇒ 机械腿必须**直接调网关** ✓（`gateway_execute` ✓ 唯一放行者 ✓）
                     result = self._exec_mechanical(trig)
-                    try:
-                        self.stats["auto_rule"] = self.stats.get("auto_rule", 0) + 1
-                    except Exception:
-                        pass
                 else:
                     result = t_bridge.wake_and_decide(trig) or {}
                 _T["wake"] += _t9.perf_counter() - _p2
@@ -603,10 +599,6 @@ class BtAgentLoop:
                     # ★ 2026-10-16 ✓（用户 A2 + ①查实 ✓）：`agent_review_and_execute` **绝不下单** ✗
                     #   ⇒ 机械腿必须**直接调网关** ✓（`gateway_execute` ✓ 唯一放行者 ✓）
                     result = self._exec_mechanical(trig)
-                    try:
-                        self.stats["auto_rule"] = self.stats.get("auto_rule", 0) + 1
-                    except Exception:
-                        pass
                 else:
                     result = t_bridge.wake_and_decide(trig) or {}
                 _T["wake"] += _t9.perf_counter() - _p2

@@ -1480,7 +1480,10 @@ class TMonitor:
                     with _SLT() as _dbT:
                         for _syT, _nT in _dbT.execute(_tT(
                             "SELECT UPPER(symbol), COUNT(*) FROM t_triggers "
-                            "WHERE account_id=:a AND trade_date=:d AND event_type LIKE '%sleeve%' "
+                            # ⚠️ `t_triggers` **没有 trade_date 列** ✗（实测 UndefinedColumn ✓）
+                            #   该表日期靠 `created_at` ✓（列：…, executed_at, created_at, direction）
+                            "WHERE account_id=:a AND created_at::date = :d::date "
+                            "AND event_type LIKE '%sleeve%' "
                             "GROUP BY UPPER(symbol)"),
                             {"a": T_MONITOR_ACCOUNT, "d": datetime.now().strftime('%Y-%m-%d')}).fetchall():
                             _ts_tries[str(_syT)] = int(_nT or 0)
