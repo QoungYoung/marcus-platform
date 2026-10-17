@@ -232,9 +232,14 @@ export WOLF_T_SLEEVE_ONCE='1'
 # ★ 2026-10-18 ✓（用户方案）：**盘前 T 计划带**（正T/倒T 双向 ✓，按振幅 ✓）
 #   「不是上涨就不能做T…有正T和倒T，只要振幅比较大就能T」✓
 export WOLF_T_PLAN='1'
-export WOLF_T_PLAN_AGENT='1'      # ★ 用户 2026-10-18：让 agent 按**图形**给 T出/T入 价 ✓
-export WOLF_T_PLAN_REFRESH='1'     # 盘中改价 ✓（现价贴近/突破原带 ⇒ 重新请 agent ✓）
+# ⚠️ 2026-10-18 07:49 实测 ✗：本地 LLM（3001）被并发挤爆 ⇒
+#   bt_local_pro / bt_agent_loop / bt_t_plan **同一秒集体超时** ✗
+#   ⇒ T 定价先走**数值带**（秒级 ✓，圣泉 0227 已验证 ✓）；
+#     agent 定价保留开关 ✓，等 LLM 不被挤占时再打开 ✓（或单线程化）
+export WOLF_T_PLAN_AGENT='0'
+export WOLF_T_PLAN_REFRESH='0'     # 改价也需 LLM ⇒ 先关 ✓（数值带足够 ✓）
 export WOLF_T_PLAN_REFRESH_MAX='2'  # 每票每天最多改 2 次 ✓（防拖慢回测 ✗）
+export WOLF_T_PLAN_WORKERS='1'  # 单线程 ✓（LLM 单卡，并发只会互相超时 ✗）
 export WOLF_T_PLAN_TIMEOUT='12'   # 本地 LLM 忙时会超 25 秒 ✗ ⇒ 收到 12 秒 ✓
 export WOLF_T_PLAN_FAIL_MAX='3'   # 当天连续失败 3 次 ⇒ **当天不再调 agent** ✓（走数值带 ✓）
 export WOLF_TP_MIN_PCT='1.0'
