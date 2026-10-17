@@ -3464,6 +3464,39 @@ class TMonitor:
                                 _ah_sil.note_silent("t_monitor.py:3030", _e_sil17)
                             except Exception:
                                 print("[silent:t_monitor.py:3030] %s: %s" % (type(_e_sil17).__name__, str(_e_sil17)[:110]), flush=True)
+                    # ★ 2026-10-16 ✓（用户：「**怎么转正的价格比埋伏的低**？」）：
+                    #   病灶 ✗（Q1/20260109 SH600183 实录 ✓）：
+                    #     成本=72.743 ｜ 持仓**最高价** _hi=75.379（01-08 的日高 ✓）
+                    #     ⇒ 两条判据都用 `_hi` ✗ ⇒ **价格已经跌回 71.04（低于成本）仍判"碰新高成立"** ✗
+                    #     ⇒ 记 `pday=20260109 ppx=71.043` ⇒ **加仓买在成本下方** ✗（与"转正"语义相反 ✓）
+                    #   修法 ✓：`WOLF_AMBUSH_PROMOTE_BY_CUR=1` ⇒ 判据改用**当日收盘（现价）** ✓
+                    #     现价 ≥ 浮盈线(_cost0×(1+pct%)) 或 现价 > 买入前高(_ph0) 才算转正 ✓
+                    if _promoted and str(os.getenv("WOLF_AMBUSH_PROMOTE_BY_CUR", "0")).strip().lower() \
+                            in ("1", "true", "yes", "on"):
+                        try:
+                            _bdC = self._daily_dated(_sym, 6) or []
+                            _curC = 0.0
+                            for _bC in _bdC:
+                                _dC8 = str(_bC.get('date') or '').replace('-', '')[:8]
+                                if _dC8 == str(_today):
+                                    _curC = float(_bC.get('close') or 0)
+                            _phC = locals().get('_ph0', 0.0)
+                            if not _phC:
+                                try:
+                                    _phC = self._prior_high_before_entry(_sym, _entry, after=False)
+                                except Exception:
+                                    _phC = 0.0
+                            if _curC > 0:
+                                _lineC = _cost0 * (1 + self._ambush_promote_pct() / 100.0) if _cost0 > 0 else 0.0
+                                _okC = bool((_lineC > 0 and _curC >= _lineC) or (_phC > 0 and _curC > _phC))
+                                print("[埋伏转正·现价闸] %s 现价=%.3f 成本=%.3f 浮盈线=%.3f 买入前高=%.3f ⇒ %s"
+                                      % (_sym, _curC, _cost0, _lineC, _phC,
+                                         "成立" if _okC else "**不成立 ⇒ 不转正**（价格已回落 ✗）"), flush=True)
+                                if not _okC:
+                                    _promoted = False
+                        except Exception as _eCur:
+                            print("[埋伏转正·现价闸异常(放行) %s: %s" % (_sym, str(_eCur)[:70]), flush=True)
+
                     # ★ 账本 §9.704 ✓（用户 2026-10-07：「芳源股份 未转正就加仓」✗）：
                     #   **实测对不上** ✗ —— 芳源 01-26 当天最高只有 10.410，
                     #     而 买入前 20 日最高 = 10.730 ✗、成本×1.10 = 10.824 ✗
