@@ -84,7 +84,7 @@ def buyback_price(last_sell_px: float, pct: Optional[float] = None) -> float:
 
 
 def decide(price: float, position: int, state: Dict[str, Any], day: str,
-           cost: float = 0.0) -> Tuple[str, str]:
+           cost: float = 0.0, plan: Optional[Tuple[float, float]] = None) -> Tuple[str, str]:
     """纯决策 ✓ ⇒ ("sell"|"buy"|"hold", 原因)
 
     规则（全部来自语料 ✓）：
@@ -131,6 +131,28 @@ def decide(price: float, position: int, state: Dict[str, Any], day: str,
     px = float(price or 0)
     if px <= 0:
         return "hold", "无价格"
+    # ⓿ **盘前计划带（正T/倒T 双向 ✓，用户方案 ✓）**
+    #   用户原话 ✓：「不是上涨就不能做T…有**正T和倒T**，只要感觉**振幅比较大**就能T，
+    #     每天盘前先让 agent 去挂当天的 T出/T入价格」
+    #   plan = (buy_price, sell_price) ✓（由 `jobs/bt_t_plan.py` 盘前生成 ✓）
+    if plan and float(plan[0] or 0) > 0 and float(plan[1] or 0) > 0:
+        _buy, _sell = float(plan[0]), float(plan[1])
+        if st.get("sold") and not st.get("bought"):
+            lp = float(st.get("last_sell_px") or 0)
+            tgt = _buy if _buy > 0 else buyback_price(lp)
+            if px <= tgt:
+                return "buy", ("计划带·倒T回补：现价 %.3f ≤ 计划T入价 %.3f ✓（%d 股）" % (px, tgt, sn))
+            return "hold", "计划带·已卖出等回补（T入价 %.3f 现价 %.3f）" % (tgt, px)
+        if st.get("bought") and not st.get("sold"):
+            if px >= _sell:
+                return "sell", ("计划带·正T卖出：现价 %.3f ≥ 计划T出价 %.3f ✓（%d 股）" % (px, _sell, sn))
+            return "hold", "计划带·正T已买等卖出（T出价 %.3f 现价 %.3f）" % (_sell, px)
+        # 两边都没做 ⇒ 先看哪边先到 ✓（用户：「只要振幅够就能T」✓）
+        if px <= _buy:
+            return "buy", ("计划带·正T买入：现价 %.3f ≤ 计划T入价 %.3f ✓（%d 股）" % (px, _buy, sn))
+        if px >= _sell:
+            return "sell", ("计划带·倒T卖出：现价 %.3f ≥ 计划T出价 %.3f ✓（%d 股）" % (px, _sell, sn))
+        return "hold", "计划带内（入 %.3f 出 %.3f 现价 %.3f）" % (_buy, _sell, px)
     # ① 已卖出 ⇒ 等回补 ✓
     if st.get("sold") and not st.get("bought"):
         lp = float(st.get("last_sell_px") or 0)

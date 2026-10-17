@@ -1532,7 +1532,42 @@ class TMonitor:
                         pass
                     if int((_ts_tries or {}).get(str(sym).upper(), 0)) >= int(os.getenv("WOLF_T_SLEEVE_TRIES", "2") or 2):
                         continue
-                    act, why = _ts.decide(px, pos, st, today, cost=cost)
+                    # ── 盘前计划带 ✓（用户方案：正T/倒T 双向 ✓，按振幅 ✓）──
+                    #   当天首次用到某票时**就地生成** ✓（数值带，不依赖 LLM ✓；本地日线 ✓）
+                    #   `WOLF_T_PLAN=1` 才启用 ✓；`WOLF_T_PLAN_AGENT=1` 时让 agent 精修 ✓
+                    _plan = None
+                    try:
+                        if str(os.getenv("WOLF_T_PLAN", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                            _cache = getattr(self, "_ts_plan_cache", None)
+                            if _cache is None or str(getattr(self, "_ts_plan_day", "")) != today:
+                                _cache = {}
+                                self._ts_plan_cache = _cache
+                                self._ts_plan_day = today
+                            if str(sym).upper() not in _cache:
+                                _cache[str(sym).upper()] = None
+                                try:
+                                    import sys as _sysP
+                                    _jd = os.path.join(os.path.dirname(os.path.dirname(
+                                        os.path.dirname(os.path.abspath(__file__)))), "jobs")
+                                    if _jd not in _sysP.path:
+                                        _sysP.path.insert(0, _jd)
+                                    import bt_t_plan as _ttp
+                                    _f = _ttp._features(sym, today, pos, cost)
+                                    if _f:
+                                        _b = _ttp.numeric_band(_f)
+                                        if str(os.getenv("WOLF_T_PLAN_AGENT", "0")).strip().lower() \
+                                                in ("1", "true", "yes", "on"):
+                                            _b = _ttp.agent_refine(_f, _b)
+                                        _cache[str(sym).upper()] = (float(_b["buy"]), float(_b["sell"]))
+                                        print("[TSleeve计划] %-10s 入%.3f 出%.3f（振幅%.2f%% %s）"
+                                              % (sym, _b["buy"], _b["sell"], _f.get("amp10_pct", 0),
+                                                 _b.get("src", "")), flush=True)
+                                except Exception as _ep:
+                                    print("[TSleeve计划] %s 生成异常: %s" % (sym, str(_ep)[:70]), flush=True)
+                            _plan = _cache.get(str(sym).upper())
+                    except Exception:
+                        _plan = None
+                    act, why = _ts.decide(px, pos, st, today, cost=cost, plan=_plan)
                     if _diag:
                         print("[TSleeve] %-10s 现价%.3f 持仓%d ⇒ %s: %s"
                               % (sym, px, pos, act, str(why)[:80]), flush=True)

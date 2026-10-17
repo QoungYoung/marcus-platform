@@ -229,6 +229,12 @@ export WOLF_T_SLEEVE_PCT='20'
 export WOLF_T_SLEEVE_TARGET='2'
 export WOLF_T_SLEEVE_BUYBACK='0'
 export WOLF_T_SLEEVE_ONCE='1'
+# ★ 2026-10-18 ✓（用户方案）：**盘前 T 计划带**（正T/倒T 双向 ✓，按振幅 ✓）
+#   「不是上涨就不能做T…有正T和倒T，只要振幅比较大就能T」✓
+export WOLF_T_PLAN='1'
+export WOLF_T_PLAN_AGENT='0'      # 先跑数值带 ✓（0=不调 LLM）；稳定后再置 1 让 agent 精修
+export WOLF_TP_MIN_PCT='1.0'
+export WOLF_TP_MAX_PCT='3.5'
 # ★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI**（纯价格带/止盈类 ✓，AI 只决策建仓类）
 #   实测：agent on 时积压 335 条 pending ✗ ⇒ 每条 15~110 秒 ✗ ⇒ 全程十几小时 ✗
 # 回滚 ✓（A1：机械腿跳过名单会变成 pending 坟墓 ✗ ⇒ 恢复全量过 AI ✓）
