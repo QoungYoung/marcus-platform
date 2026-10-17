@@ -295,7 +295,10 @@ class BtAgentLoop:
             gw = gateway_execute(sym, side, px, vol,
                                  condition_id=trig.get("condition_id"), trigger_id=tid,
                                  kind=str(trig.get("event_type") or ""),
-                                 reason="机械腿自动执行（BT_AGENT_AUTO_KINDS ✓ 不问 LLM）",
+                                 # ⚠️ 理由里**必须保留原腿的语义串** ✓
+                                 #   病灶 ✗：我原先写成"机械腿自动执行…" ⇒ 「埋伏仓卖出总闸」的豁免
+                                 #     判的是 `"T仓轮动" in reason` ⇒ 匹配不到 ⇒ 全被拦 ✗（实测 5/5 blocked ✓）
+                                 reason=("机械腿自动执行 ｜ " + str((snap or {}).get("wolf_rule") or ""))[:200],
                                  decision_source="agent",
                                  account_id=str(trig.get("account_id") or ""))
             print("[bt-agent] 机械腿直执行 %s %s %d 股 @%.3f ⇒ %s"
