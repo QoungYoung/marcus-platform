@@ -99,10 +99,21 @@ def _features(symbol: str, day: str, pos: int, cost: float) -> Optional[Dict[str
     lo5 = min(lows[-5:]) if len(lows) >= 5 else min(lows)
     hi5 = max(highs[-5:]) if len(highs) >= 5 else max(highs)
     atr = statistics.mean([(highs[i] - lows[i]) for i in range(len(highs))][-10:]) if highs else 0.0
+    # ★ 结构位 ✓（用户：他按**图形**评估 T 点 ✓ ⇒ agent 必须看到压力/支撑 ✓）
+    def _ma(k: int) -> float:
+        xs = closes[-k:]
+        return round(sum(xs) / len(xs), 3) if xs else 0.0
+    hi20 = max(highs[-20:]) if len(highs) >= 20 else max(highs)
+    lo20 = min(lows[-20:]) if len(lows) >= 20 else min(lows)
+    gap = round(float(bs[-1].get("open") or 0) - prev, 3) if bs else 0.0
     return {"symbol": symbol, "day": str(day), "position": int(pos), "cost": float(cost),
             "prev_close": round(prev, 3), "low5": round(lo5, 3), "high5": round(hi5, 3),
             "amp10_pct": round(amp10, 2), "atr": round(atr, 3),
-            "amp_atr_pct": round(atr / prev * 100.0, 2) if prev else 0.0}
+            "amp_atr_pct": round(atr / prev * 100.0, 2) if prev else 0.0,
+            "high20": round(hi20, 3), "low20": round(lo20, 3),
+            "ma5": _ma(5), "ma10": _ma(10), "ma20": _ma(20),
+            "last_open_gap": gap,
+            "recent": [round(x, 2) for x in closes[-6:]]}
 
 
 def numeric_band(f: Dict[str, Any]) -> Dict[str, Any]:
@@ -129,20 +140,31 @@ def agent_refine(f: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
         "你是A股做T操盘手。请只输出 JSON，不要解释。\n"
         "标的 %s ｜ 日期 %s ｜ 持仓 %d 股 ｜ 成本 %.3f\n"
         "昨收 %.3f ｜ 近10日平均振幅 %.2f%% ｜ ATR %.3f(%.2f%%) ｜ 近5日低 %.3f 高 %.3f\n"
+        "结构位：20日高 %.3f 低 %.3f ｜ MA5 %.3f MA10 %.3f MA20 %.3f ｜ 最近6日收盘 %s\n"
         "参考数值带：T入价 %.3f ｜ T出价 %.3f\n"
         "要求：按当日**振幅**给出 T出价/T入价（正T：先在T入价买、再在T出价卖；倒T：反过来）。\n"
         "价格必须落在 [低5×0.98, 高5×1.02] 内，且 T出价 > T入价。\n"
         '输出格式：{"sell": 数字, "buy": 数字, "why": "不超过20字"}\n'
         % (f["symbol"], f["day"], f["position"], f["cost"], f["prev_close"], f["amp10_pct"],
-           f["atr"], f["amp_atr_pct"], f["low5"], f["high5"], base["buy"], base["sell"])
+           f["atr"], f["amp_atr_pct"], f["low5"], f["high5"],
+           f.get("high20", 0), f.get("low20", 0), f.get("ma5", 0), f.get("ma10", 0), f.get("ma20", 0),
+           f.get("recent"), base["buy"], base["sell"])
     )
     try:
-        body = json.dumps({"message": prompt, "messages": [{"role": "user", "content": prompt}]}).encode()
+        body = json.dumps({"message": prompt}).encode()   # 实测：端点只认 `message` ✓
         req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=float(os.getenv("WOLF_T_PLAN_TIMEOUT", "25") or 25)) as r:
             txt = r.read().decode("utf-8", "replace")
-        i, j = txt.find("{"), txt.rfind("}")
-        cfg = json.loads(txt[i:j + 1])
+        # ⚠️ 端点返回的是 `{"reply": "<模型输出>", ...}` ✗ —— 直接 json.loads 外层会把
+        #   `cfg.get("sell")` 取成 None ⇒ 恒判"越界被弃" ✗（实测 ✓）
+        #   修法 ✓：先取 `reply`，再从 reply 里抠 JSON ✓
+        try:
+            _env = json.loads(txt)
+            _inner = str(_env.get("reply") or _env.get("content") or _env.get("message") or txt)
+        except Exception:
+            _inner = txt
+        i, j = _inner.find("{"), _inner.rfind("}")
+        cfg = json.loads(_inner[i:j + 1])
         sell, buy = float(cfg.get("sell") or 0), float(cfg.get("buy") or 0)
         lo, hi = float(f["low5"]) * 0.98, float(f["high5"]) * 1.02
         if not (lo <= buy < sell <= hi):
@@ -225,3 +247,50 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def agent_refresh(f: Dict[str, Any], base: Dict[str, Any], cur_px: float,
+                  tried: int = 0) -> Dict[str, Any]:
+    """**盘中改价** ✓（用户：他"缩转放那一瞬间"会改判 ✓，挂单价只是参考 ✓）
+
+    触发时机（由监控端决定 ✓）：现价已贴近/突破原带 ✓，或每 N 次评估 ✓
+    失败 ⇒ 原样返回旧带 ✓（绝不空手 ✗）
+    """
+    url = os.getenv("WOLF_T_PLAN_URL", "http://127.0.0.1:3001/chat")
+    prompt = (
+        "你是A股做T操盘手，现在**盘中**。只输出 JSON，不要解释。\n"
+        "标的 %s ｜ %s ｜ 现价 %.3f ｜ 昨收 %.3f ｜ 成本 %.3f ｜ 持仓 %d\n"
+        "近10日振幅 %.2f%% ｜ ATR%.2f%% ｜ 20日高 %.3f 低 %.3f ｜ MA5 %.3f MA10 %.3f MA20 %.3f\n"
+        "最近6日收盘 %s ｜ 原计划带：T入 %.3f / T出 %.3f（已评估 %d 次）\n"
+        "按**当下图形**判断：是继续等、还是把 T出/T入 改成更贴近现价的位置？\n"
+        "约束：T出 > T入，且都落在 [20日低×0.97, 20日高×1.03] 内。\n"
+        '输出格式：{"sell": 数字, "buy": 数字, "why": "不超过20字"}\n'
+        % (f["symbol"], f["day"], cur_px, f["prev_close"], f["cost"], f["position"],
+           f["amp10_pct"], f["amp_atr_pct"], f.get("high20", 0), f.get("low20", 0),
+           f.get("ma5", 0), f.get("ma10", 0), f.get("ma20", 0), f.get("recent"),
+           base["buy"], base["sell"], tried)
+    )
+    try:
+        body = json.dumps({"message": prompt}).encode()   # 实测：端点只认 `message` ✓
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=float(os.getenv("WOLF_T_PLAN_TIMEOUT", "25") or 25)) as r:
+            txt = r.read().decode("utf-8", "replace")
+        # ⚠️ 端点返回的是 `{"reply": "<模型输出>", ...}` ✗ —— 直接 json.loads 外层会把
+        #   `cfg.get("sell")` 取成 None ⇒ 恒判"越界被弃" ✗（实测 ✓）
+        #   修法 ✓：先取 `reply`，再从 reply 里抠 JSON ✓
+        try:
+            _env = json.loads(txt)
+            _inner = str(_env.get("reply") or _env.get("content") or _env.get("message") or txt)
+        except Exception:
+            _inner = txt
+        i, j = _inner.find("{"), _inner.rfind("}")
+        cfg = json.loads(_inner[i:j + 1])
+        sell, buy = float(cfg.get("sell") or 0), float(cfg.get("buy") or 0)
+        lo = float(f.get("low20") or f["low5"]) * 0.97
+        hi = float(f.get("high20") or f["high5"]) * 1.03
+        if not (lo <= buy < sell <= hi):
+            return dict(base, src="numeric(改价越界被弃)")
+        return {"sell": round(sell, 3), "buy": round(buy, 3), "k_pct": base.get("k_pct", 0),
+                "src": "agent-refresh", "why": str(cfg.get("why") or "")[:40]}
+    except Exception as e:
+        return dict(base, src="numeric(改价异常: %s)" % str(e)[:24])

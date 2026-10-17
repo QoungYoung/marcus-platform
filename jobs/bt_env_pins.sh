@@ -232,7 +232,10 @@ export WOLF_T_SLEEVE_ONCE='1'
 # ★ 2026-10-18 ✓（用户方案）：**盘前 T 计划带**（正T/倒T 双向 ✓，按振幅 ✓）
 #   「不是上涨就不能做T…有正T和倒T，只要振幅比较大就能T」✓
 export WOLF_T_PLAN='1'
-export WOLF_T_PLAN_AGENT='0'      # 先跑数值带 ✓（0=不调 LLM）；稳定后再置 1 让 agent 精修
+export WOLF_T_PLAN_AGENT='1'      # ★ 用户 2026-10-18：让 agent 按**图形**给 T出/T入 价 ✓
+export WOLF_T_PLAN_REFRESH='1'     # 盘中改价 ✓（现价贴近/突破原带 ⇒ 重新请 agent ✓）
+export WOLF_T_PLAN_REFRESH_MAX='2'  # 每票每天最多改 2 次 ✓（防拖慢回测 ✗）
+export WOLF_T_PLAN_TIMEOUT='20'
 export WOLF_TP_MIN_PCT='1.0'
 export WOLF_TP_MAX_PCT='3.5'
 # ★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI**（纯价格带/止盈类 ✓，AI 只决策建仓类）

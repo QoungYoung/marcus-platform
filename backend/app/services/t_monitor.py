@@ -1543,6 +1543,40 @@ class TMonitor:
                                 _cache = {}
                                 self._ts_plan_cache = _cache
                                 self._ts_plan_day = today
+                            # ★ 2026-10-18 ✓（用户：他"缩转放那一瞬间"会改判 ✓，挂单价只是参考 ✓）
+                            #   **盘中改价** ✓：现价贴近/突破原带 ⇒ 请 agent 重新给一次 ✓
+                            #   次数上限 `WOLF_T_PLAN_REFRESH_MAX`（默认 2）✓ 防拖慢 ✗
+                            _cur_plan = _cache.get(str(sym).upper())
+                            _max_ref = int(os.getenv("WOLF_T_PLAN_REFRESH_MAX", "2") or 2)
+                            if (_cur_plan and str(os.getenv("WOLF_T_PLAN_REFRESH", "0")).strip().lower()
+                                    in ("1", "true", "yes", "on")
+                                    and str(os.getenv("WOLF_T_PLAN_AGENT", "0")).strip().lower()
+                                    in ("1", "true", "yes", "on")
+                                    and int(_cur_plan[2] if len(_cur_plan) > 2 else 0) < _max_ref
+                                    and px > 0
+                                    and (px >= _cur_plan[1] * 0.995 or px <= _cur_plan[0] * 1.005)):
+                                _cache[str(sym).upper()] = None      # 防并发重复调用 ✓
+                                try:
+                                    import sys as _sysQ
+                                    _jdq = os.path.join(os.path.dirname(os.path.dirname(
+                                        os.path.dirname(os.path.abspath(__file__)))), "jobs")
+                                    if _jdq not in _sysQ.path:
+                                        _sysQ.path.insert(0, _jdq)
+                                    import bt_t_plan as _ttq
+                                    _fq = _ttq._features(sym, today, pos, cost)
+                                    if _fq:
+                                        _bq = _ttq.agent_refresh(
+                                            _fq, {"buy": _cur_plan[0], "sell": _cur_plan[1],
+                                                  "k_pct": 0}, px,
+                                            int(_cur_plan[2] if len(_cur_plan) > 2 else 0))
+                                        _cache[str(sym).upper()] = (
+                                            float(_bq["buy"]), float(_bq["sell"]),
+                                            int(_cur_plan[2] if len(_cur_plan) > 2 else 0) + 1)
+                                        print("[TSleeve改价] %-10s 现价%.3f ⇒ 入%.3f 出%.3f（%s %s）"
+                                              % (sym, px, _bq["buy"], _bq["sell"],
+                                                 _bq.get("src", ""), _bq.get("why", "")), flush=True)
+                                except Exception as _eq:
+                                    print("[TSleeve改价] %s 异常: %s" % (sym, str(_eq)[:60]), flush=True)
                             if str(sym).upper() not in _cache:
                                 _cache[str(sym).upper()] = None
                                 try:
@@ -1558,13 +1592,14 @@ class TMonitor:
                                         if str(os.getenv("WOLF_T_PLAN_AGENT", "0")).strip().lower() \
                                                 in ("1", "true", "yes", "on"):
                                             _b = _ttp.agent_refine(_f, _b)
-                                        _cache[str(sym).upper()] = (float(_b["buy"]), float(_b["sell"]))
+                                        _cache[str(sym).upper()] = (float(_b["buy"]), float(_b["sell"]), 0)
                                         print("[TSleeve计划] %-10s 入%.3f 出%.3f（振幅%.2f%% %s）"
                                               % (sym, _b["buy"], _b["sell"], _f.get("amp10_pct", 0),
                                                  _b.get("src", "")), flush=True)
                                 except Exception as _ep:
                                     print("[TSleeve计划] %s 生成异常: %s" % (sym, str(_ep)[:70]), flush=True)
-                            _plan = _cache.get(str(sym).upper())
+                            _pv = _cache.get(str(sym).upper())
+                            _plan = (float(_pv[0]), float(_pv[1])) if _pv else None
                     except Exception:
                         _plan = None
                     act, why = _ts.decide(px, pos, st, today, cost=cost, plan=_plan)
