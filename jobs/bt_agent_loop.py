@@ -350,7 +350,6 @@ class BtAgentLoop:
                 "WHERE id = ("
                 "  SELECT id FROM t_triggers "
                 "  WHERE status = 'pending' AND account_id = :acc " + since_sql + " "
-                  "  AND COALESCE(event_type,'') NOT IN (" + self._auto_skip_sql() + ") "
                 "  ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
                 ") RETURNING id, account_id, condition_id, symbol, event_type, trigger_price, "
                 "quote_price, suggest_bid_price, suggest_ask_price, slippage_budget, snapshot, "
