@@ -271,6 +271,19 @@ class BtAgentLoop:
             self._wm = None
         return self._wm
 
+    def _auto_skip_sql(self) -> str:
+        """★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI** ✓
+        机械腿 = 纯价格带/止盈类（sleeve / high_sell / dao_t / profit_take ✓）
+          ⇒ agent **不认领** ✓，留给执行口的自动执行路径 ✓
+        开关 ✓：`BT_AGENT_AUTO_KINDS`（逗号分隔 ✓，默认空 ⇒ 逐字旧行为 ✓）
+        （实测：agent on 时积压 335 条 pending ✗，每条 15~110 秒 ✗ ⇒ 全程十几小时 ✗）
+        """
+        try:
+            ks = [x.strip() for x in (os.getenv("BT_AGENT_AUTO_KINDS", "") or "").split(",") if x.strip()]
+            return ",".join("'%s'" % k.replace("'", "") for k in ks) if ks else "''"
+        except Exception:
+            return "''"
+
     def _claim_pending(self) -> Optional[Dict[str, Any]]:
         from sqlalchemy import text
         from app.database import SessionLocal
@@ -303,6 +316,7 @@ class BtAgentLoop:
                 "WHERE id = ("
                 "  SELECT id FROM t_triggers "
                 "  WHERE status = 'pending' AND account_id = :acc " + since_sql + " "
+                  "  AND COALESCE(event_type,'') NOT IN (" + self._auto_skip_sql() + ") "
                 "  ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED"
                 ") RETURNING id, account_id, condition_id, symbol, event_type, trigger_price, "
                 "quote_price, suggest_bid_price, suggest_ask_price, slippage_budget, snapshot, "

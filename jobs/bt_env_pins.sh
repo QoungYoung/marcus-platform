@@ -229,6 +229,9 @@ export WOLF_T_SLEEVE_PCT='20'
 export WOLF_T_SLEEVE_TARGET='2'
 export WOLF_T_SLEEVE_BUYBACK='0'
 export WOLF_T_SLEEVE_ONCE='1'
+# ★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI**（纯价格带/止盈类 ✓，AI 只决策建仓类）
+#   实测：agent on 时积压 335 条 pending ✗ ⇒ 每条 15~110 秒 ✗ ⇒ 全程十几小时 ✗
+export BT_AGENT_AUTO_KINDS='wolf_t_sleeve_sell,wolf_t_sleeve_buy,high_sell,wolf_dao_t_sell,wolf_profit_take_sell,wolf_fib_target_sell,wolf_defensive_t_reduce'
 # 窄杂毛门**上移到排名之前**（用户 2026-09-25：「过了这个门才能进排名」）
 #   量化（账本 §9.123）：杂毛占判级名额 4.0%；0107 数据中心 4 个名额里 2 个是杂毛 ✗
 export WOLF_JUNK_BEFORE_RANK='1'
