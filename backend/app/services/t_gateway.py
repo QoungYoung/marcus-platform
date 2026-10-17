@@ -3258,7 +3258,16 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                         _promo_ok = float(_rr[0] or 0) < float(_rr[1]) * (1 + _pp / 100.0)
             except Exception:
                 _promo_ok = True
-            if not any(_k in _rs for _k in _ALLOW_SUB):
+            # ★ 2026-10-16 ✓（用户 A+B ✓）：**T 仓轮动腿豁免本闸** ✓
+            #   依据 ✓：A+B 的口径是"**独立 T 仓、价格带驱动、每天轮一次**"（语料：
+            #     每天倒一次做T / 回到卖出位置才补 / 日内做T仓位20%）✓
+            #     ⇒ T 仓卖的只是那 20%（底仓 floor 另外守 ✓）⇒ 不该被"埋伏仓不许T"拦 ✗
+            #   （Q1 实测：本闸拦 282 次 ✗ 是 T=0 的主因之一 ✓）
+            _sleeve_ok = (str(os.getenv("WOLF_T_SLEEVE_BAND", "0")).strip().lower()
+                          in ("1", "true", "yes", "on")) and ("T仓轮动" in _rs)
+            if _sleeve_ok:
+                print("[gateway] %s T仓轮动腿 ⇒ 豁免「埋伏仓卖出总闸」✓（A+B）" % symbol, flush=True)
+            if not _sleeve_ok and not any(_k in _rs for _k in _ALLOW_SUB):
                 if _promo_ok and _ambush_position(account_id, symbol):
                     # ⚠️ 2026-09-30（账本 §9.328）：**字面 % 必须转义** ✗
                     #   原字符串含「−20%」⇒ 又被 `%` 格式化 ⇒

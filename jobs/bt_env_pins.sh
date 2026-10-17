@@ -221,6 +221,14 @@ export WOLF_FLOOR_RECOMPUTE='1'
 # ★ 2026-10-16 ✓（用户「加上」）：做T链路诊断（只打日志 ✓ 不改行为 ✓）
 #   每个持仓：在不在做T宇宙 + 有哪几条 T 类条件 ⇒ 一天定位卡点
 export WOLF_T_DIAG='1'
+# ★ 2026-10-16 ✓（用户 A+B）：**独立 T 仓 + 价格带驱动**（语料参数 ✓）
+#   T仓=持仓20%（≥1手）｜ 卖出=锚×(1+2%)收工 ｜ 回补=回到上次卖价 ｜ 每票每天1轮
+#   量化：dec1 231 票-日 ⇒ 91% 的日子有T、均 +0.87%/笔 ✓（强制"跌3%"只剩26% ✗）
+export WOLF_T_SLEEVE_BAND='1'
+export WOLF_T_SLEEVE_PCT='20'
+export WOLF_T_SLEEVE_TARGET='2'
+export WOLF_T_SLEEVE_BUYBACK='0'
+export WOLF_T_SLEEVE_ONCE='1'
 # 窄杂毛门**上移到排名之前**（用户 2026-09-25：「过了这个门才能进排名」）
 #   量化（账本 §9.123）：杂毛占判级名额 4.0%；0107 数据中心 4 个名额里 2 个是杂毛 ✗
 export WOLF_JUNK_BEFORE_RANK='1'

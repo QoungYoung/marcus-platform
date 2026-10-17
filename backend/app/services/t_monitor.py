@@ -540,6 +540,10 @@ class TMonitor:
                     self._check_plan_triggers()   # 计划触发(复用同一监控器): 命中→唤醒交易agent
                     self._check_break_vwap_half()
                     self._check_wolf_t_rules()    # 做T规则(向狼大看齐): 正T/倒T命中→写t_triggers
+                    try:
+                        self._check_t_sleeve()   # ★ A+B：独立T仓 + 价格带驱动（WOLF_T_SLEEVE_BAND）
+                    except Exception:
+                        pass
                     self._check_roundtrip_sell()  # B模型·等量换手: 低吸后反弹≥狼大兑现幅度(默认+3%)卖≤N旧仓
                     # day_end 默认降级: 不做'未确认→必卖'(那批几乎全亏); 卖出仅靠确认制T出/defensive
                     # 开 WOLF_DAY_END_T_OUT=1 ⇒ 恢复狼大「做T当日出来，不留过夜」(14:45 后未确认即减T仓)
@@ -1407,6 +1411,96 @@ class TMonitor:
                     del _TSELL_PENDING[sym]
             except Exception as ex:
                 print(f"[TMonitor] settle_tsell err {sym}: {str(ex)[:100]}")
+
+    def _check_t_sleeve(self) -> None:
+        """★ 2026-10-16 ✓（用户 A+B）：**独立 T 仓 + 价格带驱动**的 T 轮动 ✓
+
+        为什么 ✗：我们的 T 是"形态信号驱动"（high_sell/vwap/0.618/上影线）
+           ⇒ Q1 实测 high_sell 拦 **896** 次、成交只有 **2** 笔 ✗
+         他的是"**价格带驱动 + 被动挂单**"✓（语料：每天倒一次做T / 目标3-4%实际2%收工 /
+           −3%以下抄的 / 回到卖出位置才补 / 日内做T仓位20%）
+        量化 ✓（dec1 231 个票-日）：目标+2%、不强制"跌3%" ⇒ **91% 的日子有 T**、均 +0.87%/笔 ✓
+
+        做法 ✓（无状态文件 ✓）：**当日成交反推**本轮 T 状态 ✓（自愈 ✓，不依赖内存 ✓）
+          · 当日已卖（理由含"T仓轮动"）⇒ 等回补价 ✓
+          · 当日已卖且已买回 ⇒ 今日完成 ✓（`WOLF_T_SLEEVE_ONCE=1` 时不再做 ✓）
+          · 都没有 ⇒ 看现价是否到"成本×(1+目标%)" ⇒ 卖 T 仓 ✓
+        开关 ✓：`WOLF_T_SLEEVE_BAND`（库内默认 0 ✓）
+        """
+        try:
+            from app.services import t_sleeve as _ts
+            if not _ts.enabled():
+                return
+            from app.services.t_gateway import get_sellable_ledger
+            acct = T_MONITOR_ACCOUNT
+            ledger = get_sellable_ledger(account_id=acct) or {}
+            if not ledger:
+                return
+            syms = []
+            for _s, _it in ledger.items():
+                _it = _it or {}
+                if int(_it.get("volume") or _it.get("sellable") or 0) > 0:
+                    syms.append(str(_s))
+            if not syms:
+                return
+            quotes = fetch_tencent_quote([_normalize_symbol(x) for x in syms]) or {}
+            today = datetime.now().strftime("%Y%m%d")
+            _diag = str(os.getenv("WOLF_T_DIAG", "0")).strip().lower() in ("1", "true", "yes", "on")
+            for sym in syms:
+                try:
+                    q = quotes.get(_normalize_symbol(sym)) or {}
+                    px = float(q.get("current") or 0)
+                    it = ledger.get(sym) or {}
+                    pos = int(it.get("volume") or it.get("sellable") or 0)
+                    cost = float(it.get("avg_price") or it.get("cost") or 0)
+                    # ── 当日 T 轮动状态（从成交反推 ✓）──
+                    st = {"day": today, "sold": False, "bought": False}
+                    try:
+                        from sqlalchemy import text as _tS
+                        from app.database import SessionLocal as _SLS
+                        with _SLS() as _dbS:
+                            _rowsS = _dbS.execute(_tS(
+                                "SELECT direction, price FROM paper_trades "
+                                "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND trade_date=:d "
+                                "AND COALESCE(reason,'') LIKE :r ORDER BY id"),
+                                {"a": acct, "s": sym, "d": today, "r": "%T仓轮动%"}).fetchall()
+                        for _dirS, _pxS in _rowsS or []:
+                            if str(_dirS).startswith("卖"):
+                                st["sold"] = True
+                                st["last_sell_px"] = float(_pxS or 0)
+                            elif str(_dirS).startswith("买") and st.get("sold"):
+                                st["bought"] = True
+                                st["last_buy_px"] = float(_pxS or 0)
+                    except Exception:
+                        pass
+                    act, why = _ts.decide(px, pos, st, today, cost=cost)
+                    if _diag:
+                        print("[TSleeve] %-10s 现价%.3f 持仓%d ⇒ %s: %s"
+                              % (sym, px, pos, act, str(why)[:80]), flush=True)
+                    if act == "hold":
+                        continue
+                    sn = _ts.sleeve_shares(pos)
+                    if sn < 100:
+                        continue
+                    kind = "wolf_t_sleeve_sell" if act == "sell" else "wolf_t_sleeve_buy"
+                    trig = {
+                        "account_id": acct, "condition_id": None, "symbol": sym,
+                        "event_type": kind, "trigger_price": px, "quote_price": px,
+                        "suggest_bid_price": px, "suggest_ask_price": px,
+                        "slippage_budget": 0.0,
+                        "snapshot": {"quote_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                     "wolf_rule": "T仓轮动：" + str(why), "trigger_kind": kind,
+                                     "source": "t_sleeve", "cost": cost},
+                        "mode": "auto",
+                        "direction": "buy" if act == "buy" else "sell",
+                    }
+                    tid = t_db.insert_trigger(trig)
+                    print("[TSleeve] 写入触发 #%s %s %s %d 股（%s）"
+                          % (tid, sym, kind, sn, str(why)[:60]), flush=True)
+                except Exception as _eS:
+                    print("[TSleeve] %s 异常: %s" % (sym, str(_eS)[:90]), flush=True)
+        except Exception as _eAll:
+            print("[TSleeve] 整体异常(不影响主流程): %s" % str(_eAll)[:100], flush=True)
 
     def _check_wolf_t_rules(self) -> None:
         """做T规则(向狼大看齐): 对做T宇宙标的用实时quote算正T/倒T, 命中写 t_triggers(当日去抖)。"""
