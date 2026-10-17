@@ -1427,6 +1427,18 @@ class TMonitor:
           · 都没有 ⇒ 看现价是否到"成本×(1+目标%)" ⇒ 卖 T 仓 ✓
         开关 ✓：`WOLF_T_SLEEVE_BAND`（库内默认 0 ✓）
         """
+        # ★ 2026-10-16 修 ✗（性能回归）：原先**每个 bar** 都对全部持仓取行情 + 逐票查库 ✗
+        #   实测：2 个时间步/分钟 ⇒ **~24 分钟/天** ✗（正常 ~3 分钟/天 ✓）
+        #   修法 ✓：按**模拟时钟**每 `WOLF_T_SLEEVE_EVERY_MIN`（默认 30 分钟）才评估一次 ✓
+        #     并**合并成一次** DB 查询 ✓（原来是 per-symbol 查询 ✗）
+        try:
+            _nowT = datetime.now()
+            _bucket = (_nowT.hour * 60 + _nowT.minute) // max(1, int(os.getenv("WOLF_T_SLEEVE_EVERY_MIN", "30") or 30))
+            if getattr(self, "_ts_bucket", None) == _bucket:
+                return
+            self._ts_bucket = _bucket
+        except Exception:
+            pass
         if str(os.getenv("WOLF_T_DIAG", "0")).strip().lower() in ("1", "true", "yes", "on"):
             print("[TSleeve] 入口：被调用 ✓", flush=True)
         try:
@@ -1446,8 +1458,21 @@ class TMonitor:
                     syms.append(str(_s))
             if not syms:
                 return
-            quotes = fetch_tencent_quote([_normalize_symbol(x) for x in syms]) or {}
             today = datetime.now().strftime("%Y%m%d")
+            _ts_map = {}
+            try:
+                from sqlalchemy import text as _tS0
+                from app.database import SessionLocal as _SLS0
+                with _SLS0() as _dbS0:
+                    _r0 = _dbS0.execute(_tS0(
+                        "SELECT UPPER(symbol), direction, price FROM paper_trades "
+                        "WHERE account_id=:a AND trade_date=:d AND COALESCE(reason,'') LIKE :r ORDER BY id"),
+                        {"a": acct, "d": today, "r": "%T仓轮动%"}).fetchall()
+                for _sy0, _dir0, _px0 in _r0 or []:
+                    _ts_map.setdefault(str(_sy0).upper(), []).append((_dir0, _px0))
+            except Exception:
+                _ts_map = {}
+            quotes = fetch_tencent_quote([_normalize_symbol(x) for x in syms]) or {}
             _diag = str(os.getenv("WOLF_T_DIAG", "0")).strip().lower() in ("1", "true", "yes", "on")
             for sym in syms:
                 try:
@@ -1456,18 +1481,10 @@ class TMonitor:
                     it = ledger.get(sym) or {}
                     pos = int(it.get("volume") or it.get("sellable") or 0)
                     cost = float(it.get("avg_price") or it.get("cost") or 0)
-                    # ── 当日 T 轮动状态（从成交反推 ✓）──
+                    # ── 当日 T 轮动状态（从成交反推 ✓；**已合并为一次查询** ✓）──
                     st = {"day": today, "sold": False, "bought": False}
                     try:
-                        from sqlalchemy import text as _tS
-                        from app.database import SessionLocal as _SLS
-                        with _SLS() as _dbS:
-                            _rowsS = _dbS.execute(_tS(
-                                "SELECT direction, price FROM paper_trades "
-                                "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND trade_date=:d "
-                                "AND COALESCE(reason,'') LIKE :r ORDER BY id"),
-                                {"a": acct, "s": sym, "d": today, "r": "%T仓轮动%"}).fetchall()
-                        for _dirS, _pxS in _rowsS or []:
+                        for _dirS, _pxS in (_ts_map.get(str(sym).upper()) or []):
                             if str(_dirS).startswith("卖"):
                                 st["sold"] = True
                                 st["last_sell_px"] = float(_pxS or 0)
