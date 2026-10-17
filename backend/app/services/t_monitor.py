@@ -4140,7 +4140,24 @@ class TMonitor:
                 try:
                     from app.services.wolf_trade_window import allowed as _tw_allowed, applies_to as _tw_applies
                     if _tw_applies(cond.get("trigger_kind")):
+                        # ★ 2026-10-16 ✓（用户选 B）：**窗口只约束"决策/挂单"，不拦"成交时刻"** ✓
+                        #   病灶 ✗（Q1 实测）：T 买腿被时段窗拦 **174 次** ✗ ⇒ T 成交 **0 笔** ✗
+                        #     而信号时刻集中在 09:35 / 10:35 / 11:10-13:15 ✗（都不在他窗口内 ✓）
+                        #   他的原话 ✓：「当日只做 9.45-10.00 / 2.00-2.30 这两个时间段的交易…
+                        #     尽量避免**平稳时间的来回T**」＋「**挂被动单**回补…**不盯分时**」
+                        #   ⇒ 窗口是"**决策/挂单**"的约束 ✓，被动单**成交**可在任意时刻 ✓
+                        #   开关 `WOLF_TW_DECISION_ONLY`（**库内默认 0 = 逐字旧行为** ✓；pins 置 1 ✓）
+                        #     ⇒ 打开后：触发时刻不再拦 ✓（只在日志里留痕"该腿何时被评估"✓）
+                        _tw_decision_only = str(os.getenv("WOLF_TW_DECISION_ONLY", "0")).strip().lower() \
+                            in ("1", "true", "yes", "on")
                         _tw_ok, _tw_why = _tw_allowed()
+                        if _tw_decision_only and not _tw_ok:
+                            _tk0 = (symbol, "twdec", datetime.now().strftime('%Y%m%d'))
+                            if _tk0 not in _STOP_HOLD_WARNED:
+                                _STOP_HOLD_WARNED.add(_tk0)
+                                print("[TMonitor] 时段窗外但按'被动挂单'语义放行买腿 %s(%s)：%s"
+                                      % (symbol, cond.get('trigger_kind'), str(_tw_why)[:70]), flush=True)
+                            _tw_ok = True
                         if not _tw_ok:
                             _tk = (symbol, "tw", datetime.now().strftime('%Y%m%d'))
                             if _tk not in _STOP_HOLD_WARNED:
