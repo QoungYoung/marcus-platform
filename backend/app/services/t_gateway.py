@@ -2682,6 +2682,58 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                     t_db.update_trigger_status(int(trigger_id), "blocked", reason=_why_hd[:250])
                 return {"status": "blocked", "reason": _why_hd, "level": "AMBUSH_HOLD_DEDUPE"}
 
+    # ★ 2026-10-16 ✓（用户：「埋伏腿上限不是**总计才 20%** 吗？**转正之后才解除限制**、不算在 20% 内」）
+    #   口径 ✓：**埋伏桶** = 「**未转正**的埋伏仓」（转正 ⇒ 移出 ✓；清仓 ⇒ 移出 ✓）的**成本市值** ✓
+    #     新单使该桶超过 `WOLF_AMBUSH_BUCKET_PCT`%（**库内默认 0 = 关** ✓；pins 置 20 ✓）⇒ 拦 ✓
+    #   为什么必须有它 ✗：全仓此前**没有**任何"埋伏合计上限" ✓（grep 无实现 ✓）
+    #     ⇒ 埋伏腿可以一直占仓 ✗ ⇒ 这正是"埋伏拿满、趋势买不进"的一半原因 ✓
+    if (side == "buy" and str(os.getenv("WOLF_AMBUSH_BUCKET_PCT", "0") or "0").strip() not in ("", "0")):
+        try:
+            _bk_pct = float(os.getenv("WOLF_AMBUSH_BUCKET_PCT", "0") or 0)
+        except Exception:
+            _bk_pct = 0.0
+        if _bk_pct > 0:
+            try:
+                _k_bk = _turnover_kind(trigger_id, condition_id) if trigger_id else ""
+            except Exception:
+                _k_bk = ""
+            if str(_k_bk) == "wolf_ambush_buy":
+                _promoted = set()
+                try:
+                    import json as _jsB
+                    _ppB = os.path.join(os.environ.get("DATA_DIR") or "data", "ambush_promoted.json")
+                    _promoted = {str(k).upper() for k in (_jsB.load(open(_ppB, encoding="utf-8")) or {})}
+                except Exception:
+                    _promoted = set()
+                from sqlalchemy import text as _tB
+                with SessionLocal() as _sB:
+                    _rowsB = _sB.execute(_tB(
+                        "SELECT UPPER(symbol), COALESCE(SUM(volume),0), COALESCE(AVG(avg_price),0) "
+                        "FROM paper_positions WHERE account_id=:a AND volume>0 GROUP BY UPPER(symbol)"),
+                        {"a": account_id}).fetchall()
+                    _cashB = _sB.execute(_tB(
+                        "SELECT COALESCE(available_cash,0)+COALESCE(frozen_cash,0) FROM paper_account_info "
+                        "WHERE account_id=:a"), {"a": account_id}).scalar() or 0
+                _bucket = 0.0
+                _pv_all = 0.0
+                _amb_set = set()
+                for _symB, _volB, _avgB in _rowsB or []:
+                    _valB = float(_volB or 0) * float(_avgB or 0)
+                    _pv_all += _valB
+                    if _ambush_position(account_id, _symB) and _symB not in _promoted:
+                        _bucket += _valB
+                        _amb_set.add(_symB)
+                _eqB = float(_cashB or 0) + _pv_all
+                _newB = float(price or 0) * float(volume or 0)
+                if _eqB > 0 and (_bucket + _newB) > _eqB * _bk_pct / 100.0:
+                    _whyB = ("埋伏桶上限：未转正埋伏仓合计 %.0f 元 + 本单 %.0f 元 > 权益 %.0f × %.0f%% "
+                             "（桶内 %d 只：%s）⇒ 拦（`WOLF_AMBUSH_BUCKET_PCT`；转正即移出 ✓）"
+                             % (_bucket, _newB, _eqB, _bk_pct, len(_amb_set), ",".join(sorted(_amb_set)[:6])))
+                    print("[gateway] %s %s" % (symbol, _whyB[:170]), flush=True)
+                    if trigger_id:
+                        t_db.update_trigger_status(int(trigger_id), "blocked", reason=_whyB[:250])
+                    return {"status": "blocked", "reason": _whyB, "level": "AMBUSH_BUCKET_PCT"}
+
     # ── 0.2e8) **埋伏腿的"加仓三项"**（狼大三条硬规则 ✓；三个开关**库内默认 0 = 关** ✓）──
     #   语料（逐字 ✓）：
     #     · 「**分批加法点，不到点位不加**」／「价格必须到位——要到他设定的**第一/第二加法点**，

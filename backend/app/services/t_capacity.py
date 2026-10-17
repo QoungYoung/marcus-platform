@@ -42,7 +42,10 @@ def _silent_alert(where, exc=None):
             pass
 
 
-BASE_FLOOR_PCT = 65.0        # 语料：仓位不会低于 65% 收盘（底仓下限目标）
+# ★ 2026-10-16 ✓（用户选「改成中间值 80%」）：改为**可配置** ✓
+#   默认仍 **65**（语料口径 ⇒ 逐字不变 ✓）；`WOLF_BASE_FLOOR_PCT=80` ⇒ 底仓目标 80% ✓
+#   它决定"底仓缺口"⇒ 建仓腿（趋势突破）能否放行 ✓（到顶即"缺口=0 ⇒ 不放行"✓）
+BASE_FLOOR_PCT = float(os.getenv("WOLF_BASE_FLOOR_PCT", "65") or 65)   # 语料：底仓下限目标 65%（可配）
 T_SLEEVE_PCT = 20.0          # 语料：日内做T仓位 20%
 def _build_step() -> float:
     """建仓分几步补满缺口（默认 3 = 每次补缺口 1/3）。
