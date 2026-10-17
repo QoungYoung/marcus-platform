@@ -1427,9 +1427,12 @@ class TMonitor:
           · 都没有 ⇒ 看现价是否到"成本×(1+目标%)" ⇒ 卖 T 仓 ✓
         开关 ✓：`WOLF_T_SLEEVE_BAND`（库内默认 0 ✓）
         """
+        if str(os.getenv("WOLF_T_DIAG", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            print("[TSleeve] 入口：被调用 ✓", flush=True)
         try:
             from app.services import t_sleeve as _ts
             if not _ts.enabled():
+                print("[TSleeve] 开关关(WOLF_T_SLEEVE_BAND=0)", flush=True)
                 return
             from app.services.t_gateway import get_sellable_ledger
             acct = T_MONITOR_ACCOUNT
