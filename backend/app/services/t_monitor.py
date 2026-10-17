@@ -1482,7 +1482,10 @@ class TMonitor:
                             "SELECT UPPER(symbol), COUNT(*) FROM t_triggers "
                             # ⚠️ `t_triggers` **没有 trade_date 列** ✗（实测 UndefinedColumn ✓）
                             #   该表日期靠 `created_at` ✓（列：…, executed_at, created_at, direction）
-                            "WHERE account_id=:a AND created_at::date = :d::date "
+                            # ⚠️ `:d::date` 会被 SQLAlchemy 当成绑定参数 ✗
+                            #   （实测 `syntax error at or near ":"` ✓）⇒ 用 CAST + 半开区间 ✓
+                            "WHERE account_id=:a AND created_at >= CAST(:d AS date) "
+                            "AND created_at < CAST(:d AS date) + INTERVAL '1 day' "
                             "AND event_type LIKE '%sleeve%' "
                             "GROUP BY UPPER(symbol)"),
                             {"a": T_MONITOR_ACCOUNT, "d": datetime.now().strftime('%Y-%m-%d')}).fetchall():
