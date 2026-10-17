@@ -271,6 +271,40 @@ class BtAgentLoop:
             self._wm = None
         return self._wm
 
+    def _exec_mechanical(self, trig: Dict[str, Any]) -> Dict[str, Any]:
+        """★ 2026-10-16 ✓（用户 A2）：**机械腿直接走网关执行**（不问 LLM ✓）
+
+        为什么不能用 `agent_review_and_execute` ✗：它 docstring 写明"**绝不自动下单**"✓
+          （AI 主导模式下只标 `ai_decided` ✗）⇒ 机械腿会卡成 pending 坟墓 ✗（实测 pending 400+ ✓）
+        量从哪来 ✓：snapshot.volume（写入方给 ✓，目前只有 T 仓轮动腿有 ✓）
+        其余机械类（high_sell 等）仍走 AI ✓ —— 它们的量由规则算，我这里不臆造 ✗
+        """
+        try:
+            from app.services.t_gateway import gateway_execute
+            tid = int(trig.get("id") or 0)
+            sym = str(trig.get("symbol") or "")
+            snap = trig.get("snapshot") or {}
+            vol = int(float(snap.get("volume") or 0)) if isinstance(snap, dict) else 0
+            px = float(trig.get("quote_price") or trig.get("trigger_price") or 0)
+            side = t_db.trigger_side(trig)
+            if px <= 0 or vol <= 0:
+                t_db.update_trigger_status(tid, "await_retry",
+                                           reason="机械腿自动执行缺量/缺价（snapshot.volume 未给）")
+                return {"status": "await_retry", "reason": "机械腿缺量/缺价"}
+            gw = gateway_execute(sym, side, px, vol,
+                                 condition_id=trig.get("condition_id"), trigger_id=tid,
+                                 kind=str(trig.get("event_type") or ""),
+                                 reason="机械腿自动执行（BT_AGENT_AUTO_KINDS ✓ 不问 LLM）",
+                                 decision_source="agent",
+                                 account_id=str(trig.get("account_id") or ""))
+            print("[bt-agent] 机械腿直执行 %s %s %d 股 @%.3f ⇒ %s"
+                  % (sym, side, vol, px, gw.get("status")), flush=True)
+            return {"status": gw.get("status") or gw.get("error"), "action": "exec",
+                    "trigger_id": tid, "reason": str(gw.get("reason") or "")[:100]}
+        except Exception as e:
+            print("[bt-agent] 机械腿直执行异常 #%s: %s" % (trig.get("id"), str(e)[:120]), flush=True)
+            return {"status": "wake_failed", "reason": "机械腿执行异常: %s" % str(e)[:100]}
+
     def _auto_skip_sql(self) -> str:
         """★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI** ✓
         机械腿 = 纯价格带/止盈类（sleeve / high_sell / dao_t / profit_take ✓）
@@ -416,7 +450,9 @@ class BtAgentLoop:
                 #   用生产"唤醒失败时的规则兜底"同一条路径 ✓ ⇒ 语义不变 ✓，只省掉 15~110 秒 LLM 往返 ✓
                 _ak = {x.strip() for x in (os.getenv("BT_AGENT_AUTO_KINDS", "") or "").split(",") if x.strip()}
                 if str(trig.get("event_type") or "") in _ak:
-                    result = t_bridge.agent_review_and_execute(trig) or {}
+                    # ★ 2026-10-16 ✓（用户 A2 + ①查实 ✓）：`agent_review_and_execute` **绝不下单** ✗
+                    #   ⇒ 机械腿必须**直接调网关** ✓（`gateway_execute` ✓ 唯一放行者 ✓）
+                    result = self._exec_mechanical(trig)
                     self.stats["auto_rule"] = self.stats.get("auto_rule", 0) + 1
                 else:
                     result = t_bridge.wake_and_decide(trig) or {}
@@ -558,7 +594,9 @@ class BtAgentLoop:
                 #   用生产"唤醒失败时的规则兜底"同一条路径 ✓ ⇒ 语义不变 ✓，只省掉 15~110 秒 LLM 往返 ✓
                 _ak = {x.strip() for x in (os.getenv("BT_AGENT_AUTO_KINDS", "") or "").split(",") if x.strip()}
                 if str(trig.get("event_type") or "") in _ak:
-                    result = t_bridge.agent_review_and_execute(trig) or {}
+                    # ★ 2026-10-16 ✓（用户 A2 + ①查实 ✓）：`agent_review_and_execute` **绝不下单** ✗
+                    #   ⇒ 机械腿必须**直接调网关** ✓（`gateway_execute` ✓ 唯一放行者 ✓）
+                    result = self._exec_mechanical(trig)
                     self.stats["auto_rule"] = self.stats.get("auto_rule", 0) + 1
                 else:
                     result = t_bridge.wake_and_decide(trig) or {}

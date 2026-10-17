@@ -1510,7 +1510,7 @@ class TMonitor:
                         "slippage_budget": 0.0,
                         "snapshot": {"quote_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                      "wolf_rule": "T仓轮动：" + str(why), "trigger_kind": kind,
-                                     "source": "t_sleeve", "cost": cost},
+                                     "source": "t_sleeve", "cost": cost, "volume": sn},
                         "mode": "auto",
                         "direction": "buy" if act == "buy" else "sell",
                     }
