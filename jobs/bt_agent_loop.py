@@ -280,15 +280,16 @@ class BtAgentLoop:
         其余机械类（high_sell 等）仍走 AI ✓ —— 它们的量由规则算，我这里不臆造 ✗
         """
         try:
+            from app.services import t_db as _tdb_m      # ⚠️ 本模块没有 `t_db` 名字 ✗（实测 NameError ✓）
             from app.services.t_gateway import gateway_execute
             tid = int(trig.get("id") or 0)
             sym = str(trig.get("symbol") or "")
             snap = trig.get("snapshot") or {}
             vol = int(float(snap.get("volume") or 0)) if isinstance(snap, dict) else 0
             px = float(trig.get("quote_price") or trig.get("trigger_price") or 0)
-            side = t_db.trigger_side(trig)
+            side = _tdb_m.trigger_side(trig)
             if px <= 0 or vol <= 0:
-                t_db.update_trigger_status(tid, "await_retry",
+                _tdb_m.update_trigger_status(tid, "await_retry",
                                            reason="机械腿自动执行缺量/缺价（snapshot.volume 未给）")
                 return {"status": "await_retry", "reason": "机械腿缺量/缺价"}
             gw = gateway_execute(sym, side, px, vol,
