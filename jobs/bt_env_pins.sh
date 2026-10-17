@@ -235,7 +235,8 @@ export WOLF_T_PLAN='1'
 export WOLF_T_PLAN_AGENT='1'      # ★ 用户 2026-10-18：让 agent 按**图形**给 T出/T入 价 ✓
 export WOLF_T_PLAN_REFRESH='1'     # 盘中改价 ✓（现价贴近/突破原带 ⇒ 重新请 agent ✓）
 export WOLF_T_PLAN_REFRESH_MAX='2'  # 每票每天最多改 2 次 ✓（防拖慢回测 ✗）
-export WOLF_T_PLAN_TIMEOUT='20'
+export WOLF_T_PLAN_TIMEOUT='12'   # 本地 LLM 忙时会超 25 秒 ✗ ⇒ 收到 12 秒 ✓
+export WOLF_T_PLAN_FAIL_MAX='3'   # 当天连续失败 3 次 ⇒ **当天不再调 agent** ✓（走数值带 ✓）
 export WOLF_TP_MIN_PCT='1.0'
 export WOLF_TP_MAX_PCT='3.5'
 # ★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI**（纯价格带/止盈类 ✓，AI 只决策建仓类）

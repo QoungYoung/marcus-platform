@@ -133,8 +133,47 @@ def numeric_band(f: Dict[str, Any]) -> Dict[str, Any]:
     return {"sell": sell, "buy": buy, "k_pct": round(k, 2), "src": "numeric"}
 
 
+_LLM_STATE = {"fails": 0, "day": ""}
+
+
+def _llm_breaker_ok(day: str) -> bool:
+    """★ 2026-10-18 ✓（用户问「这个超时是什么」）：
+    本地 LLM（`127.0.0.1:3001`，Qwen 27B）忙时会 >25 秒不回 ✗
+      ⇒ 每次白等 ✗（实测 `bt_t_plan.py:136 timed out` ✓）
+    熔断 ✓：**当天**连续失败达 `WOLF_T_PLAN_FAIL_MAX`(默认 3 ✓) ⇒ 当天**不再调 agent** ✓
+      直接走数值带 ✓（正确性不变 ✓，只是不再浪费时间 ✗）
+    """
+    if str(_LLM_STATE.get("day") or "") != str(day):
+        _LLM_STATE["day"] = str(day)
+        _LLM_STATE["fails"] = 0
+    try:
+        mx = int(os.getenv("WOLF_T_PLAN_FAIL_MAX", "3") or 3)
+    except Exception:
+        mx = 3
+    return int(_LLM_STATE.get("fails") or 0) < mx
+
+
+def _llm_note(day: str, ok: bool) -> None:
+    if str(_LLM_STATE.get("day") or "") != str(day):
+        _LLM_STATE["day"] = str(day)
+        _LLM_STATE["fails"] = 0
+    if ok:
+        _LLM_STATE["fails"] = 0
+    else:
+        _LLM_STATE["fails"] = int(_LLM_STATE.get("fails") or 0) + 1
+        try:
+            mx = int(os.getenv("WOLF_T_PLAN_FAIL_MAX", "3") or 3)
+        except Exception:
+            mx = 3
+        if int(_LLM_STATE["fails"]) == mx:
+            print("[t-plan] LLM 连续失败 %d 次 ⇒ **当天不再调用 agent** ✓（改用数值带 ✓）"
+                  % mx, flush=True)
+
+
 def agent_refine(f: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
     """让 agent 精修价格带 ✓（失败 ⇒ 原样返回数值带 ✓，绝不空手 ✗）"""
+    if not _llm_breaker_ok(str(f.get("day") or "")):
+        return dict(base, src="numeric(LLM 熔断: 当日失败过多)")
     url = os.getenv("WOLF_T_PLAN_URL", "http://127.0.0.1:3001/chat")
     prompt = (
         "你是A股做T操盘手。请只输出 JSON，不要解释。\n"
@@ -169,9 +208,11 @@ def agent_refine(f: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
         lo, hi = float(f["low5"]) * 0.98, float(f["high5"]) * 1.02
         if not (lo <= buy < sell <= hi):
             return dict(base, src="numeric(agent 越界被弃)")
+        _llm_note(str(f.get("day") or ""), True)
         return {"sell": round(sell, 3), "buy": round(buy, 3), "k_pct": base["k_pct"],
                 "src": "agent", "why": str(cfg.get("why") or "")[:40]}
     except Exception as e:
+        _llm_note(str(f.get("day") or ""), False)
         return dict(base, src="numeric(agent 异常: %s)" % str(e)[:30])
 
 
