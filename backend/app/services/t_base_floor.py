@@ -686,11 +686,22 @@ def _cum_buy_volume(account_id: str, symbol: str) -> int:
     from app.database import SessionLocal
     db = SessionLocal()
     try:
-        v = db.execute(text(
-            "SELECT COALESCE(SUM(volume), 0) FROM paper_trades "
-            "WHERE account_id = :a AND symbol = :s AND direction IN ('买入','buy') "
-            "AND (voided = 0 OR voided IS NULL)"),
-            {"a": account_id, "s": symbol}).scalar()
+        # ★ 2026-10-16 ✓（用户选 B）：**T 买回不计入底仓累计** ✓
+        #   病灶 ✗（机制）：floor = base + (累计买入 − 认账时累计) × ratio
+        #     ⇒ **每次 T 买回都把 floor 抬高** ✗ ⇒ floor 追着持仓涨 ⇒ 最终 持仓 ≤ floor
+        #     ⇒ 该票**所有卖腿（含 T出/高抛）永久被「底仓floor」拦** ✗（dec1 实测 898 次 ✓）
+        #     ⇒ 结果：**一只票一辈子只能卖一次** ✗ ⇒ 做T频率 = 0.19 次/天 ✗（他几乎每天 T ✓）
+        #   修法 ✓：`WOLF_T_EXCLUDE_FROM_FLOOR=1` ⇒ 累计口径**排除 T 买回** ✓（底仓只随建仓/加仓增长 ✓）
+        _excl = str(os.getenv("WOLF_T_EXCLUDE_FROM_FLOOR", "0")).strip().lower() in ("1", "true", "yes", "on")
+        _sql = ("SELECT COALESCE(SUM(volume), 0) FROM paper_trades "
+                "WHERE account_id = :a AND symbol = :s AND direction IN ('买入','buy') "
+                "AND (voided = 0 OR voided IS NULL)")
+        if _excl:
+            _sql += (" AND COALESCE(reason,'') NOT LIKE '%正T%' "
+                     "AND COALESCE(reason,'') NOT LIKE '%T回%' "
+                     "AND COALESCE(reason,'') NOT LIKE '%回补%' "
+                     "AND COALESCE(reason,'') NOT LIKE '%zheng_t%'")
+        v = db.execute(text(_sql), {"a": account_id, "s": symbol}).scalar()
         return int(v or 0)
     finally:
         db.close()

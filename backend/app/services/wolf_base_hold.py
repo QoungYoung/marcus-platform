@@ -153,12 +153,25 @@ def sleeve_from_db(account_id: str, symbol: str) -> int:
         return 0
 
 
-def cap_volume(volume: int, sleeve: int) -> Tuple[int, str]:
-    """(可卖量, 原因)。开关关 ⇒ 原样返回。"""
+def cap_volume(volume: int, sleeve: int, position: int = 0) -> Tuple[int, str]:
+    """(可卖量, 原因)。开关关 ⇒ 原样返回。
+
+    ★ 2026-10-16 ✓（用户选 A）：**T 仓最少 1 手兜底**（`WOLF_T_SLEEVE_MIN_LOT`，库内默认 0 = 关 ✓）
+      病灶 ✗：持仓 19 只里 **12 只（63%）** 的「近 N 日买入额」= 0 或 < 1 手
+        ⇒ `sleeve = 0` ⇒ **止盈/T 腿一律 0 股** ✗ ⇒ 物理上做不了 T ✓（dec1 实测 T 仅 0.19 次/天 ✓）
+      他语料 ✓：「每天都可以做做T」「每天倒一次做T，强制自己」⇒ **小仓位也必须能 T 一手** ✓
+      修法 ✓：sleeve 不足 1 手 ∧ 持仓 ≥ 2 手 ⇒ 给 **1 手**（卖出后仍留 ≥1 手底仓 ✓）
+    """
     v = int(volume or 0)
     if not enabled():
         return v, ""
     s = max(int(sleeve or 0), 0)
+    try:
+        _min_lot = str(os.getenv("WOLF_T_SLEEVE_MIN_LOT", "0")).strip().lower() in ("1", "true", "yes", "on")
+        if _min_lot and s < 100 and int(position or 0) >= 200:
+            s = 100
+    except Exception:
+        pass
     if s <= 0:
         return 0, ("底仓不动：近 %d 个交易日无买入 ⇒ T 仓=0，本次止盈腿不执行"
                    "（狼大 2026-08-05「做T套利的仓位是做T套利的 底仓是底仓」）" % days())

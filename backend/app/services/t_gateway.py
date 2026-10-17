@@ -2934,8 +2934,20 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                           % (symbol, int(volume or 0), _tcap.take_penetrate_used(account_id, symbol),
                              os.getenv("WOLF_BASE_EXEMPT_TAKE_MAX", "2")), flush=True)
                 _slv = _bh.sleeve_from_db(account_id, symbol)
+                # ★ 2026-10-16 ✓（用户选 A）：把**当前持仓**传给 `cap_volume`
+                #   ⇒ 支持「sleeve 不足 1 手 ∧ 持仓 ≥2 手 ⇒ 给 1 手」的兜底 ✓
+                _posA = 0
+                try:
+                    from sqlalchemy import text as _tA
+                    with SessionLocal() as _sA:
+                        _posA = int(_sA.execute(_tA(
+                            "SELECT COALESCE(SUM(volume),0) FROM paper_positions "
+                            "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND volume>0"),
+                            {"a": account_id, "s": symbol}).scalar() or 0)
+                except Exception:
+                    _posA = 0
                 _bv, _bwhy = (int(volume or 0), "止盈腿穿透底仓（WOLF_BASE_EXEMPT_TAKE=1）") if _pen_take \
-                    else _bh.cap_volume(int(volume or 0), _slv)
+                    else _bh.cap_volume(int(volume or 0), _slv, _posA)
                 if _bv <= 0:
                     print("[gateway] 底仓不动拦截 %s %d 股：%s" % (symbol, int(volume or 0), _bwhy), flush=True)
                     if trigger_id:
