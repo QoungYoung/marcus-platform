@@ -411,7 +411,15 @@ class BtAgentLoop:
         else:
             try:
                 _p2 = _t9.perf_counter()
-                result = t_bridge.wake_and_decide(trig) or {}
+                # ★ 2026-10-16 ✓（用户 A2）：**机械腿走规则兜底，不问 LLM** ✓
+                #   机械类 = 纯价格带/止盈（sleeve/high_sell/dao_t/profit_take/fib/defensive ✓）
+                #   用生产"唤醒失败时的规则兜底"同一条路径 ✓ ⇒ 语义不变 ✓，只省掉 15~110 秒 LLM 往返 ✓
+                _ak = {x.strip() for x in (os.getenv("BT_AGENT_AUTO_KINDS", "") or "").split(",") if x.strip()}
+                if str(trig.get("event_type") or "") in _ak:
+                    result = t_bridge.agent_review_and_execute(trig) or {}
+                    self.stats["auto_rule"] = self.stats.get("auto_rule", 0) + 1
+                else:
+                    result = t_bridge.wake_and_decide(trig) or {}
                 _T["wake"] += _t9.perf_counter() - _p2
             except Exception as e:
                 self.stats["error"] += 1
@@ -545,7 +553,15 @@ class BtAgentLoop:
                 self.guard.set_trigger(trig)            # as-of 工具口径：本次决策的标的/事件
             try:
                 _p2 = _t9.perf_counter()
-                result = t_bridge.wake_and_decide(trig) or {}
+                # ★ 2026-10-16 ✓（用户 A2）：**机械腿走规则兜底，不问 LLM** ✓
+                #   机械类 = 纯价格带/止盈（sleeve/high_sell/dao_t/profit_take/fib/defensive ✓）
+                #   用生产"唤醒失败时的规则兜底"同一条路径 ✓ ⇒ 语义不变 ✓，只省掉 15~110 秒 LLM 往返 ✓
+                _ak = {x.strip() for x in (os.getenv("BT_AGENT_AUTO_KINDS", "") or "").split(",") if x.strip()}
+                if str(trig.get("event_type") or "") in _ak:
+                    result = t_bridge.agent_review_and_execute(trig) or {}
+                    self.stats["auto_rule"] = self.stats.get("auto_rule", 0) + 1
+                else:
+                    result = t_bridge.wake_and_decide(trig) or {}
                 _T["wake"] += _t9.perf_counter() - _p2
             except Exception as e:                      # 生产在 while 外兜异常（行会卡在 claimed）
                 self.stats["error"] += 1
