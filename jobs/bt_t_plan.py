@@ -106,11 +106,19 @@ def _features(symbol: str, day: str, pos: int, cost: float) -> Optional[Dict[str
 
 
 def numeric_band(f: Dict[str, Any]) -> Dict[str, Any]:
-    kmin, kmax = _pct("WOLF_TP_MIN_PCT", 1.0), _pct("WOLF_TP_MAX_PCT", 3.5)
-    k = _clamp(float(f.get("amp10_pct") or 0) * 0.5, kmin, kmax)
-    prev, cost = float(f.get("prev_close") or 0), float(f.get("cost") or 0)
-    buy = min(round(prev * (1 - k / 100.0), 3), round(float(f.get("low5") or 0) * 1.002, 3))
-    sell = max(round(prev * (1 + k / 100.0), 3), round(cost * 1.01, 3))
+    # ★ 2026-10-18 ✓（圣泉集团 SH605589 / 20260227 实证 ✗）：
+    #   旧公式 `buy=min(昨收×(1−k), 低5×1.002)` / `sell=max(昨收×(1+k), 成本×1.01)` 太宽 ✗
+    #     ⇒ 0227 算出 T入 31.373 / T出 35.435 ✗，而当天区间只有 **33.35~34.25** ✗ ⇒ 永不触发 ✗
+    #   修法 ✓：**以昨收为中心对称** ✓（用户：「只要**振幅**比较大就能T」✓）
+    #     k = clamp(近10日平均振幅 × 0.45, MIN=0.8, MAX=2.5)  ⇒ T入 = 昨收×(1−k) ✓ T出 = 昨收×(1+k) ✓
+    #     成本只是"参考"✗，**不再参与定价**（否则盈利票的 T 出价被抬到天上 ✗）
+    kmin, kmax = _pct("WOLF_TP_MIN_PCT", 0.8), _pct("WOLF_TP_MAX_PCT", 2.5)
+    k = _clamp(float(f.get("amp10_pct") or 0) * 0.45, kmin, kmax)
+    prev = float(f.get("prev_close") or 0)
+    if prev <= 0:
+        return {"sell": 0.0, "buy": 0.0, "k_pct": round(k, 2), "src": "numeric(无昨收)"}
+    buy = round(prev * (1 - k / 100.0), 3)
+    sell = round(prev * (1 + k / 100.0), 3)
     return {"sell": sell, "buy": buy, "k_pct": round(k, 2), "src": "numeric"}
 
 
