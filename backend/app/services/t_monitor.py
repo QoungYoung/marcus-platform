@@ -1453,6 +1453,24 @@ class TMonitor:
                 pass
             if not syms:
                 return
+            if str(os.getenv("WOLF_T_DIAG", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    _k = {}
+                    for _c in conds:
+                        _k.setdefault(str(_c.get("symbol") or "").upper(), []).append(str(_c.get("trigger_kind") or ""))
+                    _u = {str(x).upper() for x in syms}
+                    _h = {}
+                    try:
+                        from app.services.t_gateway import get_sellable_ledger as _gD
+                        _h = {str(k2).upper(): 1 for k2 in (_gD(T_MONITOR_ACCOUNT) or {})}
+                    except Exception:
+                        _h = {}
+                    _o = sorted(set(_h) - _u)
+                    print("[TDiag] 宇宙 %d 只 ｜ 持仓 %d 只 ｜ **不在宇宙 %d 只**: %s" % (len(_u), len(_h), len(_o), _o[:12]), flush=True)
+                    for _sy in sorted(_h)[:20]:
+                        print("[TDiag]   %-10s 在宇宙=%-5s T条件=%s" % (_sy, _sy in _u, (_k.get(_sy) or [])[:6]), flush=True)
+                except Exception as _eD:
+                    print("[TDiag] 异常: %s" % str(_eD)[:100], flush=True)
             quotes = fetch_tencent_quote([_normalize_symbol(s) for s in syms])
             today = datetime.now().strftime('%Y%m%d')
             for sym in syms:
