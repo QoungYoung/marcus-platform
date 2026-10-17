@@ -1,0 +1,209 @@
+# -*- coding: utf-8 -*-
+"""bt_t_plan.py — **盘前 T 计划**（用户 2026-10-18 方案 ✓）
+
+用户的原始要求 ✓：
+  「不是上涨就不能做T，也不是必须卖出去买回来才叫T，有**正T和倒T**，
+    只要**感觉振幅比较大**就能T。**每天盘前先让 agent 去挂当天的 T出/T入价格**，
+    就判断我们的持仓，**还能并发**，给 agent 足够的历史信息和数据。」
+
+本脚本 ✓（盘前跑一次，逐票并发 ✓）：
+  1. 读持仓（as-of 沙箱账本 / PG 二选一 ✓）
+  2. 每票算特征 ✓：近 10 日平均振幅、ATR%、近 5 日高低、昨收、成本、持仓量
+  3. **数值带**（不依赖 LLM ✓，永远有值 ✓）：
+       k = clamp(近 10 日平均振幅 × 0.5, WOLF_TP_MIN_PCT=1.0, WOLF_TP_MAX_PCT=3.5)
+       T入价 = min(昨收 × (1 − k), 近 5 日低 × 1.002)
+       T出价 = max(昨收 × (1 + k), 成本 × (1 + 0.01))
+  4. （可选 ✓）**agent 精修**：把上面这些特征喂给 LLM，让它返回 JSON 的
+       {"sell": 价, "buy": 价, "why": "…"} ⇒ 若解析失败**保留数值带** ✓（绝不空手 ✓）
+  5. 落盘 ✓：`<sandbox>/t_plan_<YYYYMMDD>.json`（监控端读它 ✓）
+
+开关 ✓：
+  · `WOLF_T_PLAN`            （1 = 启用，默认 0 ✓）
+  · `WOLF_T_PLAN_AGENT`      （1 = 让 agent 精修，默认 0 ✓ 先只跑数值 ✓）
+  · `WOLF_TP_MIN_PCT/MAX_PCT`（k 的夹逼 ✓ 1.0 / 3.5）
+  · `WOLF_T_PLAN_URL`        （LLM 端点，默认 http://127.0.0.1:3001/chat ✓）
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import statistics
+import sys
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional
+
+
+def _pct(name: str, dflt: float) -> float:
+    try:
+        return float(os.getenv(name, str(dflt)) or dflt)
+    except Exception:
+        return dflt
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
+def _bars(symbol: str, day: str, n: int = 15) -> List[Dict[str, Any]]:
+    """取近 n 日日线（先用 as-of 沙箱 bars，再退 PG ✓）"""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "jobs"))
+        import bt_asof_store as _store  # type: ignore
+        rows = _store.daily(symbol, day, n) or []
+        if rows:
+            return rows
+    except Exception:
+        pass
+    try:
+        import sqlite3
+        db = os.path.join(os.path.dirname(__file__), "..", "data", "_bt_full", "bars.sqlite")
+        c = sqlite3.connect("file:%s?mode=ro" % os.path.abspath(db), uri=True)
+        cur = c.execute("SELECT trade_date, open, high, low, close, vol FROM bars "
+                        "WHERE symbol=? AND trade_date < ? ORDER BY trade_date DESC LIMIT ?",
+                        (symbol, str(day), int(n)))
+        out = [dict(date=r[0], open=r[1], high=r[2], low=r[3], close=r[4], vol=r[5]) for r in cur.fetchall()]
+        c.close()
+        return list(reversed(out))
+    except Exception:
+        return []
+
+
+def _features(symbol: str, day: str, pos: int, cost: float) -> Optional[Dict[str, Any]]:
+    bs = _bars(symbol, day, 15)
+    if len(bs) < 6:
+        return None
+    closes = [float(b.get("close") or 0) for b in bs if b.get("close")]
+    highs = [float(b.get("high") or 0) for b in bs if b.get("high")]
+    lows = [float(b.get("low") or 0) for b in bs if b.get("low")]
+    if not closes or not highs or not lows:
+        return None
+    amps = []
+    for i in range(1, len(closes)):
+        pc = closes[i - 1]
+        if pc > 0:
+            amps.append((highs[i] - lows[i]) / pc * 100.0)
+    amp10 = statistics.mean(amps[-10:]) if amps else 0.0
+    prev = closes[-1]
+    lo5 = min(lows[-5:]) if len(lows) >= 5 else min(lows)
+    hi5 = max(highs[-5:]) if len(highs) >= 5 else max(highs)
+    atr = statistics.mean([(highs[i] - lows[i]) for i in range(len(highs))][-10:]) if highs else 0.0
+    return {"symbol": symbol, "day": str(day), "position": int(pos), "cost": float(cost),
+            "prev_close": round(prev, 3), "low5": round(lo5, 3), "high5": round(hi5, 3),
+            "amp10_pct": round(amp10, 2), "atr": round(atr, 3),
+            "amp_atr_pct": round(atr / prev * 100.0, 2) if prev else 0.0}
+
+
+def numeric_band(f: Dict[str, Any]) -> Dict[str, Any]:
+    kmin, kmax = _pct("WOLF_TP_MIN_PCT", 1.0), _pct("WOLF_TP_MAX_PCT", 3.5)
+    k = _clamp(float(f.get("amp10_pct") or 0) * 0.5, kmin, kmax)
+    prev, cost = float(f.get("prev_close") or 0), float(f.get("cost") or 0)
+    buy = min(round(prev * (1 - k / 100.0), 3), round(float(f.get("low5") or 0) * 1.002, 3))
+    sell = max(round(prev * (1 + k / 100.0), 3), round(cost * 1.01, 3))
+    return {"sell": sell, "buy": buy, "k_pct": round(k, 2), "src": "numeric"}
+
+
+def agent_refine(f: Dict[str, Any], base: Dict[str, Any]) -> Dict[str, Any]:
+    """让 agent 精修价格带 ✓（失败 ⇒ 原样返回数值带 ✓，绝不空手 ✗）"""
+    url = os.getenv("WOLF_T_PLAN_URL", "http://127.0.0.1:3001/chat")
+    prompt = (
+        "你是A股做T操盘手。请只输出 JSON，不要解释。\n"
+        "标的 %s ｜ 日期 %s ｜ 持仓 %d 股 ｜ 成本 %.3f\n"
+        "昨收 %.3f ｜ 近10日平均振幅 %.2f%% ｜ ATR %.3f(%.2f%%) ｜ 近5日低 %.3f 高 %.3f\n"
+        "参考数值带：T入价 %.3f ｜ T出价 %.3f\n"
+        "要求：按当日**振幅**给出 T出价/T入价（正T：先在T入价买、再在T出价卖；倒T：反过来）。\n"
+        "价格必须落在 [低5×0.98, 高5×1.02] 内，且 T出价 > T入价。\n"
+        '输出格式：{"sell": 数字, "buy": 数字, "why": "不超过20字"}\n'
+        % (f["symbol"], f["day"], f["position"], f["cost"], f["prev_close"], f["amp10_pct"],
+           f["atr"], f["amp_atr_pct"], f["low5"], f["high5"], base["buy"], base["sell"])
+    )
+    try:
+        body = json.dumps({"message": prompt, "messages": [{"role": "user", "content": prompt}]}).encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=float(os.getenv("WOLF_T_PLAN_TIMEOUT", "25") or 25)) as r:
+            txt = r.read().decode("utf-8", "replace")
+        i, j = txt.find("{"), txt.rfind("}")
+        cfg = json.loads(txt[i:j + 1])
+        sell, buy = float(cfg.get("sell") or 0), float(cfg.get("buy") or 0)
+        lo, hi = float(f["low5"]) * 0.98, float(f["high5"]) * 1.02
+        if not (lo <= buy < sell <= hi):
+            return dict(base, src="numeric(agent 越界被弃)")
+        return {"sell": round(sell, 3), "buy": round(buy, 3), "k_pct": base["k_pct"],
+                "src": "agent", "why": str(cfg.get("why") or "")[:40]}
+    except Exception as e:
+        return dict(base, src="numeric(agent 异常: %s)" % str(e)[:30])
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--date", required=True)
+    ap.add_argument("--sandbox", default="")
+    ap.add_argument("--account", default=os.getenv("T_MONITOR_ACCOUNT", "drabq1"))
+    ap.add_argument("--held", default="", help="SYMBOL:POS:COST,SYMBOL:POS:COST,...")
+    ap.add_argument("--workers", type=int, default=int(os.getenv("WOLF_T_PLAN_WORKERS", "6") or 6))
+    a = ap.parse_args()
+
+    if str(os.getenv("WOLF_T_PLAN", "0")).strip().lower() not in ("1", "true", "yes", "on"):
+        print("[t-plan] WOLF_T_PLAN=0 ⇒ 跳过")
+        return 0
+
+    holdings: List[tuple] = []
+    for item in (a.held or "").split(","):
+        p = item.strip().split(":")
+        if len(p) >= 2 and p[0]:
+            holdings.append((p[0], int(float(p[1] or 0)), float(p[2] or 0) if len(p) > 2 else 0.0))
+    if not holdings:
+        try:
+            from sqlalchemy import text
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+            from app.database import SessionLocal
+            with SessionLocal() as db:
+                for sym, vol, avg in db.execute(text(
+                        "SELECT symbol, SUM(CASE WHEN direction LIKE '买%' THEN volume ELSE -volume END), "
+                        "AVG(price) FROM paper_trades WHERE account_id=:a GROUP BY symbol"),
+                        {"a": a.account}).fetchall():
+                    if int(vol or 0) > 0:
+                        holdings.append((str(sym), int(vol), float(avg or 0)))
+        except Exception as e:
+            print("[t-plan] 读持仓失败: %s" % str(e)[:100])
+
+    if not holdings:
+        print("[t-plan] 无持仓 ⇒ 空计划")
+    use_agent = str(os.getenv("WOLF_T_PLAN_AGENT", "0")).strip().lower() in ("1", "true", "yes", "on")
+
+    def work(h):
+        sym, pos, cost = h
+        f = _features(sym, a.date, pos, cost)
+        if not f:
+            return None
+        base = numeric_band(f)
+        plan = agent_refine(f, base) if use_agent else base
+        return {"symbol": sym, "position": pos, "cost": cost,
+                "sell": plan["sell"], "buy": plan["buy"], "src": plan.get("src"),
+                "why": plan.get("why", ""), **f}
+
+    out: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=max(1, a.workers)) as ex:      # 并发 ✓（用户要求 ✓）
+        for r in ex.map(work, holdings):
+            if r:
+                out.append(r)
+
+    path = os.path.join(a.sandbox or os.getenv("DATA_DIR", "data"), "t_plan_%s.json" % a.date)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fp:
+            json.dump({"date": a.date, "plan": out}, fp, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print("[t-plan] 写计划失败: %s" % str(e)[:100])
+        return 1
+    print("[t-plan] %s ⇒ %d 只（%s）→ %s" % (
+        a.date, len(out), ",".join(sorted({str(x.get("src")) for x in out})) or "-", path))
+    for x in out[:8]:
+        print("   %-10s 入%.3f 出%.3f（振幅%.2f%% 成本%.3f %s）"
+              % (x["symbol"], x["buy"], x["sell"], x["amp10_pct"], x["cost"], x.get("why") or ""))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

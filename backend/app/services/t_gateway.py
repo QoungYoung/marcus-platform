@@ -3015,11 +3015,20 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                 #   ⇒ **跌停日的止损腿被"吃溢价"逻辑拦住** ✗（SZ002792 01-14 实证 ✓）
                 #   他的口径 ✓：「破位收盘确认才走」／「止损只在指数大级别破位」
                 #   ⇒ 个股跌停＝破位 ⇒ 该走 ⇒ 这里按**腿型**放行 ✓
+                # ★ 2026-10-18 ✓（用户：「拿圣泉集团 0227 来说，怎么不T？」）：
+                #   实证 ✗（SH605589 / 2026-02-27）：当天 `wolf_t_sleeve_sell` 触发 **8+ 次** ✓
+                #     但**全部**被下面这道「同轮累计已达持仓一半」拦掉 ✗，一条都没成交 ✓
+                #   根因 ✗：持仓只有 **200 股** ⇒ T 仓 20% = 40 股 ⇒ 按"最少 1 手"兜底 = **100 股**
+                #     ⇒ 100 = 持仓的一半 ⇒ **第一笔就顶到上限** ✗ ⇒ 之后永远 blocked ✗
+                #   ⇒ T 仓轮动腿必须有**自己的上限口径**（= `sleeve_shares` 20% ✓，天然 ≤ 一半 ✓），
+                #     不该套"持仓一半"这条 ✗（那条是给"突破减半/吃溢价"用的 ✓）
                 _CAP_EXEMPT_KINDS = ("custom_vwap_sell", "custom_support_sell", "custom_level_sell",
                                      "custom_trail_sell", "wolf_defensive_t_reduce", "wolf_confirm_sell",
                                      "wolf_boll_upper_sell", "wolf_board_half_sell",
                                      "wolf_passive_stop_sell", "stop_loss", "wolf_early_swing_sell",
                                      "high_sell")
+                if str(os.getenv("WOLF_T_SLEEVE_BAND", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                    _CAP_EXEMPT_KINDS = tuple(_CAP_EXEMPT_KINDS) + ("wolf_t_sleeve_sell", "wolf_t_sleeve_buy")
                 _cap_exempt_kind = (str(os.getenv("WOLF_SELL_EXEMPT_REDUCE", "0")).strip().lower()
                                     in ("1", "true", "yes", "on")
                                     and str(_kw) in _CAP_EXEMPT_KINDS)
