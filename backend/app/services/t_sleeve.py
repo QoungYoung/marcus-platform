@@ -100,7 +100,24 @@ def decide(price: float, position: int, state: Dict[str, Any], day: str,
     st = dict(state or {})
     d0 = str(st.get("day") or "")
     if d0 and d0 != str(day):
-        st = {"day": str(day)}                 # 跨日才重置 ✓
+        # ★ 2026-10-18 ✓（用户痛点「回补 0 笔」✗ 的**真正原因**）：
+        #   原来跨日直接 `st = {"day": today}` ⇒ **卖出的记忆被清掉** ✗
+        #   ⇒ 第二天只看到"没卖过" ⇒ 又走卖出分支 ⇒ **永远不会回补** ✗（实测 buy=0 ✓）
+        #   修法 ✓：跨日**保留** `sold / last_sell_px / sold_day` ✓，只清"当日完成"标记 ✓
+        st["day"] = str(day)
+        st["bought"] = False
+        st["done"] = False
+        # 卖出记忆最长保留 `WOLF_T_SLEEVE_KEEP_DAYS`（默认 5 个自然日 ✓），过期作废 ✓
+        try:
+            from datetime import datetime as _dtm
+            _dk = int(os.getenv("WOLF_T_SLEEVE_KEEP_DAYS", "5") or 5)
+            _sd = str(st.get("sold_day") or "")
+            if _sd:
+                _age = (_dtm.strptime(str(day), "%Y%m%d") - _dtm.strptime(_sd, "%Y%m%d")).days
+                if _age > _dk:
+                    st.pop("sold", None); st.pop("last_sell_px", None); st.pop("sold_day", None)
+        except Exception:
+            pass
     elif not d0:
         st["day"] = str(day)                   # 缺 day ⇒ 补上，**不清空** ✓
     pos = int(position or 0)
@@ -145,9 +162,9 @@ def load_state(account: str, symbol: str, day: str) -> Dict[str, Any]:
             allst = json.load(f) or {}
     except Exception:
         allst = {}
-    st = ((allst.get(account) or {}).get(symbol)) or {}
-    if str(st.get("day") or "") != str(day):
-        st = {"day": str(day)}
+    st = dict(((allst.get(account) or {}).get(symbol)) or {})
+    # ★ 跨日**不清空** ✓（只更新 day ✓）—— 否则"卖出后等回补"的记忆丢失 ✗
+    st["day"] = str(day)
     return st
 
 

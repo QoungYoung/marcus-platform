@@ -1500,16 +1500,31 @@ class TMonitor:
                     it = ledger.get(sym) or {}
                     pos = int(it.get("volume") or it.get("sellable") or 0)
                     cost = float(it.get("avg_price") or it.get("cost") or 0)
-                    # ── 当日 T 轮动状态（从成交反推 ✓；**已合并为一次查询** ✓）──
-                    st = {"day": today, "sold": False, "bought": False}
+                    # ── T 轮动状态 ✓：**跨日持久**（`t_sleeve_state.json` ✓）+ 当日成交覆盖 ✓
+                    #   ★ 2026-10-18：原实现只用"当日成交"反推 ⇒ 卖出后过夜记忆丢失 ✗
+                    #     ⇒ 次日又走卖出分支 ⇒ **回补永远不发生** ✗（实测 39 天 buy=0 ✓）
+                    try:
+                        st = _ts.load_state(acct, sym, today) or {}
+                    except Exception:
+                        st = {}
+                    st.setdefault("day", today)
+                    st.setdefault("sold", False)
+                    st.setdefault("bought", False)
                     try:
                         for _dirS, _pxS in (_ts_map.get(str(sym).upper()) or []):
                             if str(_dirS).startswith("卖"):
                                 st["sold"] = True
                                 st["last_sell_px"] = float(_pxS or 0)
+                                st["sold_day"] = today
+                                st["bought"] = False
                             elif str(_dirS).startswith("买") and st.get("sold"):
                                 st["bought"] = True
+                                st["done"] = True
                                 st["last_buy_px"] = float(_pxS or 0)
+                    except Exception:
+                        pass
+                    try:
+                        _ts.save_state(acct, sym, st)
                     except Exception:
                         pass
                     if int((_ts_tries or {}).get(str(sym).upper(), 0)) >= int(os.getenv("WOLF_T_SLEEVE_TRIES", "2") or 2):
