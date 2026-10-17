@@ -1316,17 +1316,49 @@ def main() -> int:
                                 #   ⇒ 改用**紧邻上文已在用**的 `day_dir` ✓（1264 行的 `_leg_files` 就基于它 ✓）
                                 #     它的 basename 正是**模拟交易日** ✓（`day_dir = <root>/<YYYYMMDD>` ✓）
                                 _day9 = os.path.basename(str(day_dir).rstrip("/"))
-                                _rows9 = _wc9.gz("daily_basic", {"trade_date": _day9}, "ts_code,total_mv") or []
+                                # ⚠️ 2026-10-16 修（第三次 ✗）：`wolf_confirm_pick.gz()` 在**臂里**
+                                #   返回的 `total_mv` 是**空串** ✗（`['002156.SZ', '']` ✓ 实测）
+                                #   —— 它走的是回放/缓存路径 ✗；而**选股侧**用的是中继直连 ✓
+                                #   （`rotation_switch_arm._gz` ⇒ `tushare_relay.relay_items()` ✓）
+                                #   ⇒ 这里改用**同一条已被证明可用**的取数 ✓（同环境 ✓ 同接口 ✓）
+                                try:
+                                    import importlib as _il9
+                                    import pathlib as _pl9
+                                    try:
+                                        _relay9 = _il9.import_module("tushare_relay")
+                                    except ImportError:
+                                        for _pr9 in _pl9.Path(__file__).resolve().parents:
+                                            if (_pr9 / "core" / "tushare_relay.py").exists():
+                                                sys.path.insert(0, str(_pr9 / "core"))
+                                                break
+                                        _relay9 = _il9.import_module("tushare_relay")
+                                    _f9, _rows9 = _relay9.relay_items(
+                                        "daily_basic", fields="ts_code,total_mv", trade_date=_day9)
+                                    _rows9 = _rows9 or []
+                                except Exception as _eR9:
+                                    print("[prod] ⚠️ 埋伏排序中继取市值失败: %s" % str(_eR9)[:100],
+                                          file=sys.stderr)
+                                    _rows9 = []
+                                # ⚠️ 匹配要**两边都归一化** ✗：中继返回可能是 `600584.SH` 或 `SH600584` ✓
                                 for _b9 in _rows9:
-                                    if str(_b9[0]) == _tsc9:
+                                    _k9b = "".join(ch for ch in str(_b9[0] if _b9 else "") if ch.isdigit())[:6]
+                                    if _k9b and _k9b == _c6_9:
                                         _mv9 = float(_b9[1] or 0)
                                         break
                                 if not _rows9:
-                                    print("[prod] ⚠️ 埋伏排序取市值返回空（%s）⇒ 该票市值按 0 计" % _day9,
+                                    print("[prod] ⚠️ 埋伏排序取市值返回空（%s）⇒ 市值按 0 计" % _day9,
                                           file=sys.stderr)
                                 elif _mv9 <= 0:
-                                    print("[prod] ⚠️ 埋伏排序未取到 %s 市值（%s 行）⇒ 按 0 计"
-                                          % (_tsc9, len(_rows9)), file=sys.stderr)
+                                    # ⚠️ 提示语必须**如实** ✗：区分"没匹配到"与"匹配到了但值是 0" ✓
+                                    _hit9 = None
+                                    for _b9 in _rows9:
+                                        _k9b = "".join(ch for ch in str(_b9[0] if _b9 else "") if ch.isdigit())[:6]
+                                        if _k9b and _k9b == _c6_9:
+                                            _hit9 = _b9
+                                            break
+                                    print("[prod] ⚠️ 埋伏排序市值异常 %s(%s)：匹配行=%s ⇒ 市值=%.0f（%s 共 %d 行）"
+                                          % (_sy9, _tsc9, (str(_hit9)[:40] if _hit9 else '**未匹配**'),
+                                             _mv9, _day9, len(_rows9)), file=sys.stderr)
                             except Exception as _emv9:
                                 _mv9 = 0.0
                                 print("[prod] ⚠️ 埋伏排序取市值异常（改为不参与市值分）: %s"
@@ -1335,7 +1367,10 @@ def main() -> int:
                                 _lo9 = min(_cl9[-250:]); _hi9 = max(_cl9[-250:])
                                 _pos9 = (_cl9[-1] - _lo9) / (_hi9 - _lo9) if _hi9 > _lo9 else 0.5
                                 _sc9[_sy9] = (1.0 - _pos9, _mv9)
-                        except Exception:
+                        except Exception as _eSc9:
+                            # ⚠️ 外层异常**必须可见** ✗（12-18/12-22 的"市值全 0 且无告警"就是它 ✗）
+                            print("[prod] ⚠️ 埋伏排序打分异常（该票按 位置0.5/市值0 计）%s: %s"
+                                  % (_sy9, str(_eSc9)[:100]), file=sys.stderr)
                             _sc9[_sy9] = (0.5, 0.0)
                     if _sc9:
                         _posl = sorted(v[0] for v in _sc9.values())
@@ -1357,6 +1392,16 @@ def main() -> int:
                                             key=lambda kv: -(0.5 * _bs9.bisect_left(_posl, kv[1][0]) / max(1, len(_posl) - 1)
                                                              + 0.5 * _bs9.bisect_left(_mvl, kv[1][1]) / max(1, len(_mvl) - 1)))
                         _amb_top = {k for k, _v in _rank9[:_amb_max]}
+                        # ★ 2026-10-16 ✓（诊断，临时 ✓）：把"打分依据"打出来 ⇒ 一次定位 ✓
+                        #   为什么要有它 ✗：12-18 的取前 3 与当天"市值前三"不符 ✗，却又不打告警 ✗
+                        #   ⇒ 与其再猜一轮，不如让臂自报每只候选的 (位置分, 市值分) ✓
+                        #   开关 `WOLF_AMBUSH_RANK_DEBUG`（默认 0 ⇒ 不打印 ✓；定位完即撤 ✓）
+                        if str(os.getenv("WOLF_AMBUSH_RANK_DEBUG", "0")).strip().lower() in ("1", "true", "yes", "on"):
+                            print("[prod] 埋伏排序明细（键=%s ✓，前 6 名）:" % _rkey9, file=sys.stderr)
+                            for _k9, _v9 in _rank9[:_amb_max + 3]:
+                                print("   %-10s 位置分=%.3f 市值(万元)=%.0f ⇒ 选中=%s"
+                                      % (_k9, _v9[0], _v9[1], "是" if _k9 in _amb_top else "否"),
+                                      file=sys.stderr)
                         print("[prod] 埋伏腿每日上限 %d ⇒ 取前 %d: %s（共 %d 条候选）"
                               % (_amb_max, _amb_max, sorted(_amb_top), len(_amb_syms)), file=sys.stderr)
                     else:
@@ -1680,7 +1725,10 @@ def main() -> int:
         bars = [b for b in bars if (not lo or b >= lo) and (not hi or b <= hi)]
     log: List[dict] = []
     step_secs: Dict[str, float] = {}
+    # ★ 2026-10-16 ✓（用户 A+B）：`_check_t_sleeve` 必须进**这份白名单** ✓
+    #   否则执行口根本不会调用它 ✗（我上一版只加在 `_run()` 里 ⇒ 臂里永不执行 ✗ 实测 0 行日志 ✓）
     checks = ("_round", "_check_break_vwap_half", "_settle_tsell_pending", "_settle_pullback_sell", "_check_wolf_t_rules",
+              "_check_t_sleeve",
               "_check_roundtrip_sell", "_check_defensive_t_reduce", "_check_board_half",
               "_check_profit_take", "_check_weekend_hedge", "_check_hedge_refill", "_check_fib_target",
               "_check_passive_stop", "_check_boll_sell", "_check_boll_mid_exit",
