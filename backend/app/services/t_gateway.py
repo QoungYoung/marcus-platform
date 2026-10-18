@@ -2356,6 +2356,25 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                 print("[gateway] %s 回踩确认加仓 ⇒ **豁免加仓口径闸** ✓（他 2022-06-08："
                       "突破加仓 / 回踩确认加仓 是两次独立机会 ✓）" % symbol, flush=True)
                 _ac = None
+            # ★ 2026-10-18 ✓（用户：「T腿还是只有卖没有买」）：
+            #   实证 ✗：`wolf_t_sleeve_buy` executed 1 ｜ **blocked 6** ✗，理由全是
+            #     「**加仓口径：本轮创新高买入已达 2 次（上限 2）**」✗
+            #     「距本轮首次买入 7 个自然日 > 3」✗
+            #   而卖腿 executed **10** ✓ ⇒ 只剩卖 ✓✓
+            #   根因 ✓：**T 仓回补 ≠ 加仓** ✗ —— 它是"把卖掉的 T 仓买回来"✓
+            #     却和"创新高加仓"共用上限 ⇒ 直接被拦死 ✗
+            #   修法 ✓：`WOLF_T_SLEEVE_BUY_EXEMPT_ADDON=1` ⇒ T 仓回补**豁免加仓口径闸** ✓
+            #     （底仓 floor、单票上限、日限等其它闸照常 ✓）
+            try:
+                _is_tbk = (str(_kind_gw) == "wolf_t_sleeve_buy") or \
+                          ("T仓轮动" in str(reason or ""))
+            except Exception:
+                _is_tbk = False
+            if _ac is not None and _is_tbk and \
+                    str(os.getenv("WOLF_T_SLEEVE_BUY_EXEMPT_ADDON", "0")).strip().lower() \
+                    in ("1", "true", "yes", "on"):
+                print("[gateway] %s T 仓回补 ⇒ **豁免加仓口径闸** ✓（回补≠加仓 ✓）" % symbol, flush=True)
+                _ac = None
             if _ac is not None and _ac.enabled():
                 _oka, _whya = _ac.check(account_id, symbol, int(volume or 0),
                                         datetime.now().strftime("%Y%m%d"), add_price=float(price or 0))

@@ -1268,3 +1268,8 @@ export WOLF_AMBUSH_MIN_AMP20='1.2'
 #   语料：弹性是**方向**的（半导体波动大 ✓ / 银行一天 2 个点 ✗）
 #   ⇒ 用 max(amp20, **amp120**) ⇒ 看"波动基因" ✓，不因近期缩量误杀低位股 ✓
 export WOLF_AMBUSH_MIN_AMP120='2.5'
+
+# ★ 2026-10-18 ✓（用户：「T腿还是只有卖没有买」）
+#   实证：T买 executed 1 ｜ blocked 6（全是「加仓口径：创新高买入已达2次」）
+#   根因：T仓回补 ≠ 加仓（它是把卖掉的T仓买回来）⇒ 不该受加仓上限约束
+export WOLF_T_SLEEVE_BUY_EXEMPT_ADDON='1'
