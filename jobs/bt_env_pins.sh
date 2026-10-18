@@ -1237,3 +1237,9 @@ export BACKTEST_DEFAULT_MODEL="deepseek-flash"          # ★ 硬赋值（用户
 #   但 `t_gateway.py:2172` 的 BUY_TIMING 只认 `WOLF_FALLING_GATE_EXEMPT_LEGS` ✗
 #   ⇒ 同一笔埋伏在网关**又被拦一次** ✗ ⇒ 这里补齐 ✓
 export WOLF_FALLING_GATE_EXEMPT_LEGS='wolf_ambush_buy'
+
+# ★ 2026-10-18 ✓（子代理审计 + NGA 语料）：埋伏候选改为**低位 + 辨识度**
+#   原口径 r60 降序（回调强票 ✗）与语料「低位方向找辨识度最高的老龙头」相反 ✗
+#   lowpos = 位置(120日)≤0.35 且 近20日均成交额优先 ✓
+export WOLF_AMBUSH_PICK='lowpos'
+export WOLF_AMBUSH_LOWPOS_MAX='0.35'

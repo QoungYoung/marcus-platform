@@ -589,7 +589,45 @@ def main():
                                 return (_v[-1] / _v[0] - 1) * 100 if len(_v) >= 61 else -999
                             except Exception:
                                 return -999
-                        _pb = sorted(_rest, key=lambda c: -_r60(c))[:_K]
+                        # ★ 2026-10-18 ✓（子代理审计 + NGA 一手语料 ✓）：
+                        #   原口径 ✗：按 **r60（60日涨幅）降序** 取"回调中的强票"
+                        #     语料 ✓：「低位方向：找**辨识度最高的老龙头**埋伏」
+                        #     ⇒ 两者**相反** ✗：涨幅最大 ≠ 低位老龙头 ✓
+                        #   新口径 ✓（`WOLF_AMBUSH_PICK='lowpos'`；默认 r60 = 旧行为 ✓）：
+                        #     ① **低位**：`pos120 = (现价−120日低)/(120日高−120日低)` ≤ 0.35 ✓
+                        #     ② **辨识度**：近 20 日均成交额（amount）越大越像"老龙头" ✓
+                        #        （没有 amount 列时退化为"市值/成交额不可得"⇒ 只用低位排序 ✓）
+                        _pick = str(os.getenv("WOLF_AMBUSH_PICK", "r60") or "r60").strip().lower()
+                        if _pick == "lowpos":
+                            def _pos120(_c):
+                                try:
+                                    _v = [float(x) for x in close[_c].dropna().values[-120:]]
+                                    if len(_v) < 60:
+                                        return None
+                                    _hi, _lo = max(_v), min(_v)
+                                    if _hi <= _lo:
+                                        return None
+                                    return (_v[-1] - _lo) / (_hi - _lo)
+                                except Exception:
+                                    return None
+                            def _prom(_c):
+                                try:
+                                    if "amount" in close.columns:
+                                        return float(close["amount"].loc[_c].dropna().values[-20:].mean())
+                                except Exception:
+                                    pass
+                                return 0.0
+                            _cand2 = []
+                            for _c in _rest:
+                                _pp = _pos120(_c)
+                                if _pp is None or _pp > float(os.getenv("WOLF_AMBUSH_LOWPOS_MAX", "0.35") or 0.35):
+                                    continue          # 位置不够低 ⇒ 不要 ✓
+                                _cand2.append(_c)
+                            _pb = sorted(_cand2, key=lambda c: (-_prom(c), _pos120(c) or 1.0))[:_K]
+                            print("[stock_confirm] 埋伏候选(lowpos)：低位池 %d 只 ⇒ 取 %d 只（辨识度优先）"
+                                  % (len(_cand2), len(_pb)), file=sys.stderr)
+                        else:
+                            _pb = sorted(_rest, key=lambda c: -_r60(c))[:_K]
                         if _pb:
                             print("[stock_confirm] 回调名额：为 %d 只强票预留（%s）"
                                   % (len(_pb), ", ".join(str(x)[:6] for x in _pb[:4])), file=sys.stderr)
