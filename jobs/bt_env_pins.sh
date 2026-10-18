@@ -510,7 +510,9 @@ export WOLF_WARN_TRIM_SCOPE='account'
 export WOLF_WARN_TRIM_MAX_PCT='40'
 #   「**小跌小买 大跌大买**」（语料 ✓）：距**持仓均价**每跌 3% 放大一档，每档 +0.5 倍，上限 ×2
 #     小跌(<3%) ⇒ ×1.0｜中跌(3~6%) ⇒ ×1.5｜大跌(≥6%) ⇒ ×2.0 ✓
-export WOLF_AMBUSH_SIZE_TIER_STEP='3'
+# ★ 2026-10-18 ✓（NGA 一手语料 ✓）：「越跌越买？怎么可能 肯定是根据指数趋势做高抛低吸」
+#   「**我没有兴趣增加仓位**」⇒ 关掉「越跌越买 ×2」放大 ✓（与语料相反 ✗）
+export WOLF_AMBUSH_SIZE_TIER_STEP='0'
 export WOLF_AMBUSH_SIZE_TIER_GAIN='0.5'
 export WOLF_AMBUSH_SIZE_MAX_MULT='2'
 # --- ledger 9.348: pure self-made gate; his words only cap 2 buys per name; released per user ---
@@ -1229,3 +1231,9 @@ export WOLF_T_BUY_CORPUS_RULES='1'
 export DEEPSEEK_MODEL="deepseek-flash"          # ★ 硬赋值（用户「统一用 deepseek-flash」✓；要实验请显式改这一行 ✗）
 export DEEPSEEK_TRADE_MODEL="deepseek-flash"          # ★ 硬赋值（用户「统一用 deepseek-flash」✓；要实验请显式改这一行 ✗）
 export BACKTEST_DEFAULT_MODEL="deepseek-flash"          # ★ 硬赋值（用户「统一用 deepseek-flash」✓；要实验请显式改这一行 ✗）
+
+# ★ 2026-10-18 ✓（子代理审计实证 ✓）：**双闸不一致** ✗
+#   `t_monitor.py:5906` 已按 `WOLF_AMBUSH_EXEMPT_CONDTIMING` 放行 ✓
+#   但 `t_gateway.py:2172` 的 BUY_TIMING 只认 `WOLF_FALLING_GATE_EXEMPT_LEGS` ✗
+#   ⇒ 同一笔埋伏在网关**又被拦一次** ✗ ⇒ 这里补齐 ✓
+export WOLF_FALLING_GATE_EXEMPT_LEGS='wolf_ambush_buy'
