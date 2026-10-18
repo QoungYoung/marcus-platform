@@ -241,7 +241,11 @@ export WOLF_T_PLAN='1'
 #     agent 定价保留开关 ✓，等 LLM 不被挤占时再打开 ✓（或单线程化）
 # ★ 2026-10-18 07:55 ✓（用户选 B）：实测单发 4.7s、4 并发 6.7s ✓（瓶颈是单卡+长prompt，
 #   不是并发数 ✗）⇒ **重新打开 agent 定价** ✓，但限**单路** + 熔断 3 次 ✓
-export WOLF_T_PLAN_AGENT='1'
+# ⚠️ 2026-10-18 22:0x ✓（用户：「一直超时」）：**T 定价改回纯数值带** ✓
+#   实证 ✗：LLM 首次调用需 ~59 秒（空闲后 ✓），60 秒超时仍被打穿 ⇒ 日志刷 timed out ✗
+#   数值带 ✓：秒级 ✓ 且已在圣泉 0227 验证过（T入34.095/T出35.365 ⇒ 当日触发正T ✓）
+#   要恢复 agent 定价 ⇒ 置 1 ✓（并确认 LLM 空闲后首调是否可接受 ✓）
+export WOLF_T_PLAN_AGENT='0'
 export WOLF_T_PLAN_REFRESH='1'     # 改价 ✓（单路 + 每票每天≤2 次 + 熔断兜底 ✓）
 export WOLF_T_PLAN_REFRESH_MAX='2'  # 每票每天最多改 2 次 ✓（防拖慢回测 ✗）
 export WOLF_T_PLAN_WORKERS='1'  # 单线程 ✓（LLM 单卡，并发只会互相超时 ✗）
