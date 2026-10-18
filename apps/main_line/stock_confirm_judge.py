@@ -638,11 +638,14 @@ def main():
                         #     当当天候选不足 8 只 ⇒ **切片为空** ⇒ 埋伏池恒 0 ✗✓
                         #   修法 ✓：切片为空时**回退**为"跳过前排 K 名后的全部" ✓
                         #     （保留"埋伏不选前排主线票"的本意 ✓，但不再因池小而全灭 ✓）
-                        _pool0 = _ordered[max(0, MAX_STOCKS - _K):]
-                        if not _pool0:
-                            _pool0 = _ordered[_K:] or _ordered
-                            print("[stock_confirm] 埋伏池回退 ✓（第%d名之后，共 %d 只）"
-                                  % (_K, len(_pool0)), file=sys.stderr)
+                        # ★ 2026-10-18 ✓（用户选 B ✓）：**去掉"第 8 名之后"的设计** ✗
+                        #   原设计 ✗：`_ordered[MAX_STOCKS - _K:]`（MAX_STOCKS=10、_K=3 ⇒ 第8名后 ✓）
+                        #     ⇒ 判级池一小（实测 5 只 ✓）就**必然为空** ✗✓
+                        #   新口径 ✓：**跳过前排 K 名之后的全部**（`_ordered[_K:]` ✓）
+                        #     ⇒ 保留"埋伏不追前排主线票"的本意 ✓，但不再因池小而全灭 ✓
+                        _pool0 = _ordered[_K:] or _ordered
+                        print("[stock_confirm] 埋伏池 ✓（跳过前排 %d 名，共 %d 只）"
+                              % (_K, len(_pool0)), file=sys.stderr)
                         _rest = [c for c in _pool0
                                  if (_pick0 == "lowpos" or pullback_ratio_ok(c, close)) and _elastic(c)]
                         # ★ 2026-10-18 ✓（诊断 ✗：一直「0/0 只」⇒ 池子本身为空 ✓）
