@@ -315,7 +315,6 @@ class BtAgentLoop:
                                 "reason": "当天已有卖出（止盈算 T 出 ✓）"}
                 except Exception as _ex:
                     print("[bt-agent] 重复卖出检查异常(放行): %s" % str(_ex)[:70], flush=True)
-            vol = int(float(snap.get("volume") or 0)) if isinstance(snap, dict) else 0
             px = float(trig.get("quote_price") or trig.get("trigger_price") or 0)
             side = _tdb_m.trigger_side(trig)
             if px <= 0 or vol <= 0:
