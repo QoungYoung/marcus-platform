@@ -585,8 +585,33 @@ def main():
                         #   它要求 `close/max20 ∈ [0.85,0.95]`（距 20 日高仅 5~15% ✗）
                         #   ⇒ 天然把"低位股"全滤掉 ⇒ 实测 `低位池 0 只` ✗✓
                         _pick0 = str(os.getenv("WOLF_AMBUSH_PICK", "r60") or "r60").strip().lower()
+                        def _amp20(_c):
+                            """近20日**日收益标准差×100** ≈ 日均波动幅度 ✓（弹性代理 ✓）"""
+                            try:
+                                _v = [float(x) for x in close[_c].dropna().values[-21:]]
+                                if len(_v) < 11:
+                                    return None
+                                _r = [(_v[i] / _v[i - 1] - 1) * 100 for i in range(1, len(_v)) if _v[i - 1] > 0]
+                                if not _r:
+                                    return None
+                                _m = sum(_r) / len(_r)
+                                return (sum((x - _m) ** 2 for x in _r) / len(_r)) ** 0.5
+                            except Exception:
+                                return None
+                        _minamp = float(os.getenv("WOLF_AMBUSH_MIN_AMP20", "0") or 0)
+                        def _elastic(_c):
+                            if _minamp <= 0:
+                                return True
+                            _a = _amp20(_c)
+                            return _a is not None and _a >= _minamp
+                        # ★ 2026-10-18 ✓：**弹性筛选对两条路都生效** ✓
+                        #   （用户：「能从弹性上去掉这些低弹性票吗」✓；语料「日均波动 2 个点没兴趣」✓）
                         _rest = [c for c in _ordered[max(0, MAX_STOCKS - _K):]
-                                 if (_pick0 == "lowpos" or pullback_ratio_ok(c, close))]
+                                 if (_pick0 == "lowpos" or pullback_ratio_ok(c, close)) and _elastic(c)]
+                        if _minamp > 0:
+                            _n_all = len(_ordered[max(0, MAX_STOCKS - _K):])
+                            print("[stock_confirm] 弹性筛 ✓ amp20≥%.1f ⇒ %d/%d 只（剔除低波动 ✓）"
+                                  % (_minamp, len(_rest), _n_all), file=sys.stderr)
                         def _r60(_c):
                             try:
                                 _v = [float(x) for x in close[_c].dropna().values[-61:]]
@@ -632,19 +657,6 @@ def main():
                                 #   ⇒ 用**波动率**当弹性代理 ✓（比写死运营商名单更根本 ✓）：
                                 #     `amp = 近20日**日收益标准差×100**`（≈日均波动幅度 ✓）
                                 #     要求 ≥ `WOLF_AMBUSH_MIN_AMP20`（默认 2.0 ✓；0 = 不筛 ✓）
-                                _amp = None
-                                try:
-                                    _v = [float(x) for x in close[_c].dropna().values[-21:]]
-                                    if len(_v) >= 11:
-                                        _rets = [(_v[i] / _v[i - 1] - 1) * 100 for i in range(1, len(_v)) if _v[i - 1] > 0]
-                                        if _rets:
-                                            _mu = sum(_rets) / len(_rets)
-                                            _amp = (sum((r - _mu) ** 2 for r in _rets) / len(_rets)) ** 0.5
-                                except Exception:
-                                    _amp = None
-                                _minamp = float(os.getenv("WOLF_AMBUSH_MIN_AMP20", "2.0") or 0)
-                                if _minamp > 0 and (_amp is None or _amp < _minamp):
-                                    continue      # 弹性不足 ⇒ 不进埋伏候选 ✓
                                 _cand2.append(_c)
                             _pb = sorted(_cand2, key=lambda c: (-_prom(c), _pos120(c) or 1.0))[:_K]
                             print("[stock_confirm] 埋伏候选(lowpos)：低位池 %d 只 ⇒ 取 %d 只（辨识度优先）"
