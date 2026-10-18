@@ -1554,6 +1554,12 @@ class TMonitor:
                                 st["bought"] = True
                                 st["done"] = True
                                 st["last_buy_px"] = float(_pxS or 0)
+                            elif str(_dirS).startswith("买"):
+                                # ★ 2026-10-18 ✓（用户实证 ✗：买 300 却分 3 天各卖 100 ✗）
+                                #   正T（先买后卖）也要记住"**这一轮 T 买了多少**" ✓
+                                st["bought"] = True
+                                st["last_buy_px"] = float(_pxS or 0)
+                                st["bought_qty"] = int(st.get("bought_qty") or 0) + int(float(_vS or 0))
                         st["sold_qty"] = _sold_q     # ✓ 当天已卖量（含止盈 ✓）
                     except Exception:
                         pass
@@ -1735,6 +1741,13 @@ class TMonitor:
                         except Exception as _eb:
                             print("[TSleeve图形] %s 异常(放行): %s" % (sym, str(_eb)[:70]), flush=True)
                     sn = _ts.sleeve_shares(pos)
+                    if act == "sell" and st.get("bought") and int(st.get("bought_qty") or 0) > 0:
+                        # ★ 到价就**把这轮 T 仓一次卖掉** ✓（而不是每天卖 100 ✗）
+                        _bq = int(st.get("bought_qty") or 0)
+                        _sn2 = min(_bq, max(pos - 100, 0))
+                        sn = (_sn2 // 100) * 100
+                        if sn < 100:
+                            sn = _ts.sleeve_shares(pos)
                     if act == "buy":       # ✓ 回补量不超过"当天已卖量"（含止盈 ✓）
                         _sq = int(st.get("sold_qty") or 0)
                         if _sq > 0:
