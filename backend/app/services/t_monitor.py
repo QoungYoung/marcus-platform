@@ -1431,6 +1431,27 @@ class TMonitor:
         #   实测：2 个时间步/分钟 ⇒ **~24 分钟/天** ✗（正常 ~3 分钟/天 ✓）
         #   修法 ✓：按**模拟时钟**每 `WOLF_T_SLEEVE_EVERY_MIN`（默认 30 分钟）才评估一次 ✓
         #     并**合并成一次** DB 查询 ✓（原来是 per-symbol 查询 ✗）
+        # ★ 2026-10-18 ✓（用户：「他应该是在**两个窗口期动态定价**的」）：
+        #   他的原话 ✓：「当日只做**上午 9.45-10.00 下午 2.00-2.30** 这两个时间段的交易，
+        #     尽量避免开盘直接买卖和平稳时间的来回T」✓
+        #   ⇒ T 仓轮动**只在这两个窗口内评估** ✓（窗口外不动 ✓，避免"平稳时间来回T"✗）
+        #   窗口 ✓：`WOLF_T_SLEEVE_WINDOWS`（默认 '0945-1000,1400-1430' ✓；空=全天 ✓）
+        try:
+            _ws = str(os.getenv("WOLF_T_SLEEVE_WINDOWS", "0945-1000,1400-1430") or "").strip()
+            if _ws:
+                _hm = datetime.now().strftime("%H%M")
+                _ok_win = False
+                for _seg in _ws.split(","):
+                    _seg = _seg.strip()
+                    if "-" in _seg:
+                        _a, _b = _seg.split("-", 1)
+                        if str(_a).strip() <= _hm < str(_b).strip():
+                            _ok_win = True
+                            break
+                if not _ok_win:
+                    return          # 窗口外：不评估 ✓（他不在平稳时间做T ✓）
+        except Exception:
+            pass
         try:
             _nowT = datetime.now()
             _bucket = (_nowT.hour * 60 + _nowT.minute) // max(1, int(os.getenv("WOLF_T_SLEEVE_EVERY_MIN", "30") or 30))
