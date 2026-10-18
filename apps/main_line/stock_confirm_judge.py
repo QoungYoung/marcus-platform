@@ -598,20 +598,46 @@ def main():
                                 return (sum((x - _m) ** 2 for x in _r) / len(_r)) ** 0.5
                             except Exception:
                                 return None
+                        def _amp120(_c):
+                            """近 **120 日**日收益标准差×100 ⇒ "**波动基因**" ✓
+
+                            ★ 2026-10-18 ✓（用户：「低位与高弹性天然冲突，那他怎么选出来的呢」）：
+                              语料 ✓：他的弹性是**方向**的（「半导体波动大，吃 5-10 个点机会多」✓；
+                                「银行 一天波动就 2 个点」⇒ 不要 ✓）
+                              而我原来用"个股**近20日**波动率" ✗ ⇒ 低位股正在缩量磨底 ⇒ 波动率必低 ✗
+                                ⇒ **把低位股全杀掉** ✓（实测低位池恒为 0 ✗）
+                              修法 ✓：取 `max(amp20, amp120)` —— 近半年有过大涨大跌（有基因 ✓）
+                                就保留 ✓，只因"最近缩量"被误杀的情况消除 ✓
+                            """
+                            try:
+                                _v = [float(x) for x in close[_c].dropna().values[-121:]]
+                                if len(_v) < 41:
+                                    return None
+                                _r = [(_v[i] / _v[i - 1] - 1) * 100 for i in range(1, len(_v)) if _v[i - 1] > 0]
+                                if not _r:
+                                    return None
+                                _m = sum(_r) / len(_r)
+                                return (sum((x - _m) ** 2 for x in _r) / len(_r)) ** 0.5
+                            except Exception:
+                                return None
                         _minamp = float(os.getenv("WOLF_AMBUSH_MIN_AMP20", "0") or 0)
+                        _minamp120 = float(os.getenv("WOLF_AMBUSH_MIN_AMP120", "2.5") or 0)
                         def _elastic(_c):
+                            _a20 = _amp20(_c)
+                            _a120 = _amp120(_c)
+                            if _minamp120 > 0 and _a120 is not None and _a120 >= _minamp120:
+                                return True          # 有波动基因 ⇒ 通过 ✓
                             if _minamp <= 0:
-                                return True
-                            _a = _amp20(_c)
-                            return _a is not None and _a >= _minamp
+                                return _minamp120 <= 0
+                            return _a20 is not None and _a20 >= _minamp
                         # ★ 2026-10-18 ✓：**弹性筛选对两条路都生效** ✓
                         #   （用户：「能从弹性上去掉这些低弹性票吗」✓；语料「日均波动 2 个点没兴趣」✓）
                         _rest = [c for c in _ordered[max(0, MAX_STOCKS - _K):]
                                  if (_pick0 == "lowpos" or pullback_ratio_ok(c, close)) and _elastic(c)]
                         if _minamp > 0:
                             _n_all = len(_ordered[max(0, MAX_STOCKS - _K):])
-                            print("[stock_confirm] 弹性筛 ✓ amp20≥%.1f ⇒ %d/%d 只（剔除低波动 ✓）"
-                                  % (_minamp, len(_rest), _n_all), file=sys.stderr)
+                            print("[stock_confirm] 弹性筛 ✓ max(amp20≥%.1f, amp120≥%.1f) ⇒ %d/%d 只"
+                                  % (_minamp, _minamp120, len(_rest), _n_all), file=sys.stderr)
                         def _r60(_c):
                             try:
                                 _v = [float(x) for x in close[_c].dropna().values[-61:]]
