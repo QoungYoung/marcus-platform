@@ -335,3 +335,91 @@ def agent_refresh(f: Dict[str, Any], base: Dict[str, Any], cur_px: float,
                 "src": "agent-refresh", "why": str(cfg.get("why") or "")[:40]}
     except Exception as e:
         return dict(base, src="numeric(改价异常: %s)" % str(e)[:24])
+
+
+# ── 盘中图形判断（用户 2026-10-18：「为什么不做盘中实时图形分析回补？」✓）──────────
+def intraday_bars(sandbox: str, symbol: str, day: str, until: str = "15:00", n: int = 12) -> List[Dict[str, Any]]:
+    """读当天的 5 分钟档 ✓（臂里是 `<sandbox>/<day>/stock_5min_<6位代码>.json` ✓）
+
+    文件格式 ✓：`{"20260901": [{"time":"2026-09-01 09:35:00","open":…,"vol":…}, …48根]}` ✓
+    """
+    try:
+        code = "".join(ch for ch in symbol if ch.isdigit())[:6]
+        p = os.path.join(sandbox, str(day), "stock_5min_%s.json" % code)
+        with open(p, encoding="utf-8") as f:
+            j = json.load(f) or {}
+        bars = j.get(str(day)) or []
+        if not bars:
+            k = sorted(j)[-1] if j else None
+            bars = j.get(k) or [] if k else []
+        out = []
+        for b in bars:
+            t = str(b.get("time") or "")
+            hhmm = t[11:16] if len(t) >= 16 else ""
+            if hhmm and hhmm <= until:
+                out.append(b)
+        return out[-int(n):]
+    except Exception:
+        return []
+
+
+def _bar_feats(bars: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """分时形态特征 ✓（他看的就是这些：「缩转放的那一瞬间」✓）"""
+    if not bars:
+        return {}
+    cl = [float(b.get("close") or 0) for b in bars]
+    vo = [float(b.get("vol") or 0) for b in bars]
+    hi = [float(b.get("high") or 0) for b in bars]
+    lo = [float(b.get("low") or 0) for b in bars]
+    vavg = (sum(vo[:-1]) / max(1, len(vo) - 1)) if len(vo) > 1 else 0
+    vrel = (vo[-1] / vavg) if vavg > 0 else 0
+    return {"last": cl[-1] if cl else 0, "day_high": max(hi) if hi else 0,
+            "day_low": min(lo) if lo else 0, "vol_ratio_last": round(vrel, 2),
+            "seq": [round(x, 2) for x in cl[-6:]], "vols": [int(x) for x in vo[-6:]],
+            "drop_from_high_pct": round((cl[-1] / max(hi) - 1) * 100, 2) if hi and max(hi) > 0 else 0,
+            "bar_amp_pct": round((hi[-1] - lo[-1]) / cl[-1] * 100, 2) if cl and cl[-1] else 0}
+
+
+def agent_buyback(f: Dict[str, Any], cur_px: float, band: float,
+                  bars: List[Dict[str, Any]], day: str) -> Dict[str, Any]:
+    """★ 盘中问 agent：**现在是不是回补（T买回）点** ✓（用户要求 ✓）
+
+    喂给它 ✓：最近 5 分钟 K 线序列、量比、离当日高点的回撤、当日振幅、计划 T 入价 ✓
+    返回 ✓：{"act": "buy"|"wait", "why": "..."} ✓；失败 ⇒ wait ✓（宁可不补 ✗ 不瞎补 ✓）
+    """
+    if not _llm_breaker_ok(day):
+        return {"act": "wait", "why": "LLM 熔断(当日失败过多)", "src": "breaker"}
+    bf = _bar_feats(bars)
+    if not bf:
+        return {"act": "wait", "why": "无分时档", "src": "numeric"}
+    url = os.getenv("WOLF_T_PLAN_URL", "http://127.0.0.1:3001/chat")
+    prompt = (
+        "你是A股做T操盘手，正在**盘中实时**判断是否回补（T买回）。只输出 JSON，不要解释。\n"
+        "标的 %s ｜ 现价 %.3f ｜ 计划T入价 %.3f ｜ 成本 %.3f ｜ 持仓 %d 股\n"
+        "今日：高 %.3f 低 %.3f ｜ 现价距高点 %+.2f%% ｜ 本根振幅 %.2f%% ｜ 量比(本根/前均) %.2f\n"
+        "最近6根收盘 %s ｜ 对应成交量 %s\n"
+        "他的判据（语料）：「**转折点就是缩转放的那一瞬间**」「磨的阶段买卖都是错的，应等出迹象再动」\n"
+        "要求：**只有出现缩量止跌 / 缩转放 / 回踩支撑不破**才回补；否则 waiting。\n"
+        '输出格式：{"act": "buy" 或 "wait", "why": "不超过20字"}\n'
+        % (f.get("symbol"), cur_px, band, f.get("cost") or 0, f.get("position") or 0,
+           bf["day_high"], bf["day_low"], bf["drop_from_high_pct"], bf["bar_amp_pct"],
+           bf["vol_ratio_last"], bf["seq"], bf["vols"])
+    )
+    try:
+        body = json.dumps({"message": prompt}).encode()
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=float(os.getenv("WOLF_T_PLAN_TIMEOUT", "25") or 25)) as r:
+            txt = r.read().decode("utf-8", "replace")
+        try:
+            _env = json.loads(txt)
+            _inner = str(_env.get("reply") or txt)
+        except Exception:
+            _inner = txt
+        i, j = _inner.find("{"), _inner.rfind("}")
+        cfg = json.loads(_inner[i:j + 1])
+        act = "buy" if str(cfg.get("act") or "").lower().startswith("buy") else "wait"
+        _llm_note(day, True)
+        return {"act": act, "why": str(cfg.get("why") or "")[:40], "src": "agent"}
+    except Exception as e:
+        _llm_note(day, False)
+        return {"act": "wait", "why": "agent 异常: %s" % str(e)[:26], "src": "numeric"}

@@ -245,7 +245,11 @@ export WOLF_T_PLAN_WORKERS='1'  # 单线程 ✓（LLM 单卡，并发只会互�
 # ⚠️ 2026-10-18 更正 ✗：12 秒太短 ✗（长 prompt 实测 5~20 秒 ✓，圣泉那次 3.2s ✓）
 #   而且「我的会话抢模型」这个判断**是错的** ✗（用户指出：我的 dsh ≠ 容器 dsh ✓）
 export WOLF_T_PLAN_TIMEOUT='25'
-export WOLF_T_PLAN_FAIL_MAX='3'   # 当天连续失败 3 次 ⇒ **当天不再调 agent** ✓（走数值带 ✓）
+export WOLF_T_PLAN_FAIL_MAX='3'
+# ★ 2026-10-18 ✓（用户：「为什么不做盘中实时图形分析回补？」）
+#   回补前先看**分时图形**（缩转放 / 缩量止跌 / 回踩不破 ✓）⇒ 不支持就等 ✓
+export WOLF_T_BUYBACK_AI='1'
+export WOLF_T_BUYBACK_AI_MAX='2'   # 每票每天最多问 2 次 ✓（防拖慢 ✗）   # 当天连续失败 3 次 ⇒ **当天不再调 agent** ✓（走数值带 ✓）
 export WOLF_TP_MIN_PCT='1.0'
 export WOLF_TP_MAX_PCT='3.5'
 # ★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI**（纯价格带/止盈类 ✓，AI 只决策建仓类）

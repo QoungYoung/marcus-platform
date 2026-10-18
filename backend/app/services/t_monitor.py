@@ -1618,6 +1618,47 @@ class TMonitor:
                               % (sym, px, pos, act, str(why)[:80]), flush=True)
                     if act == "hold":
                         continue
+                    # ★ 2026-10-18 ✓（用户：「为什么不做盘中实时图形分析回补？」）：
+                    #   `act=="buy"`（回补/正T买入）⇒ **先看分时图形** ✓，再决定买不买 ✓
+                    #   依据 ✓（语料）：「转折点就是**缩转放的那一瞬间**」
+                    #     「磨的阶段买卖都是错的，**应等出迹象再动**」
+                    #   开关 `WOLF_T_BUYBACK_AI`（默认 0 = 旧行为 ✓；pins 1 ✓）
+                    #   每票每天最多问 `WOLF_T_BUYBACK_AI_MAX`(默认 2 ✓) 次 ✗ 防拖慢
+                    if act == "buy" and str(os.getenv("WOLF_T_BUYBACK_AI", "0")).strip().lower() \
+                            in ("1", "true", "yes", "on"):
+                        try:
+                            _tries = getattr(self, "_ts_buy_tries", None)
+                            if _tries is None:
+                                _tries = {}
+                                self._ts_buy_tries = _tries
+                            _k = (str(sym).upper(), today)
+                            if int(_tries.get(_k) or 0) < int(os.getenv("WOLF_T_BUYBACK_AI_MAX", "2") or 2):
+                                import sys as _sb
+                                import glob as _gb
+                                _jdb = os.path.join(os.path.dirname(os.path.dirname(
+                                    os.path.dirname(os.path.abspath(__file__)))), "jobs")
+                                if _jdb not in _sb.path:
+                                    _sb.path.insert(0, _jdb)
+                                import bt_t_plan as _ttp2
+                                _code = "".join(ch for ch in str(sym) if ch.isdigit())[:6]
+                                _bars = []
+                                for _root in _gb.glob(os.path.join(
+                                        os.path.dirname(os.path.dirname(os.path.dirname(
+                                            os.path.abspath(__file__)))), "..", "data", "_bt_*")):
+                                    _bars = _ttp2.intraday_bars(_root, sym, today,
+                                                                datetime.now().strftime("%H:%M"), 12)
+                                    if _bars:
+                                        break
+                                _tries[_k] = int(_tries.get(_k) or 0) + 1
+                                _vb = _ttp2.agent_buyback(
+                                    {"symbol": sym, "cost": cost, "position": pos},
+                                    px, float((_plan or (0, 0))[0] or 0), _bars, today)
+                                print("[TSleeve图形] %-10s 现价%.3f 分时%d根 ⇒ **%s**（%s）"
+                                      % (sym, px, len(_bars), _vb.get("act"), _vb.get("why")), flush=True)
+                                if str(_vb.get("act") or "") != "buy":
+                                    continue      # 图形不支持 ⇒ 这轮不买 ✓（"等出迹象再动"✓）
+                        except Exception as _eb:
+                            print("[TSleeve图形] %s 异常(放行): %s" % (sym, str(_eb)[:70]), flush=True)
                     sn = _ts.sleeve_shares(pos)
                     if act == "buy":       # ✓ 回补量不超过"当天已卖量"（含止盈 ✓）
                         _sq = int(st.get("sold_qty") or 0)
