@@ -1623,7 +1623,13 @@ class TMonitor:
                                         if str(os.getenv("WOLF_T_PLAN_AGENT", "0")).strip().lower() \
                                                 in ("1", "true", "yes", "on"):
                                             _b = _ttp.agent_refine(_f, _b)
-                                        _cache[str(sym).upper()] = (float(_b["buy"]), float(_b["sell"]), 0)
+                                        # ★ 语料 ✓：「把减掉的标**在均线附近补回**」
+                                        #   ⇒ 缓存里带上 MA5 ✓，取"更容易成交"的那个作 T 入价 ✓
+                                        _ma5 = float(_f.get("ma5") or 0)
+                                        _buy_eff = float(_b["buy"])
+                                        if 0 < _ma5 < float(_b["sell"]):
+                                            _buy_eff = max(_buy_eff, _ma5)
+                                        _cache[str(sym).upper()] = (_buy_eff, float(_b["sell"]), 0)
                                         print("[TSleeve计划] %-10s 入%.3f 出%.3f（振幅%.2f%% %s）"
                                               % (sym, _b["buy"], _b["sell"], _f.get("amp10_pct", 0),
                                                  _b.get("src", "")), flush=True)
@@ -1634,6 +1640,21 @@ class TMonitor:
                     except Exception:
                         _plan = None
                     act, why = _ts.decide(px, pos, st, today, cost=cost, plan=_plan)
+                    # ★ 2026-10-18 ✓（语料 2016-01-29 实盘 ✓）：
+                    #   「早盘 20.34 出了，想下午跌 4 个点接回，**看见跌不下去**…赶紧 20.2 接回来了」
+                    #   ⇒ **回补不到也要接回** ✓（怕丢筹码 ✓）
+                    #   `WOLF_T_BUYBACK_FORCE`（默认 0 ✓；pins 1 ✓）
+                    #     当日 ≥ `WOLF_T_BUYBACK_FORCE_HHMM`（默认 1425 ✓）仍未回补 ⇒ 按现价买回 ✓
+                    if act == "hold" and st.get("sold") and not st.get("bought") \
+                            and str(os.getenv("WOLF_T_BUYBACK_FORCE", "0")).strip().lower() \
+                            in ("1", "true", "yes", "on"):
+                        try:
+                            _hmf = datetime.now().strftime("%H%M")
+                            if _hmf >= str(os.getenv("WOLF_T_BUYBACK_FORCE_HHMM", "1425") or "1425"):
+                                act, why = "buy", ("**未回补就接回**（%s 现价 %.3f，卖价 %.3f）—— 语料：跌不下去就接回 ✓"
+                                                   % (_hmf, px, float(st.get("last_sell_px") or 0)))
+                        except Exception:
+                            pass
                     if _diag:
                         print("[TSleeve] %-10s 现价%.3f 持仓%d ⇒ %s: %s"
                               % (sym, px, pos, act, str(why)[:80]), flush=True)
