@@ -581,8 +581,12 @@ def main():
                         # 用户两步方案之②：为「回调中的强票」预留 K 个名额 ✓
                         #   （`dist20h∈[0.85,0.95] ∧ r60≥20%`；从**名额之外**剩下的池里按 r60 降序挑 ✓）
                         _head = _ordered[:max(0, MAX_STOCKS - _K)]
+                        # ★ 2026-10-18 ✓：`lowpos` 模式**不能用** `pullback_ratio_ok` 过滤 ✗
+                        #   它要求 `close/max20 ∈ [0.85,0.95]`（距 20 日高仅 5~15% ✗）
+                        #   ⇒ 天然把"低位股"全滤掉 ⇒ 实测 `低位池 0 只` ✗✓
+                        _pick0 = str(os.getenv("WOLF_AMBUSH_PICK", "r60") or "r60").strip().lower()
                         _rest = [c for c in _ordered[max(0, MAX_STOCKS - _K):]
-                                 if pullback_ratio_ok(c, close)]
+                                 if (_pick0 == "lowpos" or pullback_ratio_ok(c, close))]
                         def _r60(_c):
                             try:
                                 _v = [float(x) for x in close[_c].dropna().values[-61:]]
