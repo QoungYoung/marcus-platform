@@ -1245,7 +1245,8 @@ export WOLF_FALLING_GATE_EXEMPT_LEGS='wolf_ambush_buy'
 #   原口径 r60 降序（回调强票 ✗）与语料「低位方向找辨识度最高的老龙头」相反 ✗
 #   lowpos = 位置(120日)≤0.35 且 近20日均成交额优先 ✓
 export WOLF_AMBUSH_PICK='lowpos'
-export WOLF_AMBUSH_LOWPOS_MAX='0.35'
+# ⚠️ 2026-10-18 调 ✓：0.35 太严 ⇒ 放宽到 0.5（120日位置 ≤50% ✓ 仍算低位）
+export WOLF_AMBUSH_LOWPOS_MAX='0.5'
 
 # ★ 2026-10-18 ✓（用户：「中国联通/中国移动怎么放进 AI 科技算力里的？」）
 #   病灶：主题来自 AI 判级自由发挥（概念库对它们返回 None），运营商被归进 AI/算力
@@ -1256,4 +1257,5 @@ export WOLF_AMBUSH_THEME_DENY='运营商,通信服务,公用事业'
 # ★ 2026-10-18 ✓（用户：「能从弹性上去掉这些低弹性票吗」）
 #   语料：「日均波动 2 个点的品种没兴趣」⇒ 埋伏候选要求弹性 ✓
 #   弹性 = 近20日**日收益标准差×100**（≈日均波动幅度 ✓）；0 = 不筛
-export WOLF_AMBUSH_MIN_AMP20='2.0'
+# ⚠️ 2026-10-18 调 ✓：2.0 太严 ⇒ 低位池常为 0（低位股波动率往往已塌 ✗）
+export WOLF_AMBUSH_MIN_AMP20='1.2'
