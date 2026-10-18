@@ -632,7 +632,18 @@ def main():
                             return _a20 is not None and _a20 >= _minamp
                         # ★ 2026-10-18 ✓：**弹性筛选对两条路都生效** ✓
                         #   （用户：「能从弹性上去掉这些低弹性票吗」✓；语料「日均波动 2 个点没兴趣」✓）
-                        _rest = [c for c in _ordered[max(0, MAX_STOCKS - _K):]
+                        # ★ 2026-10-18 ✓（诊断实证 ✓ 一直「0/0 只」）：
+                        #   病灶 ✗：埋伏候选取自 `_ordered[MAX_STOCKS - _K:]` = **第 8 名之后** ✗
+                        #     （`MAX_STOCKS=10`、`_K=3` ⇒ `_ordered[7:]` ✓）
+                        #     当当天候选不足 8 只 ⇒ **切片为空** ⇒ 埋伏池恒 0 ✗✓
+                        #   修法 ✓：切片为空时**回退**为"跳过前排 K 名后的全部" ✓
+                        #     （保留"埋伏不选前排主线票"的本意 ✓，但不再因池小而全灭 ✓）
+                        _pool0 = _ordered[max(0, MAX_STOCKS - _K):]
+                        if not _pool0:
+                            _pool0 = _ordered[_K:] or _ordered
+                            print("[stock_confirm] 埋伏池回退 ✓（第%d名之后，共 %d 只）"
+                                  % (_K, len(_pool0)), file=sys.stderr)
+                        _rest = [c for c in _pool0
                                  if (_pick0 == "lowpos" or pullback_ratio_ok(c, close)) and _elastic(c)]
                         # ★ 2026-10-18 ✓（诊断 ✗：一直「0/0 只」⇒ 池子本身为空 ✓）
                         try:
