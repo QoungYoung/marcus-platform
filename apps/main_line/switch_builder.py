@@ -461,10 +461,28 @@ def build_plan():
             _amb = (_js4.load(open(_ap3, encoding="utf-8")) or {}).get("symbols") or []
             print("[switch_builder] 埋伏候选文件读到 %d 只" % len(_amb), flush=True)
             _added = []
+            # ★ 2026-10-18 ✓（用户：「中国联通/中国移动怎么放进 AI 科技算力里的？」）：
+            #   病灶 ✗：主题不是来自**概念数据**（`wolf_context.theme_of_symbol()` 对
+            #     600050/600941 都返回 None ✗），而是 **AI 判级自由发挥** ✓
+            #     ⇒ 运营商（600050 联通 / 600941 移动 / 601728 电信）被归进「AI/算力/科技」✗
+            #     ⇒ 拿它们做"埋伏 AI 算力"违反语料 ✓（他要"辨识度最高的老龙头"= 板块弹性龙头 ✗；
+            #        他自己也说「日均波动 2 个点的品种没兴趣」✓，运营商正属此类 ✗）
+            #   修法 ✓（两道，都是开关 ✓）：
+            #     ① `WOLF_AMBUSH_THEME_EXCLUDE_CODES`：按代码排除（默认含三大运营商 ✓）
+            #     ② `WOLF_AMBUSH_THEME_DENY`：按**主题关键词**排除 ✓（默认含"运营商/通信服务/公用" ✓）
+            _deny_codes = {x.strip() for x in str(os.getenv(
+                "WOLF_AMBUSH_THEME_EXCLUDE_CODES", "600050,600941,601728") or "").split(",") if x.strip()}
+            _deny_kw = [x.strip() for x in str(os.getenv(
+                "WOLF_AMBUSH_THEME_DENY", "运营商,通信服务,公用事业") or "").split(",") if x.strip()]
             for _s in _amb:
                 _c6 = "".join(ch for ch in str(_s) if ch.isdigit())[:6]
                 if not _c6 or _c6 in buy_new:
                     continue
+                if _c6 in _deny_codes:
+                    print("[switch_builder] 埋伏候选剔除 %s：在**主题排除名单**（运营商类 ✓）" % _c6,
+                          flush=True)
+                    continue
+                # ★ 主题关键词排除 ✓（拿到真实主题后判，见下 `_th1` 处）
                 # 主题必须取**判级结果里的真实主题** ✓ —— 不能用"该票第一个概念" ✗：
                 #   实测（T35 二月）`LEG_REJECT … ambush: 主营/主类校验 主类=基础化工
                 #   不属主题[AI/算力/科技]` ✗ ⇒ **391 条埋伏腿被写腿闸拒**（其中 ~105 条是此因 ✓）
@@ -499,6 +517,13 @@ def build_plan():
                     except Exception as _e9:
                         _judged_theme = None
                 if not _judged_theme:
+                    continue
+                # ★ 2026-10-18 ✓：**主题关键词排除** ✓（运营商/通信服务/公用事业 ✗）
+                #   依据 ✓：用户质疑"中国联通/中国移动怎么进 AI 算力" ✓ ——
+                #     它们是公用事业属性 ✓（波动小 ✓），不属于他说的"辨识度最高的老龙头"✗
+                if any(_k and str(_k) in str(_judged_theme) for _k in _deny_kw):
+                    print("[switch_builder] 埋伏候选剔除 %s：主题「%s」命中排除关键词 ✓"
+                          % (_c6, str(_judged_theme)[:18]), flush=True)
                     continue
                 # 2026-09-26 修（用户「都按你说的来」✓）：主题必须**同时是该票自己的主题** ✓
                 #   实测 SZ002028：判级归入[半导体/芯片] ✗，而**执行口**按 `wolf_context.theme_of_symbol`

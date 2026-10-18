@@ -1246,3 +1246,9 @@ export WOLF_FALLING_GATE_EXEMPT_LEGS='wolf_ambush_buy'
 #   lowpos = 位置(120日)≤0.35 且 近20日均成交额优先 ✓
 export WOLF_AMBUSH_PICK='lowpos'
 export WOLF_AMBUSH_LOWPOS_MAX='0.35'
+
+# ★ 2026-10-18 ✓（用户：「中国联通/中国移动怎么放进 AI 科技算力里的？」）
+#   病灶：主题来自 AI 判级自由发挥（概念库对它们返回 None），运营商被归进 AI/算力
+#   修法：① 代码排除三大运营商 ② 主题关键词排除（运营商/通信服务/公用事业）
+export WOLF_AMBUSH_THEME_EXCLUDE_CODES='600050,600941,601728'
+export WOLF_AMBUSH_THEME_DENY='运营商,通信服务,公用事业'
