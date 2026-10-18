@@ -242,7 +242,9 @@ export WOLF_T_PLAN_AGENT='1'
 export WOLF_T_PLAN_REFRESH='1'     # 改价 ✓（单路 + 每票每天≤2 次 + 熔断兜底 ✓）
 export WOLF_T_PLAN_REFRESH_MAX='2'  # 每票每天最多改 2 次 ✓（防拖慢回测 ✗）
 export WOLF_T_PLAN_WORKERS='1'  # 单线程 ✓（LLM 单卡，并发只会互相超时 ✗）
-export WOLF_T_PLAN_TIMEOUT='12'   # 本地 LLM 忙时会超 25 秒 ✗ ⇒ 收到 12 秒 ✓
+# ⚠️ 2026-10-18 更正 ✗：12 秒太短 ✗（长 prompt 实测 5~20 秒 ✓，圣泉那次 3.2s ✓）
+#   而且「我的会话抢模型」这个判断**是错的** ✗（用户指出：我的 dsh ≠ 容器 dsh ✓）
+export WOLF_T_PLAN_TIMEOUT='25'
 export WOLF_T_PLAN_FAIL_MAX='3'   # 当天连续失败 3 次 ⇒ **当天不再调 agent** ✓（走数值带 ✓）
 export WOLF_TP_MIN_PCT='1.0'
 export WOLF_TP_MAX_PCT='3.5'
