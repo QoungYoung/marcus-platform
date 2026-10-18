@@ -5809,6 +5809,20 @@ class TMonitor:
                         except Exception as _estb:
                             _stb, _stbwhy = (False, "")
                             print("[TMonitor] 第二批时点闸异常(放行 ✓): %s" % str(_estb)[:70], flush=True)
+                    # ★ 2026-10-18 ✓（用户选 A）：**埋伏腿豁免「不在下跌中买」** ✗
+                    #   实证 ✓：当前 3 天埋伏拦截 390 条，其中 **222 条（57%）** 是这道闸 ✗
+                    #     （dec1 43 天同一道闸 2,321 条 ✓ ⇒ 一直是埋伏的第一大杀手 ✓）
+                    #   语义冲突 ✓：这道闸要求"不在下跌中买"✗
+                    #     而埋伏买点的定义就是"**在下跌中埋伏低吸**"✓（他：「-3% 以下抄的」✓）
+                    #     ⇒ 该闸本就是给**趋势/突破腿**用的 ✓
+                    #   开关 ✓：`WOLF_AMBUSH_EXEMPT_CONDTIMING`（库内默认 0 = 旧行为 ✓；pins 1 ✓）
+                    _ambush_ex = (str(trigger_kind) == "wolf_ambush_buy" and
+                                  str(os.getenv("WOLF_AMBUSH_EXEMPT_CONDTIMING", "0")).strip().lower()
+                                  in ("1", "true", "yes", "on"))
+                    if _ambush_ex and _cond_tb:
+                        print("[TMonitor] 埋伏腿豁免「不在下跌中买」✓ %s %s" % (symbol, trigger_kind),
+                              flush=True)
+                        _cond_tb = False
                     if _stb:
                         exec_ok = False
                         print("[TMonitor] 第二批时点闸拦截 %s %s: %s"

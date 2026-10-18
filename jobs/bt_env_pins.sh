@@ -254,6 +254,10 @@ export WOLF_T_PLAN_FAIL_MAX='3'
 export WOLF_T_BUYBACK_AI='1'
 export WOLF_T_BUYBACK_AI_MAX='2'   # 每票每天最多问 2 次 ✓（防拖慢 ✗）   # 当天连续失败 3 次 ⇒ **当天不再调 agent** ✓（走数值带 ✓）
 export WOLF_TP_MIN_PCT='1.0'
+# ★ 2026-10-18 ✓（用户选 A）：**埋伏腿豁免「不在下跌中买」** ✗
+#   实证：3 天埋伏拦截 390 条，其中 222 条（57%）是这道闸；dec1 43 天 2,321 条
+#   语义：埋伏买点就是"下跌中低吸"，该闸本是给趋势/突破腿用的
+export WOLF_AMBUSH_EXEMPT_CONDTIMING='1'
 export WOLF_TP_MAX_PCT='3.5'
 # ★ 2026-10-16 ✓（用户选 A）：**机械腿不进 AI**（纯价格带/止盈类 ✓，AI 只决策建仓类）
 #   实测：agent on 时积压 335 条 pending ✗ ⇒ 每条 15~110 秒 ✗ ⇒ 全程十几小时 ✗
