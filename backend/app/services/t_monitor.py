@@ -1684,11 +1684,25 @@ class TMonitor:
                                 import bt_t_plan as _ttp2
                                 _code = "".join(ch for ch in str(sym) if ch.isdigit())[:6]
                                 _bars = []
-                                for _root in _gb.glob(os.path.join(
+                                # ⚠️ 2026-10-18 实证 ✗：盲目遍历 `data/_bt_*` 会撞上
+                                #   `data/_bt_pg/`（PostgreSQL 数据目录 ✗，不可读 ✓）
+                                #   ⇒ `[Errno 13] Permission denied …/_bt_pg/20260109/stock_5min_*.json`
+                                #   修法 ✓：**只认含当天分钟档的目录** ✓，并逐目录吞错 ✓
+                                _roots = []
+                                try:
+                                    _roots = sorted(_gb.glob(os.path.join(
                                         os.path.dirname(os.path.dirname(os.path.dirname(
-                                            os.path.abspath(__file__)))), "..", "data", "_bt_*")):
-                                    _bars = _ttp2.intraday_bars(_root, sym, today,
-                                                                datetime.now().strftime("%H:%M"), 12)
+                                            os.path.abspath(__file__)))), "..", "data", "_bt_*")))
+                                except Exception:
+                                    _roots = []
+                                for _root in _roots:
+                                    try:
+                                        if not os.path.isdir(os.path.join(_root, str(today))):
+                                            continue          # 没有当天目录 ⇒ 跳过 ✓
+                                        _bars = _ttp2.intraday_bars(_root, sym, today,
+                                                                    datetime.now().strftime("%H:%M"), 12)
+                                    except Exception:
+                                        _bars = []
                                     if _bars:
                                         break
                                 _tries[_k] = int(_tries.get(_k) or 0) + 1
