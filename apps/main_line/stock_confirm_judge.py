@@ -626,6 +626,25 @@ def main():
                                 _pp = _pos120(_c)
                                 if _pp is None or _pp > float(os.getenv("WOLF_AMBUSH_LOWPOS_MAX", "0.35") or 0.35):
                                     continue          # 位置不够低 ⇒ 不要 ✓
+                                # ★ 2026-10-18 ✓（用户：「能从**弹性**上去掉这些低弹性票吗」）：
+                                #   语料 ✓：「日均波动 2 个点的品种没兴趣」✓
+                                #          「半导体…**波动大、吃 5-10 个点机会多**」✓
+                                #   ⇒ 用**波动率**当弹性代理 ✓（比写死运营商名单更根本 ✓）：
+                                #     `amp = 近20日**日收益标准差×100**`（≈日均波动幅度 ✓）
+                                #     要求 ≥ `WOLF_AMBUSH_MIN_AMP20`（默认 2.0 ✓；0 = 不筛 ✓）
+                                _amp = None
+                                try:
+                                    _v = [float(x) for x in close[_c].dropna().values[-21:]]
+                                    if len(_v) >= 11:
+                                        _rets = [(_v[i] / _v[i - 1] - 1) * 100 for i in range(1, len(_v)) if _v[i - 1] > 0]
+                                        if _rets:
+                                            _mu = sum(_rets) / len(_rets)
+                                            _amp = (sum((r - _mu) ** 2 for r in _rets) / len(_rets)) ** 0.5
+                                except Exception:
+                                    _amp = None
+                                _minamp = float(os.getenv("WOLF_AMBUSH_MIN_AMP20", "2.0") or 0)
+                                if _minamp > 0 and (_amp is None or _amp < _minamp):
+                                    continue      # 弹性不足 ⇒ 不进埋伏候选 ✓
                                 _cand2.append(_c)
                             _pb = sorted(_cand2, key=lambda c: (-_prom(c), _pos120(c) or 1.0))[:_K]
                             print("[stock_confirm] 埋伏候选(lowpos)：低位池 %d 只 ⇒ 取 %d 只（辨识度优先）"

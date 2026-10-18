@@ -1252,3 +1252,8 @@ export WOLF_AMBUSH_LOWPOS_MAX='0.35'
 #   修法：① 代码排除三大运营商 ② 主题关键词排除（运营商/通信服务/公用事业）
 export WOLF_AMBUSH_THEME_EXCLUDE_CODES='600050,600941,601728'
 export WOLF_AMBUSH_THEME_DENY='运营商,通信服务,公用事业'
+
+# ★ 2026-10-18 ✓（用户：「能从弹性上去掉这些低弹性票吗」）
+#   语料：「日均波动 2 个点的品种没兴趣」⇒ 埋伏候选要求弹性 ✓
+#   弹性 = 近20日**日收益标准差×100**（≈日均波动幅度 ✓）；0 = 不筛
+export WOLF_AMBUSH_MIN_AMP20='2.0'
