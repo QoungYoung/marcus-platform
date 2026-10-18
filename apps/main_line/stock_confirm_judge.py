@@ -634,6 +634,15 @@ def main():
                         #   （用户：「能从弹性上去掉这些低弹性票吗」✓；语料「日均波动 2 个点没兴趣」✓）
                         _rest = [c for c in _ordered[max(0, MAX_STOCKS - _K):]
                                  if (_pick0 == "lowpos" or pullback_ratio_ok(c, close)) and _elastic(c)]
+                        # ★ 2026-10-18 ✓（诊断 ✗：一直「0/0 只」⇒ 池子本身为空 ✓）
+                        try:
+                            _all_rest = _ordered[max(0, MAX_STOCKS - _K):]
+                            print("[stock_confirm] 池诊断 ✓ len(_ordered)=%d MAX_STOCKS=%d _K=%d "
+                                  "切片后=%d ｜ 通过弹性=%d"
+                                  % (len(_ordered), MAX_STOCKS, _K, len(_all_rest), len(_rest)),
+                                  file=sys.stderr)
+                        except Exception:
+                            pass
                         if _minamp > 0:
                             _n_all = len(_ordered[max(0, MAX_STOCKS - _K):])
                             print("[stock_confirm] 弹性筛 ✓ max(amp20≥%.1f, amp120≥%.1f) ⇒ %d/%d 只"
