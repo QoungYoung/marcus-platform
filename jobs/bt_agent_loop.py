@@ -285,6 +285,12 @@ class BtAgentLoop:
             tid = int(trig.get("id") or 0)
             sym = str(trig.get("symbol") or "")
             snap = trig.get("snapshot") or {}
+            # ⚠️ `side` 必须**先算** ✓（我上一版把"重复卖出闸"插在 `side` 赋值之前 ✗
+            #   ⇒ `NameError: side` ⇒ 被 except 吞掉 ⇒ 闸等于没生效 ✗ 实测双卖仍在 ✓）
+            try:
+                side = _tdb_m.trigger_side(trig)
+            except Exception:
+                side = "sell" if str(trig.get("event_type") or "").endswith("sell") else "buy"
             vol = int(float(snap.get("volume") or 0)) if isinstance(snap, dict) else 0
             # ★ 2026-10-18 ✓（用户实证：2026-01-08 SZ002602 **同一秒** 卖出两笔 ✗）：
             #   `09:35:00 卖 1300 @18.63 [G2 0.618止盈]` **+** `09:35:00 卖 300 @18.63 机械腿｜T仓轮动`
@@ -316,7 +322,6 @@ class BtAgentLoop:
                 except Exception as _ex:
                     print("[bt-agent] 重复卖出检查异常(放行): %s" % str(_ex)[:70], flush=True)
             px = float(trig.get("quote_price") or trig.get("trigger_price") or 0)
-            side = _tdb_m.trigger_side(trig)
             if px <= 0 or vol <= 0:
                 _tdb_m.update_trigger_status(tid, "await_retry",
                                            reason="机械腿自动执行缺量/缺价（snapshot.volume 未给）")
