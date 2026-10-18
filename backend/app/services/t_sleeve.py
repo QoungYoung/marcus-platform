@@ -174,8 +174,19 @@ def decide(price: float, position: int, state: Dict[str, Any], day: str,
 
 # ── 状态读写 ✓（账户级一份 JSON，落在运行根 ✓）──────────────────────
 def _state_path() -> str:
-    root = os.path.dirname(os.environ.get("DATA_DIR", "/app/data")) or "/app/data"
-    return os.path.join(root, "t_sleeve_state.json")
+    """状态文件路径 ✓
+
+    ★ 2026-10-18 修 ✗（用户实证：01-07/08/09 **连卖三天、一次没买回**）
+      原实现回落到 `/app/data` ✗，而臂里 **`DATA_DIR` 根本没设** ✓（实测 environ 无此项 ✓）
+      ⇒ 写状态**静默失败** ✗ ⇒ 每天都是"没卖过"⇒ **每天重卖一次** ✗ 且回补永不触发 ✗
+    修法 ✓：`WOLF_T_SLEEVE_STATE` 优先 ✓，否则 `<仓库>/data/t_sleeve_state.json` ✓
+    """
+    p = str(os.getenv("WOLF_T_SLEEVE_STATE", "") or "").strip()
+    if p:
+        return p
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(here)))
+    return os.path.join(repo, "data", "t_sleeve_state.json")
 
 
 def load_state(account: str, symbol: str, day: str) -> Dict[str, Any]:
@@ -194,13 +205,16 @@ def save_state(account: str, symbol: str, st: Dict[str, Any]) -> None:
     try:
         p = _state_path()
         try:
+            os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+        except Exception:
+            pass
+        try:
             with open(p, encoding="utf-8") as f:
                 allst = json.load(f) or {}
         except Exception:
             allst = {}
         allst.setdefault(account, {})[symbol] = dict(st or {})
-        os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             json.dump(allst, f, ensure_ascii=False)
-    except Exception:
-        pass
+    except Exception as _e:
+        print("[t_sleeve] 状态写入失败 ✗（路径 %s）：%s" % (_state_path(), str(_e)[:60]), flush=True)
