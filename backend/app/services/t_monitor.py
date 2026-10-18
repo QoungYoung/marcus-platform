@@ -1625,6 +1625,25 @@ class TMonitor:
                                             _b = _ttp.agent_refine(_f, _b)
                                         # ★ 语料 ✓：「把减掉的标**在均线附近补回**」
                                         #   ⇒ 缓存里带上 MA5 ✓，取"更容易成交"的那个作 T 入价 ✓
+                                        # ★ 2026-10-18 ✓（语料 13:45：「**主升浪中明确说"不做T"**」）：
+                                        #   他**不是"只在两个时段做T"**✗ —— 语料按小时分布：
+                                        #     10 点 23 条 ✓ / **11 点 12 条** ✗ / **13 点 8 条** ✗ / 14 点 13 条 ✓
+                                        #     ⇒ 全天都在做 ✓
+                                        #   真正的"不做"条件 = **主升浪**：强单边上涨时做 T 会丢筹码 ✓
+                                        #   判据 ✓：`昨收 > MA20×1.03` 且 `MA5 > MA10 > MA20`（多头排列 ✓）
+                                        #   开关 `WOLF_T_SKIP_UPTREND`（默认 0 ✓；pins 1 ✓）
+                                        if str(os.getenv("WOLF_T_SKIP_UPTREND", "0")).strip().lower() \
+                                                in ("1", "true", "yes", "on"):
+                                            _pcU = float(_f.get("prev_close") or 0)
+                                            _m5 = float(_f.get("ma5") or 0)
+                                            _m10 = float(_f.get("ma10") or 0)
+                                            _m20 = float(_f.get("ma20") or 0)
+                                            if _m20 > 0 and _pcU > _m20 * 1.03 and _m5 > _m10 > _m20:
+                                                print("[TSleeve跳过] %-10s **主升浪**（昨收%.2f > MA20 %.2f×1.03，"
+                                                      "MA5>MA10>MA20）⇒ 不做T ✓（语料「主升浪不做T」）"
+                                                      % (sym, _pcU, _m20), flush=True)
+                                                _cache[str(sym).upper()] = None
+                                                continue
                                         _ma5 = float(_f.get("ma5") or 0)
                                         _buy_eff = float(_b["buy"])
                                         if 0 < _ma5 < float(_b["sell"]):
