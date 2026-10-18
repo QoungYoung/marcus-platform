@@ -286,6 +286,36 @@ class BtAgentLoop:
             sym = str(trig.get("symbol") or "")
             snap = trig.get("snapshot") or {}
             vol = int(float(snap.get("volume") or 0)) if isinstance(snap, dict) else 0
+            # ★ 2026-10-18 ✓（用户实证：2026-01-08 SZ002602 **同一秒** 卖出两笔 ✗）：
+            #   `09:35:00 卖 1300 @18.63 [G2 0.618止盈]` **+** `09:35:00 卖 300 @18.63 机械腿｜T仓轮动`
+            #   根因 ✗：状态是按"**已成交**卖出"反推的 ✓ 而那一刻两笔都还没成交 ✗ ⇒ 互不可见 ✓
+            #   修法 ✓：**下单这一刻再查一次**"当天是否已有卖出"（任何理由 ✓）
+            #     ⇒ 已有 ⇒ 这一笔 T 仓卖出**直接取消** ✓（"当天有止盈也算 T 仓"✓）
+            _kind_m = str(trig.get("event_type") or "")
+            if _kind_m == "wolf_t_sleeve_sell" and side == "sell":
+                try:
+                    _sold_today = 0
+                    from sqlalchemy import text as _tX
+                    from app.database import SessionLocal as _SLX
+                    with _SLX() as _dbX:
+                        _rX = _dbX.execute(_tX(
+                            "SELECT COALESCE(SUM(volume),0) FROM paper_trades "
+                            "WHERE account_id=:a AND UPPER(symbol)=UPPER(:s) AND trade_date=:d "
+                            "AND direction LIKE '卖%' AND COALESCE(voided,0)=0"),
+                            {"a": str(trig.get("account_id") or "drabq1"), "s": sym,
+                             "d": __import__("datetime").datetime.now().strftime("%Y-%m-%d")}).fetchone()
+                        _sold_today = int((_rX[0] if _rX else 0) or 0)
+                    if _sold_today > 0:
+                        _tdb_m.update_trigger_status(tid, "cancelled",
+                            reason="当天已有卖出 %d 股（含止盈 ✓）⇒ 视为本轮 T 出已完成 ⇒ T 仓不再重复卖 ✓"
+                                   % _sold_today)
+                        print("[bt-agent] %s 当天已卖 %d 股 ⇒ **取消 T 仓重复卖出** ✓"
+                              % (sym, _sold_today), flush=True)
+                        return {"status": "cancelled", "trigger_id": tid,
+                                "reason": "当天已有卖出（止盈算 T 出 ✓）"}
+                except Exception as _ex:
+                    print("[bt-agent] 重复卖出检查异常(放行): %s" % str(_ex)[:70], flush=True)
+            vol = int(float(snap.get("volume") or 0)) if isinstance(snap, dict) else 0
             px = float(trig.get("quote_price") or trig.get("trigger_price") or 0)
             side = _tdb_m.trigger_side(trig)
             if px <= 0 or vol <= 0:
