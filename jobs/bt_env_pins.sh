@@ -236,8 +236,10 @@ export WOLF_T_PLAN='1'
 #   bt_local_pro / bt_agent_loop / bt_t_plan **同一秒集体超时** ✗
 #   ⇒ T 定价先走**数值带**（秒级 ✓，圣泉 0227 已验证 ✓）；
 #     agent 定价保留开关 ✓，等 LLM 不被挤占时再打开 ✓（或单线程化）
-export WOLF_T_PLAN_AGENT='0'
-export WOLF_T_PLAN_REFRESH='0'     # 改价也需 LLM ⇒ 先关 ✓（数值带足够 ✓）
+# ★ 2026-10-18 07:55 ✓（用户选 B）：实测单发 4.7s、4 并发 6.7s ✓（瓶颈是单卡+长prompt，
+#   不是并发数 ✗）⇒ **重新打开 agent 定价** ✓，但限**单路** + 熔断 3 次 ✓
+export WOLF_T_PLAN_AGENT='1'
+export WOLF_T_PLAN_REFRESH='1'     # 改价 ✓（单路 + 每票每天≤2 次 + 熔断兜底 ✓）
 export WOLF_T_PLAN_REFRESH_MAX='2'  # 每票每天最多改 2 次 ✓（防拖慢回测 ✗）
 export WOLF_T_PLAN_WORKERS='1'  # 单线程 ✓（LLM 单卡，并发只会互相超时 ✗）
 export WOLF_T_PLAN_TIMEOUT='12'   # 本地 LLM 忙时会超 25 秒 ✗ ⇒ 收到 12 秒 ✓
