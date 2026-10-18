@@ -1465,11 +1465,18 @@ class TMonitor:
                 from app.database import SessionLocal as _SLS0
                 with _SLS0() as _dbS0:
                     _r0 = _dbS0.execute(_tS0(
-                        "SELECT UPPER(symbol), direction, price FROM paper_trades "
-                        "WHERE account_id=:a AND trade_date=:d AND COALESCE(reason,'') LIKE :r ORDER BY id"),
-                        {"a": acct, "d": today, "r": "%T仓轮动%"}).fetchall()
-                for _sy0, _dir0, _px0 in _r0 or []:
-                    _ts_map.setdefault(str(_sy0).upper(), []).append((_dir0, _px0))
+                        # ★ 2026-10-18 ✓（用户：「这个止盈和T出重复了，**如果当天有止盈也算T仓**」）：
+                        #   实证 ✗（同一票 2026-01-08）：
+                        #     `卖 1,300 @18.63  [G2 0.618止盈]` **+** `卖 300 @18.63  机械腿自动执行｜T仓轮动`
+                        #     ⇒ **同价重复卖出** ✗
+                        #   修法 ✓：当天**任何卖出**（止盈/兑现/高抛/减仓 ✓）都算**这一轮的 T 出** ✓
+                        #     ⇒ T 仓轮动**不再额外卖** ✓；回补以这些卖出的价格为锚 ✓，
+                        #       回补量 ≤ 当天已卖量（且 ≤ T 仓）✓
+                        "SELECT UPPER(symbol), direction, price, volume FROM paper_trades "
+                        "WHERE account_id=:a AND trade_date=:d ORDER BY id"),
+                        {"a": acct, "d": today}).fetchall()
+                for _sy0, _dir0, _px0, _v0 in _r0 or []:
+                    _ts_map.setdefault(str(_sy0).upper(), []).append((_dir0, _px0, _v0))
                 # ★ 2026-10-18 ✓（夜里自查）：**每票每天最多 2 次尝试** ✓
                 #   病灶 ✗：腿被拦时状态不变 ⇒ 每 30 分钟重试 ⇒ 一天最多 13 次 ✗
                 #     ⇒ 触发噪音大、还会撞"同轮累计已达持仓一半"上限 ✗（实测 blocked 26 ✗）
@@ -1514,16 +1521,19 @@ class TMonitor:
                     st.setdefault("sold", False)
                     st.setdefault("bought", False)
                     try:
-                        for _dirS, _pxS in (_ts_map.get(str(sym).upper()) or []):
+                        _sold_q = 0
+                        for _dirS, _pxS, _vS in (_ts_map.get(str(sym).upper()) or []):
                             if str(_dirS).startswith("卖"):
                                 st["sold"] = True
                                 st["last_sell_px"] = float(_pxS or 0)
                                 st["sold_day"] = today
                                 st["bought"] = False
+                                _sold_q += int(float(_vS or 0))
                             elif str(_dirS).startswith("买") and st.get("sold"):
                                 st["bought"] = True
                                 st["done"] = True
                                 st["last_buy_px"] = float(_pxS or 0)
+                        st["sold_qty"] = _sold_q     # ✓ 当天已卖量（含止盈 ✓）
                     except Exception:
                         pass
                     try:
@@ -1609,6 +1619,10 @@ class TMonitor:
                     if act == "hold":
                         continue
                     sn = _ts.sleeve_shares(pos)
+                    if act == "buy":       # ✓ 回补量不超过"当天已卖量"（含止盈 ✓）
+                        _sq = int(st.get("sold_qty") or 0)
+                        if _sq > 0:
+                            sn = min(sn, (_sq // 100) * 100)
                     if sn < 100:
                         continue
                     kind = "wolf_t_sleeve_sell" if act == "sell" else "wolf_t_sleeve_buy"
