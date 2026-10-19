@@ -495,8 +495,12 @@ description: Marcus 交易系统复盘（reflect）模式的 16 个只读数据�
 `/market/moneyflow/SH600519`）⇒ 3 次无效调用、白耗时间，且与任务（分析实际持仓）无关 ✗。
 
 执行纪律（违反即浪费）：
-1. **每次调用都必须把 symbol 换成真实标的**：当前持仓（先查 `/api/v1/indicator/calc-position` 或持仓表）
+1. **每次调用都必须把 symbol 换成真实标的**：当前持仓（**先 `GET /api/v1/portfolio/positions`** ✓ 含 `floating_pnl_pct`）
    或指数（如 `SH000001`、`SZ399006`）✓；
+1b. **方法必须对** ✗（2026-10-19 事故：agent 对 `calc_position` 发 **GET** ⇒ 405 两次 ✗，还被记成「数据缺」✗）：
+   `calc_position` / `get_trade_advice` / `check_entry_filters` / `get_fibonacci_levels` **只支持 POST** ✓（body 带 symbol ✓）；
+   `pro-bar` / `technical` / `moneyflow` / `realtime` / `daily-channel` / `scan/*` / `db/*` / `portfolio/*` 是 **GET** ✓；
+   **405 = 方法发错了**（不是数据不存在 ✗）⇒ 改 POST 重试 ✓，不要写进「数据缺口」✗。
 2. **禁止直接复制本文件示例中的 URL/参数** ✗（示例只用于说明返回结构 ✓）；
 3. 调用后若发现 symbol 既不是持仓也不是指数 ⇒ 判定为无效调用，在报告里记「浪费调用」并说明 ✓。
 

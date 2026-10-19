@@ -99,6 +99,45 @@ def build_facts(today):
     return facts
 
 
+SECTORS = [('半导体', 'sh512480'), ('红利', 'sh510880'), ('券商', 'sh512000'), ('银行', 'sh512800'),
+           ('地产', 'sh512200'), ('军工', 'sh512660'), ('医药', 'sh512010'), ('有色', 'sh512400')]
+
+
+def _fetch_kline(code, n=120):
+    u = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,day,,,%d,qfq' % (code, n)
+    req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://gu.qq.com/'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        j = json.loads(r.read().decode('utf-8', 'ignore'))
+    d = (j.get('data') or {}).get(code) or {}
+    return d.get('qfqday') or d.get('day') or []
+
+
+def sector_panel():
+    '''板块相对强弱（本地算 ✓ 替代 /scan/latest 里不存在的 sector_rotation ✗）'''
+    try:
+        import wave_ladder as W
+        cn = {r[0]: r[1] for r in W.load_rows()}
+        cnd = sorted(cn)
+        cn5 = cn[cnd[-1]] / cn[cnd[-6]] - 1 if len(cnd) > 6 else None
+        cn20 = cn[cnd[-1]] / cn[cnd[-21]] - 1 if len(cnd) > 21 else None
+    except Exception:
+        cn, cn5, cn20 = {}, None, None
+    out = {'note': '本地计算 ✓（腾讯日线）；sector_rotation 不在 /scan/latest 里 ✗ ⇒ 此为替代口径 ✓',
+           'base_index': {'5d': cn5, '20d': cn20}, 'sectors': []}
+    for name, code in SECTORS:
+        try:
+            kl = _fetch_kline(code)
+            cl = [float(x[2]) for x in kl]
+            r5 = cl[-1] / cl[-6] - 1 if len(cl) > 6 else None
+            r20 = cl[-1] / cl[-21] - 1 if len(cl) > 21 else None
+            out['sectors'].append({'name': name, 'code': code, 'last': cl[-1], 'date': kl[-1][0], 'r5': r5, 'r20': r20,
+                                   'ex5': (r5 - cn5) if (r5 is not None and cn5 is not None) else None,
+                                   'ex20': (r20 - cn20) if (r20 is not None and cn20 is not None) else None})
+        except Exception as e:
+            out['sectors'].append({'name': name, 'code': code, 'error': str(e)[:50]})
+    return out
+
+
 def build_state():
     st = {}
     try:
@@ -111,6 +150,7 @@ def build_state():
     #   （此前 agent 把「定投/DCA」快照的浮亏 12.5% 张冠李戴到 SH600299 ✗ —— 用户当场纠正 ✓；
     #    真实为 500 股 / 成本 7.693 / 现价 8.10 / **浮盈 +5.29%** ✓）
     st['positions_truth'] = panel('/portfolio/positions')
+    st['sectors'] = sector_panel()
     st["positions_note"] = "持仓与盈亏只用 positions_truth ✓；不要再调 /indicator/calc-position ✗（仅支持 POST，GET 会 405 ⇒ 2026-10-19 实测被记成取数失败 ✗）"
     TIER_INVEST = {'build': 0.75, 't_only': 0.50, 'side': 0.50, 'defense': 0.30, 'exit': 0.50}
     op = (st.get('wave_state') or {}).get('operation') or ''
