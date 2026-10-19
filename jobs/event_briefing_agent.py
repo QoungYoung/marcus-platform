@@ -107,6 +107,10 @@ def build_state():
     except Exception:
         st['wave_state'] = None
     st['position'] = panel('/indicator/calc-position')
+    # ★ 2026-10-19 修正：个股浮盈/浮亏**唯一权威来源**是用这个接口 ✓
+    #   （此前 agent 把「定投/DCA」快照的浮亏 12.5% 张冠李戴到 SH600299 ✗ —— 用户当场纠正 ✓；
+    #    真实为 500 股 / 成本 7.693 / 现价 8.10 / **浮盈 +5.29%** ✓）
+    st['positions_truth'] = panel('/portfolio/positions')
     st['scan'] = panel('/scan/latest')
     st['index_tech'] = panel('/market/technical/SH000001?limit=5')
     return st
@@ -125,10 +129,15 @@ def fallback_text(facts, st):
         lines += ['', '📌 事件关联：%s' % (imp.get('what') or ''),
                   '· 传导：' + '；'.join(imp.get('transmit') or []),
                   '· 关联板块：' + json.dumps(imp.get('sectors_typical') or {}, ensure_ascii=False)]
+    pos = st.get('positions_truth') or []
+    pos_line = '；'.join('%s %s %s股 成本%.3f 现价%.2f 浮盈%+.2f%%' % (
+        p.get('symbol'), p.get('name'), p.get('volume'), float(p.get('avg_price') or 0), float(p.get('current_price') or 0),
+        float(p.get('floating_pnl_pct') or 0)) for p in pos if isinstance(p, dict)) if isinstance(pos, list) else ''
     lines += ['', '⚡ 当前状态：浪型 %s/%s/%s%s' % (ws.get('level'), ws.get('sub_level'), ws.get('operation'),
                                               ('（mode=%s）' % ws.get('mode')) if ws.get('mode') else ''),
               '· 仓位上限（档位 invest 30%% ÷ β）：%s' % caps,
               '· β 标尺来源：%s' % BETA_SRC,
+              '· 持仓（/portfolio/positions 权威 ✓）：%s' % (pos_line or '缺'),
               '', '💡 建议：事件窗口内不新开高 β、推迟加仓；解除须链回到 rung≤1 且沪指站回 MA20；存量按个股纪律，卖出侧不受浪型闸门限制 ✓',
               '', '⚠️ 只读分析，非交易指令；agent（DSH）本次不可用，以上为确定性事实版 ✓']
     return '\n'.join(lines)
@@ -146,6 +155,9 @@ def agent_text(facts, st):
         '💡 建议：1~3 条**具体**动作，必须带数字或条件（仓位上限按 β 折算：科创50 ÷1.69、半导体 ÷1.62、创业板 ÷1.72，基准取档位 invest）✓',
         '',
         '硬纪律：① **禁止预测涨跌方向**（只写状态/约束/上限/解除条件）✗；② **禁止编造数字**，每个数字必须来自下面 JSON ✓；',
+        '⑤ **盈亏口径（2026-10-19 用户纠错）**：个股「浮盈/浮亏」**只能**用 STATE.positions_truth 里的 floating_pnl_pct ✓，',
+        '   并写出标的名 ✓；**禁止**引用「定投/DCA/黄金坑」类快照的盈亏数字 ✗（已停用且滞后，例如 as_of=09-15 的浮亏 12.5% 属于定投计划、',
+        '   不是 SH600299 的持仓 ✓）；任何数据滞后 >5 个交易日 ⇒ 只能标「滞后·不用于结论」✗；',
         '③ 缺失数据就写「缺」✗ 不许猜；④ 结尾一句「⚠️ 只读分析，非交易指令；执行由既有 gate/仓位纪律决定」✓。',
         '',
         '=== FACTS（事件/交易日/知识库）===',
@@ -155,8 +167,19 @@ def agent_text(facts, st):
         json.dumps(st, ensure_ascii=False)[:3000],
     ]
     payload = {'message': '\n'.join(prompt), 'session_id': 'eventbrief_%s' % facts['date']}
-    out = http_json(chat_url(), payload, timeout=240)
-    return str((out or {}).get('reply') or '').strip()
+    # 2026-10-19 实测：本地 DSH 偶发 240s 超时 ✗ ⇒ 加时到 300s + 重试 1 次 ✓（仍失败就兜底 ✓ 绝不静默 ✗）
+    last = None
+    for attempt in (1, 2):
+        try:
+            out = http_json(chat_url(), payload, timeout=300)
+            txt = str((out or {}).get('reply') or '').strip()
+            if txt:
+                return txt
+            last = RuntimeError('empty reply')
+        except Exception as e:
+            last = e
+            print('[brief] agent 第 %d 次失败: %s' % (attempt, str(e)[:90]))
+    raise last
 
 
 def push_qq(text):
