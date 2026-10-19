@@ -1351,7 +1351,8 @@ tasks:
     分工刻意分开：**分析**在 DSH agent（它会调 marcus-panel-tools 的只读数据工具 + 读持仓 ✓）；
     **投递**在平台侧（DSH 没有推送端点 ✗）。无当日晨报 ⇒ 直接退出 0（fail-open ✓ 节假日/agent未跑都走这条 ✓）；
     data/_macro_briefing_pushed.json 去重 ⇒ 同日重复跑不会重复推 ✓。
-  enabled: true
+  # ⛔ 2026-10-19 停用：已由下面的 event_briefing_agent（08:05，直接调 DSH agent 并推送）取代 ✓ 避免双推
+  enabled: false
   schedule:
     type: cron
     expr: '35 8 * * mon-fri'
@@ -1365,6 +1366,35 @@ tasks:
   notifications:
     on_success: false
     on_failure: false
+
+- id: event_briefing_agent
+  name: 宏观事件晨报/提醒（生产定时 → DSH agent 分析 → 推 QQ）
+  description: |
+    每交易日 **08:05** 由生产调度器触发（**不靠 DSH 自己的调度** ✗ —— 2026-10-19 用户要求搬进 Marcus ✓）：
+      · 交易日闸：relay trade_cal ✓（非交易日退出、不写文件 ✓）
+      · facts：data/macro_calendar.json（下一 tier>=3 事件 + T-N 交易日）+ config/macro_event_impact.yaml（事件关联知识库）
+      · 实时：panel 接口（/indicator/calc-position 持仓 · /scan/latest 风险闸 · /market/technical 指数）
+      · 分析：POST {CHAT_URL} → **DSH agent**（先例 jobs/wolf_selection_reasons.py:123；URL 取 EVENT_BRIEFING_CHAT_URL→MAIN_LINE_CHAT_URL→PI_SERVER_URL）
+      · 输出：data/macro_briefing_<date>.md + 推 QQ（按日期去重）；T-5/T-3/T-1 自动加「⚠️ 事件临近」标题
+      · 兜底：DSH 不可用 ⇒ 推**确定性事实版**（数据照全 + 注明 agent 不可用），绝不静默丢提醒 ✗
+    纪律：只读、不做方向预测 ✗、不编数字 ✗（缺就写缺）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '5 8 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/event_briefing_agent.py
+    args: []
+  output:
+    log_file: logs/event_briefing_agent_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
     pi_analysis: false
     channels:
     - qqbot
