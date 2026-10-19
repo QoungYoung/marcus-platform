@@ -106,11 +106,15 @@ def build_state():
         st['wave_state'] = {k: ws.get(k) for k in ('date', 'level', 'sub_level', 'operation', 'mode')}
     except Exception:
         st['wave_state'] = None
-    st['position'] = panel('/indicator/calc-position')
+    # （不再调用 /indicator/calc-position ✗：仅支持 POST、GET 必 405 ⇒ 2026-10-19 已连续两次触发无意义错误 ✓）
     # ★ 2026-10-19 修正：个股浮盈/浮亏**唯一权威来源**是用这个接口 ✓
     #   （此前 agent 把「定投/DCA」快照的浮亏 12.5% 张冠李戴到 SH600299 ✗ —— 用户当场纠正 ✓；
     #    真实为 500 股 / 成本 7.693 / 现价 8.10 / **浮盈 +5.29%** ✓）
     st['positions_truth'] = panel('/portfolio/positions')
+    st["positions_note"] = "持仓与盈亏只用 positions_truth ✓；不要再调 /indicator/calc-position ✗（仅支持 POST，GET 会 405 ⇒ 2026-10-19 实测被记成取数失败 ✗）"
+    TIER_INVEST = {'build': 0.75, 't_only': 0.50, 'side': 0.50, 'defense': 0.30, 'exit': 0.50}
+    op = (st.get('wave_state') or {}).get('operation') or ''
+    st["tier_invest"] = {"operation": op, "invest": TIER_INVEST.get(op), "source": "config/wolf_discipline.json op→tier 口径 build75/t_only50/side50/defense30/exit50"}
     st['scan'] = panel('/scan/latest')
     st['index_tech'] = panel('/market/technical/SH000001?limit=5')
     return st
@@ -159,6 +163,17 @@ def agent_text(facts, st):
         '   并写出标的名 ✓；**禁止**引用「定投/DCA/黄金坑」类快照的盈亏数字 ✗（已停用且滞后，例如 as_of=09-15 的浮亏 12.5% 属于定投计划、',
         '   不是 SH600299 的持仓 ✓）；任何数据滞后 >5 个交易日 ⇒ 只能标「滞后·不用于结论」✗；',
         '③ 缺失数据就写「缺」✗ 不许猜；④ 结尾一句「⚠️ 只读分析，非交易指令；执行由既有 gate/仓位纪律决定」✓。',
+        '',
+        '## 格式（硬要求；2026-10-19 用户反馈「太乱」✗）',
+        "- **必须 Markdown**：段落用 `### ` 小标题，事件表与仓位上限用**表格**（`| a | b |`）✓；",
+        "- **禁止**通篇裸列表或长句堆叠 ✗；每个小标题下 ≤4 行 ✓；重点用 **加粗** ✓；",
+        "- 固定六段：`### 概览` `### 事件时点` `### 未来 7 天` `### 事件关联` `### 当前状态与影响` `### 建议与观察` ✓；",
+        "- 数据缺口只放在最后 `### 数据缺口`，一条一行，别混进结论 ✗ ✓；",
+        "- 最后一行固定：`> ⚠️ 只读分析，非交易指令；执行由既有 gate/仓位纪律决定` ✓",
+        '',
+        '## 数据使用（避免 2026-10-19 两类错）',
+        "- 持仓/盈亏：**只用 STATE.positions_truth** ✓（见 positions_note，别再调持仓接口 ✗）；",
+        "- 仓位上限基准取 STATE.tier_invest.invest ✓；若为 null 才退回 scan.position_limit ✓ 并注明 ✓；",
         '',
         '=== FACTS（事件/交易日/知识库）===',
         json.dumps(facts, ensure_ascii=False)[:3500],
@@ -225,8 +240,13 @@ def main():
         print('[brief] agent 返回 %d 字 ✓' % len(txt))
     except Exception as e:
         print('[brief] agent 调用失败 ⇒ 兜底事实版: %s' % str(e)[:120])
-    if not txt or len(txt) < 80:
+    used_agent = bool(txt and len(txt) >= 80)
+    if not used_agent:
         txt = fallback_text(facts, st)
+    # 签名行（2026-10-19 用户问「确定走 AI 了吗」⇒ 以后一眼可辨 ✓）
+    txt = txt.rstrip() + "\n\n> 生成方式：%s ｜ %s" % (
+        ("DSH agent 分析 ✓（%d 字）" % len(txt)) if used_agent else "确定性事实版 ✗（DSH 不可用）",
+        time.strftime("%Y-%m-%d %H:%M"))
     if is_alert:
         txt = txt.replace('【宏观事件晨报', '【⚠️ 事件临近 T-%d 提醒 · %s】\n【宏观事件晨报' % (off, today), 1)
     if a.dry:
