@@ -197,15 +197,46 @@ def agent_text(facts, st):
     raise last
 
 
+CHUNK = 1150   # 单条上限（QQ 实测 ~1500 会被截断 ✗ ⇒ 取 1150 留余量 ✓）
+
+
+def split_parts(text, limit=CHUNK, max_parts=4):
+    """按行切分成长度 <=limit 的消息段 ✓（不切断行 ✗），最后一段不足时并入前段 ✓。"""
+    lines = text.split('\n')
+    parts, cur = [], ''
+    for ln in lines:
+        cand = (cur + '\n' + ln) if cur else ln
+        if len(cand) > limit and cur:
+            parts.append(cur)
+            cur = ln
+        else:
+            cur = cand
+    if cur:
+        parts.append(cur)
+    if len(parts) > max_parts:
+        parts = parts[:max_parts]
+        parts[-1] = parts[-1][:limit - 40] + '\n…（超长，已截断 ✗）'
+    if len(parts) > 1:
+        parts = ['（%d/%d）%s' % (i + 1, len(parts), p) for i, p in enumerate(parts)]
+    return parts
+
+
 def push_qq(text):
+    """分段推送 ✓（2026-10-19 用户反馈「被截断」✗：原来 text[:1500] 硬切 ✗，正文 1635 字 ⇒ 尾部丢失 ✓）"""
     try:
         from core.qq_notifier import send_c2c_message
         openid = (os.environ.get('QQ_BOT_RECIPIENT') or '').strip()
         if not openid:
             print('[brief] 推送跳过：未配置 QQ_BOT_RECIPIENT')
             return False
-        ok = bool(send_c2c_message(openid, text[:1500]))
-        print('[brief] 推送%s' % ('成功 ✓' if ok else '失败 ✗'))
+        parts = split_parts(text)
+        print('[brief] 分 %d 段推送（各 %s 字）' % (len(parts), '/'.join(str(len(p)) for p in parts)))
+        ok = True
+        for i, p in enumerate(parts, 1):
+            sent = bool(send_c2c_message(openid, p))
+            print('[brief] 第 %d/%d 段%s' % (i, len(parts), '成功 ✓' if sent else '失败 ✗'))
+            ok = ok and sent
+        print('[brief] 推送%s' % ('成功 ✓' if ok else '部分失败 ✗'))
         return ok
     except Exception as e:
         print('[brief] 推送异常: %s' % str(e)[:120])
