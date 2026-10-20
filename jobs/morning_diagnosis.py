@@ -136,6 +136,27 @@ def _read_wolf_context() -> str:
     return "🐺 狼大视角（信号层）" + NL + NL.join(parts)
 
 
+def _wave_where(wv) -> str:
+    """浪型 → 一行定位（2026-10-20）：**family/sub_level 优先** ✓。
+    旧写法打 `level·sub_level` ✗ —— 4-5 失败会被显示成「d5·失败5」✗（误读成大5浪衰竭）。
+    并补 mode（自救）与 session_date（判定 → 服务哪个交易日）✓。"""
+    fam = str(wv.get("family") or "").strip()
+    sub = str(wv.get("sub_level") or "").strip()
+    lvl = str(wv.get("level") or "未知").strip()
+    core = (fam + "·" + sub) if (fam and sub) else (lvl + ("·" + sub if sub else ""))
+    op = str(wv.get("operation") or "").strip()
+    mode = str(wv.get("mode") or "").strip()
+    d = str(wv.get("date") or "").replace("-", "")[:8]          # ★ 文件里可能是 "2026-10-19" ✓ 必须先剥横杠 ✗
+    sd = str(wv.get("session_date") or "").replace("-", "")[:8]
+    if d and sd:
+        tail = "｜判定 %s-%s → 服务 %s-%s" % (d[4:6], d[6:8], sd[4:6], sd[6:8])
+    elif d:
+        tail = "｜判定 %s-%s" % (d[4:6], d[6:8])
+    else:
+        tail = ""
+    return core + (("｜" + op) if op else "") + (("（%s）" % mode) if mode else "") + tail
+
+
 def _wolf_operation_advice() -> str:
     """浪型 operation -> 操作纪律（狼大优先）；缺 wave_state 返回空"""
     import os as _os
@@ -144,9 +165,7 @@ def _wolf_operation_advice() -> str:
             wv = json.load(f)
         op = str(wv.get("operation") or "side")
         guide = _WOLF_OP_GUIDE.get(op, "")
-        lvl = str(wv.get("level") or "未知")
-        sub = str(wv.get("sub_level") or "")
-        return "操作纪律（狼大优先）: **" + op + "** " + guide + "（浪型 " + lvl + ("·" + sub if sub else "") + "）"
+        return "操作纪律（狼大优先）: **" + op + "** " + guide + " ｜ 浪型 " + _wave_where(wv)
     except Exception:
         return ""
 

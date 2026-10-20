@@ -160,6 +160,27 @@ def build_state():
     return st
 
 
+def _wave_where(wv) -> str:
+    """浪型 → 一行定位（2026-10-20，与 morning_diagnosis._wave_where 同口径 ✓）：
+    **family/sub_level 优先** ✓（旧写法打 level·sub_level 会把 4-5 失败显示成「d5·失败5」✗），
+    并带 mode（自救）与 session_date（判定 → 服务哪个交易日）✓。"""
+    fam = str(wv.get("family") or "").strip()
+    sub = str(wv.get("sub_level") or "").strip()
+    lvl = str(wv.get("level") or "未知").strip()
+    core = (fam + "·" + sub) if (fam and sub) else (lvl + ("·" + sub if sub else ""))
+    op = str(wv.get("operation") or "").strip()
+    mode = str(wv.get("mode") or "").strip()
+    d = str(wv.get("date") or "").replace("-", "")[:8]          # ★ 文件里可能是 "2026-10-19" ✓ 必须先剥横杠 ✗
+    sd = str(wv.get("session_date") or "").replace("-", "")[:8]
+    if d and sd:
+        tail = "｜判定 %s-%s → 服务 %s-%s" % (d[4:6], d[6:8], sd[4:6], sd[6:8])
+    elif d:
+        tail = "｜判定 %s-%s" % (d[4:6], d[6:8])
+    else:
+        tail = ""
+    return core + (("｜" + op) if op else "") + (("（%s）" % mode) if mode else "") + tail
+
+
 def fallback_text(facts, st):
     ev = facts.get('event') or {}
     imp = facts.get('impact') or {}
@@ -177,8 +198,7 @@ def fallback_text(facts, st):
     pos_line = '；'.join('%s %s %s股 成本%.3f 现价%.2f 浮盈%+.2f%%' % (
         p.get('symbol'), p.get('name'), p.get('volume'), float(p.get('avg_price') or 0), float(p.get('current_price') or 0),
         float(p.get('floating_pnl_pct') or 0)) for p in pos if isinstance(p, dict)) if isinstance(pos, list) else ''
-    lines += ['', '⚡ 当前状态：浪型 %s/%s/%s%s' % (ws.get('level'), ws.get('sub_level'), ws.get('operation'),
-                                              ('（mode=%s）' % ws.get('mode')) if ws.get('mode') else ''),
+    lines += ['', '⚡ 当前状态：浪型 ' + _wave_where(ws),
               '· 仓位上限（档位 invest 30%% ÷ β）：%s' % caps,
               '· β 标尺来源：%s' % BETA_SRC,
               '· 持仓（/portfolio/positions 权威 ✓）：%s' % (pos_line or '缺'),
