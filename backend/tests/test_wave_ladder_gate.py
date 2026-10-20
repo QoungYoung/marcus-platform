@@ -85,3 +85,15 @@ def test_ensure_wave_fills_from_ladder(monkeypatch):
                                             "sub_level": "下跌1浪", "operation": "defense"})
     w = WG.ensure_wave()
     assert w and w["level"] == "down" and w["operation"] == "defense", w
+
+
+def test_sell_kinds_never_blocked_when_down():
+    # ★ 2026-10-20：卖类**永不拦** —— 且必须是**前缀**口径（全仓还用 high_sell_strong ✗ 原来漏了）
+    import app.services.wave_gate as WG
+    w = {"date": "20261019", "level": "down", "sub_level": "下跌1浪", "operation": "defense"}
+    for k in ("high_sell", "high_sell_then_buy_back", "high_sell_strong", "high_sell_anything"):
+        g = WG.check_gate(kind=k, wave=w)
+        assert g.get("allowed") is True, (k, g)
+    # 买类在 down 下必须拦 ✓
+    g2 = WG.check_gate(kind="low_buy", wave=w)
+    assert g2.get("allowed") is False and g2.get("gate") == "BLOCKED", g2

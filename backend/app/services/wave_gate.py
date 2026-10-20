@@ -281,7 +281,10 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
     #   ⇒ ⇒ **卖类（`high_sell*`）永不拦** ✓ —— 这是今晚验证里发现的真问题 ✗
     #     （旧实现在 down 时把买、卖一起 BLOCKED ✗ ⇒ 破位时**反而卖不出去** ✗，与口径相反 ✓）
     _kind_s = str(kind or "low_buy")
-    if _kind_s in ("high_sell", "high_sell_then_buy_back"):
+    # ★ 2026-10-20 修：原来只豁免 `high_sell` / `high_sell_then_buy_back` 两个**精确名字** ✗，
+    #   而全仓还在用 **`high_sell_strong`**（10 处 ✓）⇒ 它落进下面的指数止损分支 ⇒ 被 BLOCKED ✗✗
+    #   （"破位时反而卖不出去" ✗ —— 正是本函数注释里说已修过的那类事故 ✓）。改成**前缀匹配** ✓。
+    if _kind_s.startswith("high_sell"):
         return {"allowed": True, "mode": "auto", "regime": "down",
                 "gate": "ALLOWED",
                 "why": "卖类不受环境门限制 ✓（口径：破位是止损的**触发**，不是禁止卖出 ✓）：%s"
@@ -302,7 +305,7 @@ def check_gate(kind: str = "low_buy", wave: Optional[dict] = None,
     _op_on = str(os.getenv("WOLF_WAVE_OP_GATE", "0")).strip().lower() in ("1", "true", "yes", "on")
     if _op_on:
         _kind = str(kind or "low_buy")
-        _is_sell = _kind in ("high_sell", "high_sell_then_buy_back")
+        _is_sell = _kind.startswith("high_sell")      # ★ 同上：前缀匹配（含 high_sell_strong ✓）
         _op = str((w or {}).get("operation") or "").strip().lower()
         if (not _is_sell) and _op in ("t_only", "defense", "exit"):
             return {"allowed": False, "mode": "blocked",
