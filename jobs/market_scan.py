@@ -2616,14 +2616,10 @@ def _read_wolf_context(indices=None) -> str:
     if ml:
         main_line = ml.get("main_line") or ""
         cands = ml.get("candidates") or []
-        cat = __import__("sys").path and __import__("mstate_retired").get_retired(ml, "catalyst", {}, "market_scan") or {}
         s = f"- **主线**：{main_line}"
         if cands:
             s += f"（候选：{'、'.join(str(c) for c in cands)}）"
-        if cat:
-            top = sorted(((k, v) for k, v in cat.items() if v), key=lambda kv: -kv[1])[:3]
-            if top:
-                s += " ｜ catalyst " + "、".join(f"{k}:{v}" for k, v in top)
+        # ★ 2026-10-20 清理：catalyst 已退役（恒为空）⇒ 原来的 if cat 块是死分支，已删 ✓
         parts.append(s)
 
     # 2. 浪型级别（wave_state.json）

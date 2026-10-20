@@ -409,7 +409,7 @@ def rank_concept(members: Sequence[Dict[str, Any]], ctx: Dict[str, Any],
     out: List[Dict[str, Any]] = []
     for m in members:
         feats = {
-            "catalyst": __import__("mstate_retired").get_retired(m, "catalyst", None, "leader_v2"),
+            "catalyst": None,   # ★ 2026-10-20 清理：该字段已退役（恒 None）；保留 key 以维持特征维度 ✓
             "money_effect": m["_v2p"].get("money_effect"),
             "linkage": m["_v2p"].get("linkage"),
             "size": m["_v2p"].get("size"),

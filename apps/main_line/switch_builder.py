@@ -57,11 +57,9 @@ def fusion_top3():
         if _gt: return _gt[0]
     except Exception as _e_sil1:
         _silent_alert("switch_builder.py:42", _e_sil1)
-    ml = _load("main_line_state.json")
-    # ★ §9.830：fusion 已退役（2026-09-13）⇒ 显式告警；主源为 WOLF_THEME_SRC=mainline_select ✓
-    fus = __import__("mstate_retired").get_retired(ml, "fusion", {}, "switch_builder:61") or {}
-    rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
-    return [k for k, _ in rank[:3]]
+    # ★ 2026-10-20 清理：fusion 字段 2026-09-13 已退役（mstate_retired 恒返回 {}）⇒ 原三行是死分支，已删 ✓；
+    #   主源为 mainline_select ✓，取不到就是空 ✓
+    return []
 
 
 def held_positions():
@@ -268,9 +266,8 @@ def theme_top12(n=2):
                 return list(_t), "pool"
         except Exception as _e_sil5:
             _silent_alert("switch_builder.py:215", _e_sil5)
-    ml = _load("main_line_state.json")
-    fus = __import__("mstate_retired").get_retired(ml, "fusion", {}, "switch_builder:233") or {}
-    return [k for k, _ in sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))[:n]], "fusion"
+    # ★ 2026-10-20 清理：fusion 已退役（恒为空）⇒ 死分支已删 ✓
+    return [], "fusion"
 
 
 def active_stocks_by(stages, stages_for=None):

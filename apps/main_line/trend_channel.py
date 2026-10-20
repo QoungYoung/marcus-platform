@@ -245,16 +245,8 @@ def _v2_theme_meta(themes: Sequence[str]) -> Dict[str, Any]:
     except Exception as _e_sil2:
         _silent_alert("trend_channel.py:220", _e_sil2)
     # 政策点火 = main_line_state.catalyst（主题级，0–1）
+    # ★ 2026-10-20 清理：catalyst 已退役（2026-09-13，恒为空）⇒ 整个读取循环是死分支，已删 ✓
     data = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(here)), "data"))
-    try:
-        st = json.load(open(os.path.join(data, "main_line_state.json"), encoding="utf-8"))
-        for k, v in (__import__("mstate_retired").get_retired(st, "catalyst", {}, "trend_channel") or {}).items():
-            try:
-                out["catalyst"][str(k)] = float(v)
-            except Exception as _e_sil3:
-                _silent_alert("trend_channel.py:229", _e_sil3)
-    except Exception as _e_sil4:
-        _silent_alert("trend_channel.py:231", _e_sil4)
     # 资金买盘 = theme_mf_daily.json 近 3 日主题净流入 → 主题间分位 0–1
     try:
         mf = json.load(open(os.path.join(data, "theme_mf_daily.json"), encoding="utf-8"))

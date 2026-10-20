@@ -89,11 +89,7 @@ def fusion_top12():
     except Exception as _e_tt:
         print("[tranche_ladder] 复用布腿器主题源失败(回退 fusion ✓): %s" % str(_e_tt)[:70], flush=True)
     ml = _load("main_line_state.json", {})
-    # ★ §9.830：最后兜底才读 fusion（已退役 ✓，恒为空 ✓ 仅告警）
-    fus = __import__("mstate_retired").get_retired(ml, "fusion", {}, "tranche_ladder") or {}
-    rank = sorted(fus.items(), key=lambda kv: -(kv[1].get("score", 0) or 0))
-    if rank:
-        return [k for k, _ in rank[:2]]
+    # ★ 2026-10-20 清理：fusion 已退役（恒为空）⇒ "最后兜底读 fusion" 是死分支，已删 ✓（直接落到下面的 candidates 兜底）
     # ★ 再回退：用当日主线 + candidates（同文件里**确实存在**的字段 ✓）
     cand = [str(x) for x in (ml.get("candidates") or []) if x]
     _ml = str(ml.get("main_line") or "")

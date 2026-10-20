@@ -6,7 +6,7 @@ low_logic_agent.py — 低位看逻辑(AI判定)。对 position_class 判为 LOW
 复用 wave_agent 的 dsh /chat 链路。运行于 worker 容器。
 """
 import os, sys, json, time, requests
-from mstate_retired import get_retired as _gr  # §9.830 已退役字段读取（缺此行曾致 NameError ✗）
+# ★ 2026-10-20 清理：不再 import mstate_retired（退役字段 catalyst 的读取已全部删除 ✓）
 sys.path.insert(0,"/app")
 import pandas as pd
 CHAT_URL=os.getenv("WAVE_CHAT_URL","http://marcus-dsh:3001/chat")
@@ -45,7 +45,7 @@ def main():
         fe=v.get("features",{}); fs=v.get("fund_flow",{})
         rows.append(f"- {v['name']}: 距1年高={fe.get('vs_1y_high_pct')}% 箱体={fe.get('box_pos_pct')}% r20={fe.get('r20')}% 主力净流入={fs.get('strength')}亿 连续={fs.get('conv')}天")
     prompt=("你是狼大'低位看逻辑'评判 agent。下面列出若干个被判定为【低位(超跌)】的东财概念，请判断每个的【题材逻辑/景气/催化】质量(是否值得埋伏低吸)，只评逻辑、不评点位/不判买卖。\n"
-            "背景：主线= "+str(ml.get("main_line"))+" (catalyst: "+str(_gr(ml, "catalyst", None, "low_logic_agent"))+")\n"
+            "背景：主线= "+str(ml.get("main_line"))+"\n"
             "主题催化： "+str(cat)+"\n"
             "热点概念： "+str(hot)+"\n"
             "【LOW概念列表】\n"+"\n".join(rows)+"\n"
