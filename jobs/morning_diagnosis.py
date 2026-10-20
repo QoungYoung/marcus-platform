@@ -72,13 +72,9 @@ def _read_wolf_context() -> str:
         cands = ml.get("candidates") or []
         if cands:
             s += "（候选：" + "、".join(str(c) for c in cands) + "）"
-        try:  # catalyst 2026-09-13 起退役、get_retired 恒返回 {} ⇒ 导入再出问题也只当空处理，不拖垮盘前诊断
-            cat = __import__("mstate_retired").get_retired(ml, "catalyst", {}, "morning_diagnosis") or {}
-        except Exception:
-            cat = {}
-        top = sorted(((k, v) for k, v in cat.items() if v), key=lambda kv: -kv[1])[:3]
-        if top:
-            s += " ｜ catalyst " + "、".join(f"{k}:{v}" for k, v in top)
+        # ★ 2026-10-20：删掉 catalyst 分支 ✓（该字段 2026-09-13 就随研报线一起退役 ✗，
+        #   这里原来通过 mstate_retired.get_retired 读它 ⇒ 恒返回 {} ⇒ 是**死分支** ✓；
+        #   方向层口径改用 mainline_select / r5 ✓。删掉后行为逐位不变，且不再触发 mstate_retired 告警 ✓）。
         parts.append(s)
 
     wv = _load("wave_state.json")
