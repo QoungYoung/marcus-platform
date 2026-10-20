@@ -176,13 +176,86 @@ BASE_43 = {"key": "basis_43", "name": "4-3筑底", "level": "d4", "sub_level": "
 W_BOTTOM = {"key": "w_bottom", "name": "W底确认", "level": "d1", "sub_level": "W底", "operation": "build",
             "expect": "W底确认（放量过颈线）⇒ 底部反转，建仓（原表：W底确认=建仓 / d1=底部确认后建仓）"}
 _SYNC3: Optional[bool] = None   # features() 每轮写入：三指数同步状态（None=数据不全 ⇒ 退回单指数）
-_ROWS_CACHE: Dict[Any, Any] = {}   # (DATA, code) → rows
+_ROWS_CACHE: Dict[Any, Any] = {}   # (DATA, code) → (rows, 读入时刻)：带 TTL，防长驻进程冻住 ✗
+_ROWS_TTL = float((os.environ.get("WOLF_WAVE_LADDER_ROWS_TTL") or "").strip() or 60)   # 秒
 # ★ 2026-10-15 修正（用户拍板 A）：下跌1浪拆成**两件事** ——
 #   「**不进**」= operation `defense`（禁新建仓；tier 目标 30% ⇐ 原表 down→defense ＋ 他「熊市不做，什么都不做」）
 #   「**怎么出**」= mode `自救`（存量借反弹/放量分批减；他 2026-10-15：「要出来光靠硬割不行 需要创造条件才能割肉」）
 #   原来压成一个 exit（invest 0.70）既比原表松、又丢了自救的执行语义 ✗。依据：docs/wave-operation-table.md §2。
 MODE_OF_RUNG = {"down1": "自救"}
 MODE_NOTE = {"自救": "禁新建仓；存量只借反弹/放量减仓或做T（不硬割、不新增）"}
+
+# ─────────────── 统一标签（2026-10-18，只加字段；不改 level/sub_level/operation）───────────────
+# 背景：`w45_fail` 写成 `level=d5 + sub_level=失败5`，读 level 的消费方会误当“大5浪衰竭→exit”；
+# 实际是“4-5 失败→defense”。这里只加 family/stage/status/label_note，旧字段一字不改。
+FAMILY_OF_LEVEL = {"d1": "1", "d2": "2", "d3": "3", "d4": "4", "d5": "5", "down": "down"}
+
+
+def _family_of(level: str, sub: str, key: str) -> str:
+    """浪族：1/3/4/5/down。4-5 的成功/失败都属于 4 浪族，不是 5。"""
+    if key in ("w45_ok", "w45_fail"):
+        return "4"
+    if key in ("dtop", "top_sell"):
+        return "5"
+    if key == "down1" or str(level).lower() == "down":
+        return "down"
+    s = str(sub or "")
+    if s in ("失败5", "4-5") or s.startswith("4-"):
+        return "4"
+    if s in ("末段", "双头", "衰竭", "M顶"):
+        return "5"
+    return FAMILY_OF_LEVEL.get(str(level or "").lower(), "?")
+
+
+def _stage_of(level: str, sub: str, key: str, mus: Optional[Dict[str, Any]] = None) -> str:
+    """阶段：4-1..4-5 / 3-2/3-3 / 5-末段 / 双头 / down-1 / C杀。"""
+    if key == "w45_ok":
+        return "4-5"
+    if key == "w45_fail":
+        return "4-5"
+    if key == "dtop":
+        return "双头"
+    if key == "top_sell":
+        return "5-末段"
+    if key == "down1":
+        return "C杀" if str(sub or "") == "C杀" else "down-1"
+    s = str((mus or {}).get("sub_level") or sub or "")
+    for sep in ("→", "->"):
+        if sep in s:
+            s = s.split(sep)[0]
+    if s == "失败5":
+        return "4-5"
+    if s:
+        return s
+    return str(level or "")
+
+
+def _status_of(key: str, op: str, sub: str) -> str:
+    """状态：forming（进行中）/ confirmed（已确认）/ failed（失败）。"""
+    if key == "w45_fail":
+        return "failed"
+    if key in ("w45_ok", "down1", "dtop", "top_sell", "w_bottom", "mainup_33"):
+        return "confirmed"
+    if key in ("w4_adj", "mainup_32", "basis_43", "basis_41", "breb", "abc", "leg4"):
+        return "forming"
+    if "失败" in str(sub or "") or str(op or "").lower() == "exit":
+        return "failed"
+    return "forming"
+
+
+def _label_note_of(key: str, sub: str = "") -> str:
+    if not key and str(sub or "") == "失败5":
+        return "4-5失败：反抽夭折；不是大5浪衰竭；operation=defense"
+    if not key and str(sub or "") == "末段":
+        return "大5浪末段/衰竭：operation=exit"
+    return {
+        "w45_fail": "4-5失败：反抽夭折；不是大5浪衰竭；operation=defense",
+        "w45_ok": "4-5成功：调整末腿走完；不是大5浪末段；operation=side",
+        "top_sell": "大5浪末段/衰竭：operation=exit",
+        "dtop": "双头/M顶：operation=exit",
+        "down1": "下跌1浪：禁新建仓 + 存量自救（mode=自救）",
+        "w4_adj": "4浪调整：只吃反抽；子档见 stage",
+    }.get(key, "")
 
 # 仓位/操作口径复用 wave_alloc（缺依赖时退回本地副本，值保持一致 ✓）
 try:  # pragma: no cover - 依赖环境
@@ -413,12 +486,21 @@ def _load_csv(code: str) -> List[Tuple[str, float, float, float]]:
 
 
 def load_rows(code: Optional[str] = None) -> List[Tuple[str, float, float, float]]:
-    """带缓存：同一次运行里同一 (DATA, code) 只读一次盘（walk 要跑 2500+ 天 × 多个指数 ✓）。"""
+    """带缓存的行情读取（walk 要跑几千天 × 多个指数，不加缓存太慢 ✓）。
+
+    ★ 2026-10-20 修：缓存**必须带 TTL** —— 首版只按 (DATA, code) 永久缓存 ✗，在**长驻进程**里
+    （backend 的 uvicorn）会把数据永久冻在进程第一次读取的那一刻 ⇒ 卡片色带停在 10-15，
+    10-16/10-19 显示「无浪型」（用户 2026-10-20 实测反馈 ✗）。
+    注：**生产决策读的是文件 wave_state.json，不受影响** ✓；只有「接口里实时 walk」这条路会被冻住 ✗。
+    TTL 由 WOLF_WAVE_LADDER_ROWS_TTL 控制（秒，默认 60）。
+    """
     _ck = (DATA, code or index_code())
-    if _ck in _ROWS_CACHE:
-        return _ROWS_CACHE[_ck]
-    _ROWS_CACHE[_ck] = _load_rows_uncached(code)
-    return _ROWS_CACHE[_ck]
+    hit = _ROWS_CACHE.get(_ck)
+    if hit is not None and (time.time() - hit[1]) < _ROWS_TTL:
+        return hit[0]
+    _rows = _load_rows_uncached(code)
+    _ROWS_CACHE[_ck] = (_rows, time.time())
+    return _rows
 
 
 def clear_rows_cache() -> None:
@@ -924,12 +1006,38 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         "features": fi,
         "mode": MODE_OF_RUNG.get(key, ""),
         "mode_note": MODE_NOTE.get(MODE_OF_RUNG.get(key, ""), ""),
+        "family": _family_of(mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"), sub, key),
+        "stage": _stage_of(mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"), sub, key, mus),
+        "status": _status_of(key, mus.get("operation") or ev.get("operation"), sub),
+        "label_note": _label_note_of(key, sub),
         "source": "wave_ladder",
         "rung": {"key": key, "name": ev.get("name"), "index": ev.get("rung_index"),
                  "expect": ev.get("expect"), "degraded": ev.get("degraded"), "reset": ev.get("reset")},
         "levels": ev.get("levels") or {},
         "sub_legs": fi.get("sub_legs") or [],
     }
+
+
+def enrich_wave_state(ws: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """给已落盘的旧 wave_state 补 family/stage/status/label_note（只加字段，不改旧值）。
+
+    用于读时兼容：旧文件没有 rung 字段时，按 level+sub_level 反推。
+    """
+    if not isinstance(ws, dict):
+        return ws
+    out = dict(ws)
+    key = str(((ws.get("rung") or {}).get("key") or ""))
+    level = str(ws.get("level") or "")
+    sub = str(ws.get("sub_level") or "")
+    op = str(ws.get("operation") or "")
+    out.setdefault("family", _family_of(level, sub, key))
+    out.setdefault("stage", _stage_of(level, sub, key, None))
+    out.setdefault("status", _status_of(key, op, sub))
+    if not out.get("mode"):
+        out["mode"] = MODE_OF_RUNG.get(key, "")
+    if not out.get("label_note"):
+        out["label_note"] = _label_note_of(key, sub)
+    return out
 
 
 def write_wave_state(asof: Optional[str] = None, dated: bool = False,
