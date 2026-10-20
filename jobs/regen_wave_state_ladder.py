@@ -75,6 +75,10 @@ def main():
                     help="★ 动 _bt_* 回测沙箱（**默认不动**：2026-10-15 教训 —— 用户要的是重跑生产，")
     ap.add_argument("--include-archives", action="store_true",
                     help="连 _bt_*/<day>/wave_state_<日期>.json 归档副本（26.7 万份，需 --include-backtests）")
+    ap.add_argument("--dated-days", type=int, default=0,
+                    help="★ 额外**生成**最近 N 个交易日的 data/wave_state_<YYYY-MM-DD>.json（带日期回填件 ✓）。"
+                    " 2026-10-20 用户拍板：8-10 月的 dated 只有 17 天（稀疏 ✗），而 daily_decision 在回测下**优先读 dated** ⇒"
+                    " 需要补齐到每一天 ✓（会覆盖已有那批快照 ✓ 内容由同一个带锁 walk 生成、与 history 一致 ✓）。")
     ap.add_argument("--history-days", type=int, default=0,
                     help="★ 额外**生成**最近 N 个交易日的 data/wave_state_history/<sim8>.json（目录不存在会自动建 ✓）。"
                     " 为什么需要：wave_gate.py:101 的回测取档读这个目录，而 2026-10-15 首轮重建只更新**已存在**的文件 ⇒"
@@ -107,6 +111,20 @@ def main():
         for d8 in _days:
             pairs.append((os.path.join("data", "wave_state_history", "%s.json" % d8), d8))
         print("history 目标：最近 %d 个交易日（%s ~ %s）" % (len(_days), _days[0] if _days else "-", _days[-1] if _days else "-"))
+
+    # ★ 2026-10-20（用户拍板「补」）：--dated-days N ⇒ 把**带日期回填件**也补齐到每一天 ✓
+    #   （daily_decision 在回测下优先读它 ✗ 稀疏会取不到档 ✓；覆盖已有快照是用户明确同意的 ✓）
+    if args.dated_days > 0:
+        _d2 = by[-int(args.dated_days):]
+        _have = {p for p, _ in pairs}
+        _added = 0
+        for d8 in _d2:
+            p = os.path.join("data", "wave_state_%s-%s-%s.json" % (d8[:4], d8[4:6], d8[6:8]))
+            if p in _have:
+                continue
+            pairs.append((p, d8))
+            _added += 1
+        print("dated 补目标：最近 %d 个交易日 ⇒ 新增 %d 份（其余已存在 ✓）" % (len(_d2), _added))
 
     def ev_for(day):
         if not day:

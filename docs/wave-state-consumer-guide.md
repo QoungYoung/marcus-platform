@@ -8,7 +8,7 @@
 | 文件 | 谁写 | 语义 |
 |---|---|---|
 | `data/wave_state.json` | 08:10 调度任务 `wave_ladder_state` | 当前档。`date`=**数据日**（上一交易日收盘）；`session_date`=**服务交易日** |
-| `data/wave_state_<YYYY-MM-DD>.json` | 同一任务（`--dated`） | 按**数据日**命名的快照 ⇒ **服务于下一个交易日**（例：`wave_state_2026-10-19.json` 就是 10-20 那份判定 ✓） |
+| `data/wave_state_<YYYY-MM-DD>.json` | 同一任务（`--dated`，每日新增 ✓）| 按**数据日**命名的快照 ⇒ **服务于下一个交易日**（例：`wave_state_2026-10-19.json` 就是 10-20 那份判定 ✓）。<br>★ 2026-10-20 起 8-10 月已用 `regen --dated-days 90` **按交易日补齐** ✓（此前只有 17 天、稀疏 ✗；`daily_decision` 回测下优先读它 ✓）|
 | `data/wave_state_history/<sim8>.json` | `wave_ladder_history_regen`（每日 08:20，最近 90 个交易日滚动 ✓）| 按**模拟日**读的归档（`wave_gate.py:101`）。**回测必须用这个** ✗ 不许用 live 文件回测 |
 
 > ⚠️ **`data/` 是 gitignore 的、每个环境各一份**（`.gitignore:40` ✓）⇒ **不要拿工作区/别的环境的 `data/` 判断生产** ✗
