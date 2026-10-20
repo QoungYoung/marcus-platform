@@ -65,3 +65,23 @@ def test_consumer_sites_call_the_gate():
                         ("apps/main_line/wave_alloc.py", "adopt_operation")):
         src = open(os.path.join(root, rel), encoding="utf-8").read()
         assert needle in src, "%s 未接浪型链入口" % rel
+
+
+def test_ladder_state_fail_open(monkeypatch):
+    # 模块不可用 ⇒ None（fail-open ✓，上层放行）
+    import app.services.wave_ladder_gate as G
+    monkeypatch.setattr(G, "_load", lambda: None)
+    assert G.ladder_state() is None
+
+
+def test_ensure_wave_fills_from_ladder(monkeypatch):
+    # ★ 2026-10-20：ensure_wave 的「现场补」必须走**浪型链回放**（不再是退役的 wave_level.judge_wave ✗）
+    import app.services.wave_gate as WG
+    import app.services.wave_ladder_gate as G
+    monkeypatch.setattr(WG, "_load_wave", lambda: None)        # 模拟 live 文件缺失
+    monkeypatch.setattr(WG, "_find_archived", lambda d: None)  # 模拟无归档
+    monkeypatch.setattr(G, "ladder_state",
+                        lambda as_of=None: {"date": "20261019", "level": "down",
+                                            "sub_level": "下跌1浪", "operation": "defense"})
+    w = WG.ensure_wave()
+    assert w and w["level"] == "down" and w["operation"] == "defense", w

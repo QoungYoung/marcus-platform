@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any, Optional
+import time
+from typing import Any, Dict, Optional
 
 _MOD: Any = None
 
@@ -42,6 +43,44 @@ def _load() -> Any:
     except Exception:
         _MOD = False
     return _MOD
+
+
+_STATE_CACHE: Dict[str, Any] = {"key": None, "ts": 0.0, "val": None}
+_STATE_TTL = 60.0     # 秒（长驻进程里必须能失效 ✓ 2026-10-20 教训）
+
+
+def ladder_state(as_of: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """用**浪型链回放**算出 as_of 当日的 wave_state（**带单向锁** ✓，与 live/卡片同源 ✓）。
+
+    用途：`wave_gate.ensure_wave` 的「现场补」—— 原来那条走 `wave_level.judge_wave`（**旧 LLM 判据** ✗），
+    浪型链接管后必须换成本函数 ✓（2026-10-20 用户要求修复 ✓）。
+
+    纪律：
+      · **只读不写盘** ✓（live 的写权归 08:10 的 `wave_ladder_state` ✓，后端不抢写 ✗）；
+      · 任何异常 ⇒ None（fail-open ✓，上层放行）；
+      · 60 秒进程内缓存 ✓（walk 一次约数秒，不缓存会被每次请求拖慢 ✗）。
+    """
+    m = _load()
+    if not m:
+        return None
+    try:
+        key = str(as_of or "")[:8]
+        now = time.time()
+        if _STATE_CACHE["key"] == key and (now - float(_STATE_CACHE["ts"] or 0)) < _STATE_TTL:
+            return _STATE_CACHE["val"]
+        rows = m.load_rows()
+        if not rows:
+            return None
+        if key:
+            rows = [r for r in rows if r[0] <= key] or rows
+        evs = m.walk(rows)
+        if not evs:
+            return None
+        ws = m.to_wave_state(evs[-1])
+        _STATE_CACHE.update({"key": key, "ts": now, "val": ws})
+        return ws
+    except Exception:
+        return None
 
 
 def adopt_wave_op(op: Optional[str], asof: Optional[str] = None) -> Optional[str]:

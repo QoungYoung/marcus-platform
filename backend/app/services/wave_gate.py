@@ -150,39 +150,27 @@ def ensure_wave(as_of: Optional[str] = None, max_stale_days: int = 10) -> Option
         return _aw
     print("[wave_gate] wave_state %s ⇒ **现场补**（as_of=%s ✓）"
           % ("缺失" if not w else "过期 %s 天" % age, as_of or "-"), file=sys.stderr, flush=True)
+    # ★ 2026-10-20 修（用户要求）：原「现场补」走的是 **wave_level.judge_wave**（旧 LLM 判据 ✗，已退役）
+    #   ⇒ 换成**浪型链回放**（带单向锁 ✓，与 live/卡片同源 ✓）。纪律：只读不写盘 ✓（写权归 08:10 任务），
+    #   拿不到 ⇒ None ⇒ 上层放行 ✓（绝不因缺数据拦死 ✓）。
     try:
-        import wave_level as _wl                       # apps/main_line/wave_level.py ✓
-        _d = None
-        if as_of:
-            a = str(as_of).replace("-", "")
-            _d = "%s-%s-%s" % (a[:4], a[4:6], a[6:8])
-        lbl, feats = _wl.judge_wave(_d) if _d else _wl.judge_wave(None)
-        if not lbl:
-            raise RuntimeError("judge_wave 返回空")
-        got = {"level": None, "sub_level": None, "operation": None, "date": _d,
-               "reasons": "wave_gate 现场补（judge_wave=%s）" % str(lbl)[:40]}
+        from app.services.wave_ladder_gate import ladder_state
+        got = ladder_state(as_of or (sim_day8() or None))
+        if got and got.get("level"):
+            print("[wave_gate] ✅ 现场补（浪型链回放）：date=%s level=%s op=%s" % (
+                got.get("date"), got.get("level"), got.get("operation")), file=sys.stderr, flush=True)
+            return got
+        print("[wave_gate] ✗ 浪型链回放也拿不到 ⇒ **放行**", file=sys.stderr, flush=True)
+        return None
+    except Exception as _e_c:
+        print("[wave_gate] ✗ 现场补失败: %s ⇒ **放行**（绝不因缺数据拦死 ✓）" % str(_e_c)[:120],
+              file=sys.stderr, flush=True)
         try:
-            inner = json.loads(lbl) if str(lbl).strip().startswith("{") else None
-        except Exception as _e:
-            inner = None
-        if isinstance(inner, dict):
-            got.update({k: inner.get(k) for k in ("level", "sub_level", "operation", "confidence", "reasons")})
-        got["level"] = got.get("level") or ""
-        # ★ 修正 ✓：**只有拿到有效 level 才写回** ✗（自测里 `judge_wave` 返回"无数据"
-        #   也能写回 ⇒ 把好的档覆盖成 `level="无数据"` ✗✗ —— 事故 ✓）
-        if not got["level"] or got["level"] in ("无数据", "None", "?"):
-            print("[wave_gate] judge_wave 无有效 level（%r）⇒ **不写回**，沿用旧档 ✓" % str(lbl)[:40],
-                  file=sys.stderr, flush=True)
-            return _load_wave()
-        try:
-            os.makedirs(os.path.dirname(_wave_path()), exist_ok=True)
-            with open(_wave_path(), "w", encoding="utf-8") as f:
-                json.dump(got, f, ensure_ascii=False, indent=1)
-            print("[wave_gate] ✅ 已写回 %s（level=%s ✓）" % (_wave_path(), got.get("level")),
-                  file=sys.stderr, flush=True)
-        except Exception as _e_w:
-            print("[wave_gate] 写回失败（不影响判据 ✓）: %s" % str(_e_w)[:80], file=sys.stderr, flush=True)
-        return got
+            from app.services import alert_hub as _ah
+            _ah.note("wave_gate.现场补失败", msg="%s（放行 ✓）" % str(_e_c)[:160])
+        except Exception as _e_a:
+            print("[wave_gate] 告警失败: %s" % str(_e_a)[:60], file=sys.stderr, flush=True)
+        return None
     except Exception as _e_c:
         print("[wave_gate] ✗ 现场补失败: %s ⇒ **放行**（绝不因缺数据拦死 ✓）" % str(_e_c)[:120],
               file=sys.stderr, flush=True)
