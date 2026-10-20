@@ -1293,6 +1293,35 @@ tasks:
   output:
     log_file: logs/wave_ladder_state_{date}.log
     append: true
+
+- id: wave_ladder_history_regen
+  name: 浪型 history 滚动维护（回测取档要它）
+  description: |
+    ★ 2026-10-20 用户实测发现：`wave_gate.py:101` 的回测取档读 `data/wave_state_history/<sim8>.json`，
+    而 2026-10-15 首轮重建只更新**已存在**的文件 ⇒ 生产上该目录根本不存在 ✗ ⇒ 回测取档落空。
+    本任务每天 08:20（紧接 08:10 的 wave_ladder_state ✓）用**带锁回放**重新生成最近 90 个交易日的
+    `data/wave_state_history/<YYYYMMDD>.json`（目录自动建 ✓、含 session_date ✓）；
+    **不动** `data/wave_state_<date>.json` 回填件与 `_bt_*` 沙箱（尊重用户「回测别回退」✓）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '20 8 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/regen_wave_state_ladder.py
+    args:
+    - --apply
+    - --history-days
+    - '90'
+  output:
+    log_file: logs/wave_ladder_history_regen_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
   notifications:
     on_success: false
     on_failure: true

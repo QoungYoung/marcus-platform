@@ -9,7 +9,11 @@
 |---|---|---|
 | `data/wave_state.json` | 08:10 调度任务 `wave_ladder_state` | 当前档。`date`=**数据日**（上一交易日收盘）；`session_date`=**服务交易日** |
 | `data/wave_state_<YYYY-MM-DD>.json` | 同一任务（`--dated`） | 按**数据日**命名的快照 ⇒ **服务于下一个交易日**（例：`wave_state_2026-10-19.json` 就是 10-20 那份判定 ✓） |
-| `data/wave_state_history/<sim8>.json` | 回填/`regen` | 按**模拟日**读的归档（`wave_gate.py:101`）。**回测必须用这个** ✗ 不许用 live 文件回测 |
+| `data/wave_state_history/<sim8>.json` | `wave_ladder_history_regen`（每日 08:20，最近 90 个交易日滚动 ✓）| 按**模拟日**读的归档（`wave_gate.py:101`）。**回测必须用这个** ✗ 不许用 live 文件回测 |
+
+> ⚠️ **`data/` 是 gitignore 的、每个环境各一份**（`.gitignore:40` ✓）⇒ **不要拿工作区/别的环境的 `data/` 判断生产** ✗
+> （2026-10-20 实例：工作区的 `wave_state.json` 还是 10-15 的旧 schema ✓ 而生产早就是新 schema ✓ —— 两边本来就不该一样 ✓）。
+> 要看生产：`ssh marcusrv` 后读 `/opt/marcus-platform/data/wave_state.json` ✓，或调生产 API ✓。
 
 ## 2. 字段（只列可依赖的；生产实测 schema）
 
@@ -79,6 +83,6 @@ GET /api/v1/wave/index-history?days=250&code=000001.SH
 ## 6. 已知缺口（别依赖）
 
 - `ensure_wave` 的「现场补」仍走**旧** `wave_level.judge_wave` ✗（等换成浪型链 ✓）；
-- 生产上 `data/wave_state_history/` **目录不存在** ✗（`regen` 只更新已存在的文件 ✓）⇒ 回测走 `_find_archived` 的其它落点；
+- ~~生产上 `data/wave_state_history/` 目录不存在~~ ✅ **2026-10-20 已修**：新增 `--history-days`（会建目录 ✓）+ 调度任务 `wave_ladder_history_regen`（08:20 每日滚动最近 90 个交易日 ✓）；
 - `session_date` 只跳周末 ✓，遇节假日偏一天（下一根 K 线出现后自然对齐 ✓）；
 - 卡片/接口的 5 分钟进程内缓存 ✓（数据更新后最多 5 分钟可见 ✓）。

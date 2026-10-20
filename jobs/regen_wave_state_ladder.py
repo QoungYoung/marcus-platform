@@ -75,12 +75,17 @@ def main():
                     help="★ 动 _bt_* 回测沙箱（**默认不动**：2026-10-15 教训 —— 用户要的是重跑生产，")
     ap.add_argument("--include-archives", action="store_true",
                     help="连 _bt_*/<day>/wave_state_<日期>.json 归档副本（26.7 万份，需 --include-backtests）")
+    ap.add_argument("--history-days", type=int, default=0,
+                    help="★ 额外**生成**最近 N 个交易日的 data/wave_state_history/<sim8>.json（目录不存在会自动建 ✓）。"
+                    " 为什么需要：wave_gate.py:101 的回测取档读这个目录，而 2026-10-15 首轮重建只更新**已存在**的文件 ⇒"
+                    " 生产上该目录根本不存在 ✗ ⇒ 回测取档落空（2026-10-20 用户实测反馈 ✓）。不改带日期回填件（尊重「回测别回退」✓）。")
     args = ap.parse_args()
 
     roots = [x for x in args.roots.split(",") if x]
     if args.include_backtests and not roots:
         roots = sorted(glob.glob(os.path.join("data", "_bt_*")))
     pairs = targets(roots) + root_files(args.include_archives)
+
     rows = W.load_rows()
     if not rows:
         print("无指数数据 ⇒ 放弃（fail-open）")
@@ -91,6 +96,17 @@ def main():
     evs = W.walk(rows)                       # ★ 含单向锁/重定浪，只算一次
     by = [e["date"] for e in evs]
     print("逐日档位：%d 天（%s -> %s）" % (len(evs), by[0], by[-1]))
+
+    # ★ 2026-10-20（用户实测反馈）：`wave_gate.py:101` 的回测取档读 data/wave_state_history/<sim8>.json，
+    #   而 2026-10-15 首轮重建只更新**已存在**的文件 ⇒ 生产上该目录根本不存在 ✗ ⇒ 回测取档落空。
+    #   --history-days N ⇒ **主动生成**最近 N 个交易日的 history 档（目录自动建 ✓）；
+    #   **不动** data/wave_state_<date>.json 回填件（尊重用户「回测别回退」✓）。
+    if args.history_days > 0:
+        os.makedirs(os.path.join("data", "wave_state_history"), exist_ok=True)
+        _days = by[-int(args.history_days):]
+        for d8 in _days:
+            pairs.append((os.path.join("data", "wave_state_history", "%s.json" % d8), d8))
+        print("history 目标：最近 %d 个交易日（%s ~ %s）" % (len(_days), _days[0] if _days else "-", _days[-1] if _days else "-"))
 
     def ev_for(day):
         if not day:

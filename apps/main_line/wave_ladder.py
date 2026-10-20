@@ -1014,6 +1014,8 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         "stage": _stage_of(mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"), sub, key, mus),
         "status": _status_of(key, mus.get("operation") or ev.get("operation"), sub),
         "label_note": _label_note_of(key, sub),
+        # ★ 2026-10-20：所有产物（live/dated/history）都带 session_date ✓（= 这份判定服务哪个交易日）
+        "session_date": next_session_date(str(ev.get("date") or "")[:8]),
         "source": "wave_ladder",
         "rung": {"key": key, "name": ev.get("name"), "index": ev.get("rung_index"),
                  "expect": ev.get("expect"), "degraded": ev.get("degraded"), "reset": ev.get("reset")},
