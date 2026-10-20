@@ -15,7 +15,7 @@ interface PatMark {
   points: { date: string; value: number }[];
 }
 interface Wave {
-  date: string; rung: number; name: string; level: string; sub_level: string;
+  date: string; session_date?: string; rung: number; name: string; level: string; sub_level: string;
   operation: string; mode: string; expect: string; invest: number; main_up: string; reasons: string;
   marks?: PatMark | null;
 }
@@ -47,6 +47,11 @@ const MAINUP_COLOR = '#2f9e6e';   // 主升 3-3 标记色（与 build 同色系 
 
 function bandColor(w: Wave): string {
   return OP_FILL[(w.operation || '').toLowerCase()] || MUTED;
+}
+
+// YYYYMMDD → MM-DD（卡片显示"判定日 → 服务日"用 ✓）
+function fmt8(d: string): string {
+  return d && d.length === 8 ? d.slice(4, 6) + '-' + d.slice(6, 8) : (d || '-');
 }
 
 // days 默认 750（≈3 年）：形态标注（W底/双头）很稀有 —— 250 天窗口内往往一个都没有 ✗
@@ -298,6 +303,9 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         {last ? (
           <>
             <span style={{ fontWeight: 700, color: INK }}>{last.name}</span>
+            <span style={{ color: MUTED, fontSize: 11 }}>
+              判定 {fmt8(last.date)} → 服务 {fmt8(last.session_date || '')}
+            </span>
             <span style={{ color: MUTED, fontSize: 11 }}>
               级别 {last.level}{last.sub_level ? ' / ' + last.sub_level : ''}
               {last.main_up ? ' · 主升3-3' : ''}

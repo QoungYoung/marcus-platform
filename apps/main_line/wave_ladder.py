@@ -166,7 +166,11 @@ BASE41 = {"key": "basis_41", "name": "4-1回调初", "level": "d4", "sub_level":
           "expect": "4-1 回调初 ⇒ 观望降仓（原表 4-1 = defense）"}
 
 BASE43_OFF = _envf("WOLF_WAVE_LADDER_43_OFF", 0.05)     # 4-3：距 20 日低点上限
-BASE43_VOL = _envf("WOLF_WAVE_LADDER_43_VOL", 0.8)       # 4-3：缩量门槛（20 日均额 / 60 日均额）
+# ★ 2026-10-20 用户拍板：缩量门槛 0.8 → **1.0**。
+#   原 0.8 是自设代理 ⛔，代价是 2016 年后 4-3 档 **一天都出不来** ✗（实测：0.8→0 天 / 0.9→17 天 / 1.0→53 天）；
+#   而原表与他的定性口径是「4-3 筑底 = side（可分批接）」「地量+缩量止跌」⇒ 只要**量能在缩**（≤ 过去 60 日均量）即符合 ✓，
+#   不需要"缩到 0.8 倍"这种强口径 ✗。放宽后 4-3 出 side，**属生产放松**（买类从"拦"变"需人工确认"）⇒ 已经用户确认 ✓。
+BASE43_VOL = _envf("WOLF_WAVE_LADDER_43_VOL", 1.0)       # 4-3：缩量门槛（20 日均额 / 60 日均额，≤1.0 = 量能在缩 ✓）
 WB_NEAR = _envf("WOLF_WAVE_LADDER_WB_NEAR", 0.03)        # W底：两低点相近度
 WB_VOL = _envf("WOLF_WAVE_LADDER_WB_VOL", 1.2)           # W底：突破颈线的放量倍数
 WB_WIN = int(_envf("WOLF_WAVE_LADDER_WB_WIN", 180))      # W底：形态回看窗口（交易日）
@@ -1040,9 +1044,24 @@ def enrich_wave_state(ws: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return out
 
 
+def next_session_date(d8: str) -> str:
+    """`d8`（数据日 YYYYMMDD）之后的**下一个交易日**（只跳周末；节假日会偏一天，等下一根 K 线出现后自然对齐 ✓）。"""
+    import datetime as _dt
+    try:
+        d = _dt.date(int(d8[:4]), int(d8[4:6]), int(d8[6:8]))
+    except Exception:
+        return ""
+    for _ in range(10):
+        d = d + _dt.timedelta(days=1)
+        if d.weekday() < 5:
+            return d.strftime("%Y%m%d")
+    return ""
+
+
 def write_wave_state(asof: Optional[str] = None, dated: bool = False,
                      rows: Optional[Sequence[Tuple[str, float, float, float]]] = None,
-                     ev: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                     ev: Optional[Dict[str, Any]] = None,
+                     session_date: Optional[str] = None) -> Optional[str]:
     """写 `data/wave_state.json`（可选带日期副本）→ 路径；失败返回 None ✓。
 
     传 ev（来自 walk，含单向锁）时按它写；否则用 `evaluate()` 现算（无降级锁，实时口径）。
@@ -1055,6 +1074,10 @@ def write_wave_state(asof: Optional[str] = None, dated: bool = False,
     ws = to_wave_state(ev, asof)
     if not ws:
         return None
+    # ★ 2026-10-20：新增 session_date（这份判定**服务于哪个交易日**）——
+    #   文件是按"数据日期"命名的（用上一交易日收盘判 ✓），容易让人以为"当天没生成" ✗（用户 10-20 反馈 ✓）。
+    #   实时写入（08:10）⇒ 就是**运行当天**（最准确 ✓）；回填/历史 ⇒ 取数据日的下一个工作日（近似 ✓）。
+    ws["session_date"] = session_date or next_session_date(ws["as_of"])
     d = ws["as_of"]
     try:
         os.makedirs(DATA, exist_ok=True)
@@ -1123,7 +1146,11 @@ if __name__ == "__main__":
             _rows = [r for r in _rows if r[0] <= str(_asof)[:8]] or _rows
         _evs = walk(_rows) if _rows else []
         _ev = _evs[-1] if _evs else None
-        _p = write_wave_state(_asof or None, dated=("--dated" in _sys.argv), rows=_rows, ev=_ev)
+        _today8 = time.strftime("%Y%m%d")
+        _asof8 = ((_ev or {}).get("date") or "")[:8]
+        # 实时写入：若今天已经晚于数据日 ⇒ session_date = 今天（精确 ✓）；否则取下一个工作日 ✓
+        _sd = _today8 if (_asof8 and _today8 > _asof8) else next_session_date(_asof8)
+        _p = write_wave_state(_asof or None, dated=("--dated" in _sys.argv), rows=_rows, ev=_ev, session_date=_sd)
         if _p:
             _ws = json.load(open(_p, encoding="utf-8")) or {}
             print("wave_state 已写:", _p, json.dumps({k: _ws.get(k) for k in ("date", "level", "sub_level", "operation")}, ensure_ascii=False))
