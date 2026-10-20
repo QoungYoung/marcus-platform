@@ -275,7 +275,9 @@ def main():
 
     try:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        # ★ 2026-10-20：60s 太短 ✗ —— 实测 /market/market-diagnosis 今天 78s（tushare_v2 取数慢），
+        #   触发必失败（[morning_diagnosis] 调用诊断端点失败: timed out ✗）。放宽到 240s ✓。
+        with urllib.request.urlopen(req, timeout=240) as resp:
             raw = resp.read().decode("utf-8")
             data = json.loads(raw)
     except Exception as e:
