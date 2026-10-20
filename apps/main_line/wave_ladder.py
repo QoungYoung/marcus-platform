@@ -1114,7 +1114,16 @@ if __name__ == "__main__":
         _asof = ""
         if "--asof" in _sys.argv:
             _asof = _sys.argv[_sys.argv.index("--asof") + 1]
-        _p = write_wave_state(_asof or None, dated=("--dated" in _sys.argv))
+        # ★ 2026-10-20 修：原来调 write_wave_state(...) 不带 ev ⇒ 内部走 **evaluate()（单日、无锁）** ✗
+        #   而链的核心是"单向降级锁" ⇒ 无锁口径会让上锁的档位被静默解除 ✗
+        #   （实证：10-15 上锁「下跌1浪」→ 10-16 被写成「4浪调整/t_only」，期间**没有任何重定浪事件** ✗）。
+        #   改为**回放 walk**（带锁 ✓ 与卡片/复盘完全同源 ✓），文件与接口从此不会各说一套 ✓。
+        _rows = load_rows()
+        if _asof:
+            _rows = [r for r in _rows if r[0] <= str(_asof)[:8]] or _rows
+        _evs = walk(_rows) if _rows else []
+        _ev = _evs[-1] if _evs else None
+        _p = write_wave_state(_asof or None, dated=("--dated" in _sys.argv), rows=_rows, ev=_ev)
         if _p:
             _ws = json.load(open(_p, encoding="utf-8")) or {}
             print("wave_state 已写:", _p, json.dumps({k: _ws.get(k) for k in ("date", "level", "sub_level", "operation")}, ensure_ascii=False))
