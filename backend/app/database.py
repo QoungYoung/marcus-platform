@@ -168,6 +168,7 @@ def _apply_schema_patches():
 
     # ── 2026-09-12: 回测用行情表（tushare 回填 mkt_bars_daily，供真实回测） ──
     _apply_mkt_bars_migration()
+    _apply_wave_state_migration()
 
     # ── 2026-09-12: 研报标题（catalyst 重建数据源；失败日期显式记账） ──
     _apply_research_reports_migration()
@@ -665,6 +666,28 @@ def _apply_daily_artifacts_migration():
         print("[DB] PATCH: 每日产物落库表 daily_artifacts 完成")
     except Exception as e:
         print(f"[DB] daily_artifacts 迁移失败: {type(e).__name__}: {str(e)[:120]}")
+
+
+def _apply_wave_state_migration():
+    """浪型状态表（2026-10-21 ✓）：**session_date 主键**（服务交易日，每天一份 ✓）+ payload JSONB。
+
+    背景（用户：「能放到 pgsql 里吗，其他接口读取也从 pgsql 里读」）：原来浪型状态是 data/ 下的
+    JSON 文件 + 90 天 history 目录 ⇒ 各接口各读文件 ✗、回测取档依赖稀疏快照 ✗。
+    这里先建表（读侧尚未切换 ✓ 文件仍是权威 ✓），写侧由 `apps/main_line/wave_pg.py` 双写 ✓。
+    """
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS wave_state (
+              session_date DATE PRIMARY KEY,
+              data_date    DATE NOT NULL,
+              level        TEXT, sub_level TEXT, operation TEXT, mode TEXT,
+              rung         INTEGER, family TEXT, stage TEXT, status TEXT,
+              confidence   DOUBLE PRECISION, source TEXT,
+              payload      JSONB NOT NULL,
+              updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+            )"""))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_wave_state_data_date ON wave_state (data_date)"))
 
 
 def _apply_mkt_bars_migration():

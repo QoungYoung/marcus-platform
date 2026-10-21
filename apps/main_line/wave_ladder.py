@@ -1099,6 +1099,14 @@ def write_wave_state(asof: Optional[str] = None, dated: bool = False,
             ps = os.path.join(DATA, "wave_state_session_%s-%s-%s.json" % (_sd[:4], _sd[4:6], _sd[6:8]))
             json.dump(ws, open(ps + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
             os.replace(ps + ".tmp", ps)
+        # ★ 2026-10-21：**双写 PostgreSQL**（步 1/2 ✓ —— 文件仍是权威 ✓ 读侧一行未改 ✓ 生产零行为变化 ✓）
+        #   幂等（session_date 主键 ✓）；任何 DB 异常都只告警 ✓ 绝不影响文件写入 ✓（见 wave_pg 的纪律 ✓）
+        try:
+            from wave_pg import upsert as _pg_upsert
+            if not _pg_upsert(ws):
+                print("[wave_ladder] 写库未成功（忽略 ✓ 文件已写）", flush=True)
+        except Exception as _e_pg:
+            print("[wave_ladder] 写库异常（忽略 ✓ 文件已写）: %s" % str(_e_pg)[:120], flush=True)
         return p
     except Exception as _e:
         _silent_alert("wave_ladder.py:write_wave_state", _e)
