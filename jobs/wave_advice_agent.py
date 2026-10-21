@@ -125,6 +125,7 @@ def facts():
         except Exception:
             continue
     f["candidates"].sort(key=lambda x: -(x.get("dist_ma20_pct") or -99))
+    f["wolf_recent"] = wolf_recent()
     try:
         base = (os.environ.get("MARCUS_API_URL") or "http://localhost:8000/api/v1").rstrip("/")
         with urllib.request.urlopen(base + "/wave/state", timeout=20) as r:
@@ -132,6 +133,25 @@ def facts():
     except Exception as e:
         f["wave"] = {"_error": str(e)[:80]}
     return f
+
+
+def wolf_recent(days=2, limit=8):
+    """读 `data/wolf_posts.json`（由 jobs/wolf_thread_sync.py 抓 ✓）→ 他最近几日发言 ✓。
+
+    ★ 定位（用户 2026-10-21 ✓）：**只作参考** ✓ —— 纪律仍是 `config/wave_advice_policy.json`（我们自己的 ✓）；
+      他断更/帖子没了 ⇒ 这里返回空 ✓ **不影响任何东西** ✓（用户：「等他帖子什么时候没了再说」✓）。
+    """
+    try:
+        d = json.load(open(os.path.join(os.environ.get("DATA_DIR", "").strip() or "data",
+                                        "wolf_posts.json"), encoding="utf-8"))
+        floors = [f for f in (d.get("floors") or []) if f.get("is_op") and f.get("text")]
+        import datetime as _dt
+        cut = (_dt.date.today() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+        recent = [f for f in floors if (f.get("date") or "")[:10] >= cut]
+        recent = recent[-limit:]
+        return [{"date": (f.get("date") or "")[:16], "text": (f.get("text") or "")[:150]} for f in recent]
+    except Exception:
+        return []
 
 
 def rules_advice(f):
@@ -190,6 +210,9 @@ def llm_advice(f, policy_text=None):
         "你是严谨的 A 股复盘助手。请**严格按下面这套纪律**给建议，不要自创逻辑，不要预测点位。",
         "每条建议必须标注引用的纪律编号（如 [P2]）✓；取不到的字段写「缺」✗ 不要猜。",
         policy_text,
+        "",
+        "以下是他**最近的公开发言摘录**（只作参考 ✓；与上面的纪律冲突时**以纪律为准** ✓；为空就是没抓到 ✓）：",
+        json.dumps(f.get("wolf_recent") or [], ensure_ascii=False)[:1800],
         "",
         "=== FACTS（工具取数，确定性 ✓ 缺失就写「缺」）===",
         json.dumps(f, ensure_ascii=False)[:4000],

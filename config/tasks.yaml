@@ -1294,6 +1294,31 @@ tasks:
     log_file: logs/wave_ladder_state_{date}.log
     append: true
 
+- id: wolf_thread_sync
+  name: 狼大帖子同步（楼主发言 → data/wolf_posts.json）
+  description: |
+    ★ 2026-10-21 用户：「NGA 插件里有 key ✓ 读他每天发言和回复，等他帖子没了再说」。
+    每天 14:50 用 Cookie（`data/nga_cookie.env` ✓ 600 权限 ✓ 不入库）走**只看楼主视图**抓他最新发言 ✓
+    （页码超界自动钳末页 ✓ 实测 ✓）→ `data/wolf_posts.json`（gitignore ✓）。
+    只作为 15:20 策略建议的**参考** ✓ —— 抓不到就跳过 ✓ 不阻塞任何东西 ✓ 纪律仍是我们自己的 policy ✓。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '50 14 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_thread_sync.py
+    args: []
+  output:
+    log_file: logs/wolf_thread_sync_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: false
+    pi_analysis: false
+    channels:
+    - qqbot
+
 - id: wave_advice_agent
   name: 策略建议 agent（按狼大规则 → 推 QQ）
   description: |
