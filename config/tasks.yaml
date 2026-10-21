@@ -1673,3 +1673,28 @@ tasks:
   - chain_map_daily
   retry:
     enabled: true
+
+- id: core_select_run
+  name: 'core 选股 + 风向标软 overlay（45子主题）'
+  description: '每日 18:50（统一风向标流水线后）对 45 个子主题跑 select_core：core 选股仍走 stage×role；风向标只给 position_multiplier/标注，不硬删。输出 data/core_select/latest.json 与 select_core_<date>.csv。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '50 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/run_select_core.py
+    args: []
+  output:
+    log_file: logs/core_select_run_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_bellwether_daily
+  retry:
+    enabled: true

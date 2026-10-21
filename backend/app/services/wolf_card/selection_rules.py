@@ -17,18 +17,33 @@ import pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 DATA = os.path.join(ROOT, "data")
-POOL = os.path.join(ROOT, ".dsh-tmp", "buyside", "prod_data", "stock_pool.db")
+_POOL_CANDS = [
+    os.path.join(ROOT, ".dsh-tmp", "buyside", "prod_data", "stock_pool.db"),
+    os.path.join(ROOT, "data", "stock_pool.db"),
+    "/app/data/stock_pool.db",
+]
+POOL = next((p for p in _POOL_CANDS if os.path.exists(p)), _POOL_CANDS[0])
 _C = {}
 
 
 def _bars():
     if "bars" not in _C:
-        old = pd.read_parquet(os.path.join(ROOT, ".dsh-tmp", "buyside", "bars.parquet"),
-                              columns=["ts_code", "trade_date", "high", "low", "close", "amount"])
+        old = pd.DataFrame()
+        op = os.path.join(ROOT, ".dsh-tmp", "buyside", "bars.parquet")
+        if os.path.exists(op):
+            try:
+                old = pd.read_parquet(op, columns=["ts_code", "trade_date", "high", "low", "close", "amount"])
+            except Exception:
+                old = pd.DataFrame()
         new = pd.read_parquet(os.path.join(DATA, "bars_combined.parquet"),
                               columns=["ts_code", "trade_date", "close", "amount"])
-        # 新日期只有 close/amount，high/low 用 NaN；flat_low 对 NaN 行跳过
-        df = pd.concat([old, new], ignore_index=True).drop_duplicates(["ts_code", "trade_date"], keep="first")
+        if len(old):
+            df = pd.concat([old, new], ignore_index=True).drop_duplicates(["ts_code", "trade_date"], keep="first")
+        else:
+            df = new.copy()
+        for c in ("high", "low"):
+            if c not in df: df[c] = df["close"]
+        df["high"] = df["high"].fillna(df["close"]); df["low"] = df["low"].fillna(df["close"])
         _C["bars"] = df
     return _C["bars"]
 
@@ -401,3 +416,45 @@ if __name__ == "__main__":
     ap.add_argument("--top", type=int, default=5)
     a = ap.parse_args()
     print(json.dumps(select_for_theme(a.theme, a.date, a.top), ensure_ascii=False, indent=1))
+
+
+# ── core 软 overlay（不硬删，只给仓位/排序信号）──────────────────────────
+_OVERLAY = {
+    "alive": 1.0,
+    "rotated": 0.8,
+    "warning": 0.5,
+    "stale": 0.5,
+    "dead": 0.25,
+    "unknown": 0.5,
+}
+
+
+def apply_bellwether_overlay(picks: list[dict], ctx: dict) -> list[dict]:
+    """把风向标状态作为软 overlay 挂到 core picks 上，不删除任何票。"""
+    state = str((ctx or {}).get("state") or "unknown")
+    mult = _OVERLAY.get(state, 0.5)
+    perms = (ctx or {}).get("permissions") or {}
+    for p in picks:
+        p["bellwether_state"] = state
+        p["bellwether_code"] = (ctx or {}).get("bellwether_code")
+        p["bellwether_name"] = (ctx or {}).get("bellwether_name")
+        p["bellwether_permissions"] = perms
+        p["position_multiplier"] = mult
+        p["overlay_rule"] = "bellwether_soft_overlay"
+    return picks
+
+
+def select_core(theme: str, date8: str, top: int = 5, subtheme: str | None = None) -> Dict[str, Any]:
+    """core 软 overlay 版本：选股仍走 stage×role；风向标只改仓位/标注。"""
+    r = select_for_theme(theme, date8, top=top, line="core", subtheme=subtheme)
+    try:
+        try:
+            from .bellwether_context import for_subtheme
+        except ImportError:
+            from bellwether_context import for_subtheme
+        ctx = for_subtheme(subtheme or theme, date=date8)
+    except Exception:
+        ctx = {"subtheme": subtheme or theme, "state": "unknown", "permissions": {}}
+    r["bellwether"] = ctx
+    r["picks"] = apply_bellwether_overlay(r.get("picks") or [], ctx)
+    return r
