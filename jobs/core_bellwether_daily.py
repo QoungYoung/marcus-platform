@@ -45,7 +45,16 @@ def main():
     steps = []
     if not a.skip_agent:
         steps.append(run("agent_confirm", [os.path.join(ROOT, "jobs/agent_confirm_bellwethers.py")], timeout=1200))
-    steps.append(run("state", [os.path.join(ROOT, "jobs/build_bellwether_state.py"), "--latest-only"]))
+    state_step = run("state", [os.path.join(ROOT, "jobs/build_bellwether_state.py"), "--latest-only"])
+    steps.append(state_step)
+    if state_step.get("returncode") != 0:
+        steps.append({"step": "context", "returncode": 1, "error": "state failed; skip stale context"})
+        steps.append({"step": "pgsql", "returncode": 1, "error": "state failed; skip stale pgsql"})
+        out = {"date": datetime.now().strftime("%Y%m%d"), "steps": steps,
+               "ok": False}
+        json.dump(out, open(PIPELINE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        print(json.dumps({"ok": False, "steps": [{k: s.get(k) for k in ("step","returncode","seconds","error")} for s in steps]}, ensure_ascii=False))
+        sys.exit(1)
     try:
         ctx = write_context()
         steps.append({k: ctx.get(k) for k in ("step", "n", "returncode")})

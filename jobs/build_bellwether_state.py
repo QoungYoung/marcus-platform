@@ -189,12 +189,17 @@ def main():
     ap.add_argument("--history", action="store_true")
     ap.add_argument("--latest-only", action="store_true")
     a = ap.parse_args()
-    bars = load_bars(min_date="20260601")
+    items = load_confirmed()
+    codes = set()
+    for i in items:
+        try: codes.update(sub_stocks(i["subtheme"]))
+        except Exception: pass
+    bars = load_bars(min_date="20260701", codes=codes)
     df = bars.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
     high = bars.pivot_table(index="trade_date", columns="ts_code", values="high", aggfunc="last").sort_index()
     amt = bars.pivot_table(index="trade_date", columns="ts_code", values="amount", aggfunc="last").sort_index()
     allrows = []
-    for i in load_confirmed():
+    for i in items:
         allrows += compute_history(df, high, amt, i["subtheme"], i["code"])
     out = pd.DataFrame(allrows)
     if a.date:

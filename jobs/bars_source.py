@@ -53,8 +53,16 @@ def _weekdays(start=None, end=None):
     return out
 
 
-def _fetch_daily(dates):
+def _filter_codes(df, codes):
+    if codes and df is not None and len(df):
+        return df[df.ts_code.isin(codes)].copy()
+    return df
+
+
+def _fetch_daily(dates, codes=None):
     cache = _read(API_CACHE)
+    if codes and len(cache):
+        cache = cache[cache.ts_code.isin(codes)].copy()
     have = set(cache.trade_date.astype(str)) if len(cache) else set()
     missing = [d for d in dates if d not in have]
     if missing:
@@ -63,6 +71,7 @@ def _fetch_daily(dates):
             for i, d in enumerate(missing, 1):
                 try:
                     x = pro.daily(trade_date=d, fields=FIELDS)
+                    x = _filter_codes(x, codes)
                     if x is not None and len(x): rows.append(x)
                 except Exception:
                     continue
@@ -70,11 +79,13 @@ def _fetch_daily(dates):
             _write(API_CACHE, rows)
         except Exception:
             pass
-    return _read(API_CACHE)
+    return _filter_codes(_read(API_CACHE), codes)
 
 
-def load_bars(min_date: str | None = None, latest_only: bool = False) -> pd.DataFrame:
+def load_bars(min_date: str | None = None, latest_only: bool = False, codes=None) -> pd.DataFrame:
     base = _read(BASE)
+    if codes and len(base):
+        base = base[base.ts_code.isin(codes)].copy()
     if len(base):
         dates = sorted(base.trade_date.astype(str).unique())
         if latest_only: dates = dates[-1:]
@@ -105,14 +116,14 @@ def load_bars(min_date: str | None = None, latest_only: bool = False) -> pd.Data
     # 没有基础 parquet：直接走 Tushare daily
     if latest_only:
         dates = _weekdays()[-15:]
-        api = _fetch_daily(dates)
+        api = _fetch_daily(dates, codes)
         if len(api):
             api = api.sort_values("trade_date")
             last = str(api.trade_date.max())
             return api[api.trade_date == last].copy()
         return pd.DataFrame(columns=["ts_code","trade_date","close","amount","high","low"])
     dates = _weekdays(min_date or "20260601", datetime.now().strftime("%Y%m%d"))
-    return _fetch_daily(dates)
+    return _fetch_daily(dates, codes)
 
 
 def latest_date() -> str:
