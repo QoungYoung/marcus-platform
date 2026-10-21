@@ -7,8 +7,16 @@ from __future__ import annotations
 import os, sqlite3
 from typing import Dict, Set
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# 本地：<repo>/backend/app/services/wolf_card；生产：/app/app/services/wolf_card
+_CANDS = [
+    os.path.join(_HERE, "..", "..", "..", "..", ".dsh-tmp", "buyside", "prod_data", "stock_pool.db"),
+    os.path.join(_HERE, "..", "..", "..", "..", "data", "stock_pool.db"),
+    os.path.join(_HERE, "..", "..", "..", "..", "..", "data", "stock_pool.db"),
+    "/app/data/stock_pool.db",
+]
+POOL = next((os.path.normpath(p) for p in _CANDS if os.path.exists(os.path.normpath(p))), os.path.normpath(_CANDS[0]))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-POOL = os.path.join(ROOT, ".dsh-tmp", "buyside", "prod_data", "stock_pool.db")
 
 # subtheme -> (parent, 东财概念名精确列表)
 SUBTEMES = {
