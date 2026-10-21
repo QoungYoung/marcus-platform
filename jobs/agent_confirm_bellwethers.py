@@ -8,12 +8,15 @@
   4. 写 confirmed_daily / changes / audit；agent 失败保持原表
 """
 from __future__ import annotations
-import glob, json, os, re, subprocess
+from datetime import datetime
+import glob, json, os, re, shutil, subprocess
 import numpy as np, pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import sys
-sys.path.insert(0, os.path.join(ROOT, "backend")); sys.path.insert(0, os.path.join(ROOT, "backend/app/services"))
+for _p in (os.path.join(ROOT, "backend"), os.path.join(ROOT, "backend/app/services"),
+           os.path.join(ROOT, "app/services"), ROOT):
+    if os.path.isdir(_p): sys.path.insert(0, _p)
 from wolf_card.subthemes import stocks as sub_stocks, parent
 
 OUT = os.path.join(ROOT, "data/core_p05")
@@ -136,6 +139,17 @@ def _run_agent(d, items):
 
 
 def main():
+    if not shutil.which(DSH):
+        print(f"agent unavailable: {DSH} not found; confirmed unchanged")
+        try:
+            daily = _json(DAILY) or _json(ANCHOR, {})
+            json.dump({"date": datetime.now().strftime("%Y%m%d"), "agent_error": f"{DSH} not found",
+                       "items": daily.get("items", [])},
+                      open(os.path.join(OUT, f"agent_confirm_{datetime.now().strftime('%Y%m%d')}.json"), "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=1)
+        except Exception:
+            pass
+        return
     d, items = _build_packet()
     if not items:
         print("no raw candidates"); return

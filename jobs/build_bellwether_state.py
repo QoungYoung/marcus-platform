@@ -14,7 +14,9 @@ import argparse, json, os, sys
 import numpy as np, pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "backend")); sys.path.insert(0, os.path.join(ROOT, "backend/app/services"))
+for _p in (os.path.join(ROOT, "backend"), os.path.join(ROOT, "backend/app/services"),
+           os.path.join(ROOT, "app/services"), ROOT):
+    if os.path.isdir(_p): sys.path.insert(0, _p)
 from wolf_card.subthemes import stocks as sub_stocks, parent
 from app.services.wolf_card.bellwether_context import permissions_for_state
 

@@ -25,7 +25,8 @@ def run(name, args, timeout=1800):
 
 
 def write_context():
-    sys.path.insert(0, os.path.join(ROOT, "backend"))
+    for _p in (os.path.join(ROOT, "backend"), os.path.join(ROOT, "app"), ROOT):
+        if os.path.isdir(_p): sys.path.insert(0, _p)
     from app.services.wolf_card.bellwether_context import permissions_for_state
     x = json.load(open(STATE, encoding="utf-8"))
     items = []
@@ -49,7 +50,8 @@ def main():
         ctx = write_context()
         steps.append({k: ctx.get(k) for k in ("step", "n", "returncode")})
         try:
-            sys.path.insert(0, os.path.join(ROOT, "backend"))
+            for _p in (os.path.join(ROOT, "backend"), os.path.join(ROOT, "app"), ROOT):
+                if os.path.isdir(_p): sys.path.insert(0, _p)
             from app.services.bellwether_store import upsert_items
             n = upsert_items(ctx["date"], ctx["items"], source="unified_all_subthemes")
             steps.append({"step": "pgsql", "n": n, "returncode": 0})
