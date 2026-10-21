@@ -54,28 +54,108 @@ def load(code, start=None):
     return sorted(rows, key=lambda x: x["d"])
 
 
+def _hi60(rows, i):
+    return max(x["h"] for x in rows[max(0, i - 59):i + 1])
+
+
+def _dist_hi(rows, i):
+    h = _hi60(rows, i)
+    return (rows[i]["c"] / h - 1) * 100 if h else 0.0
+
+
+def _ema(vals, n):
+    k = 2.0 / (n + 1)
+    out, e = [], vals[0]
+    for v in vals:
+        e = v * k + e * (1 - k)
+        out.append(e)
+    return out
+
+
+def _macd_dif(rows):
+    cs = [x["c"] for x in rows]
+    e12, e26 = _ema(cs, 12), _ema(cs, 26)
+    return [a - b for a, b in zip(e12, e26)]
+
+
 def structures(rows, i):
-    """→ [(kind, direction, note)] ；i 必须是已收盘的那根 ✓"""
+    """→ [(kind, action, note)] ；action ∈ reduce(减法位 ✗) / add(加法位 ✓) / up(向上结构) / down(向下 ✗) / neutral
+
+    ★ 方向口径（2026-04-08 狼大原话 ✓）：
+      「**反弹之后的高位底分型，是一个减法的位置；反之破低点之后的顶分型，是一个加法位**」
+      ⇒ 分型**按位置翻转** ✓，不是"底分型=买"✗。这也解释了统计上底分型 5 日胜率仅 43% ✓。
+    """
     out = []
-    if i < 4:
+    if i < 25:
         return out
     a, b, c = rows[i - 2], rows[i - 1], rows[i]
-    # 底分型（向上）
+    dh = _dist_hi(rows, i)
+
+    # ① 底分型（按位置 ✓）
     if b["l"] < a["l"] and b["l"] < c["l"] and c["c"] > a["c"]:
-        out.append(("底分型", "up", "低点 %.2f（跌破即失效 ✗）" % b["l"]))
-    # 红三兵（向上）
+        if dh >= -5:
+            out.append(("底分型", "reduce", "高位底分型 ⇒ **减法位** ✗（他 04-08 原话）；低点 %.2f 跌破即失效" % b["l"]))
+        else:
+            out.append(("底分型", "neutral", "低位底分型 ⇒ 观察（他的减法位只在**高位**成立 ✓）；低点 %.2f" % b["l"]))
+
+    # ② 红三兵（统计上唯一有正向证据的 ✓）
     if all(x["c"] > x["o"] for x in (a, b, c)) and c["c"] > b["c"] > a["c"]:
-        out.append(("红三兵", "up", "三连阳且收盘逐日抬高 ✓"))
-    # 岛反（向上，罕见）
-    if i >= 2 and rows[i - 1]["h"] < rows[i - 2]["l"] and c["l"] > rows[i - 1]["h"]:
+        out.append(("红三兵", "up", "三连阳且收盘抬高 ✓（长样本 10 日胜率 55% vs 基线 51% ✓）"))
+
+    # ③ 岛反
+    if rows[i - 1]["h"] < rows[i - 2]["l"] and c["l"] > rows[i - 1]["h"]:
         out.append(("岛反", "up", "先向下跳空、再向上跳空 ✓"))
-    # 低位顶分破位（向下）
+
+    # ④ 顶分型 / 破位（按位置 ✓）
     for k in range(i - 3, i):
-        if k - 1 < 0 or rows[k]["h"] > rows[k - 1]["h"] and rows[k]["h"] > rows[k + 1]["h"] and c["c"] < rows[k]["l"]:
-            hi60 = max(x["h"] for x in rows[max(0, i - 59):i + 1])
-            if hi60 and (c["c"] / hi60 - 1) * 100 <= -5.0:
-                out.append(("低位顶分破位", "down", "跌破 %.2f（顶分低点 ✗）" % rows[k]["l"]))
+        if k - 1 < 0 or k + 1 >= len(rows):
+            continue
+        if rows[k]["h"] > rows[k - 1]["h"] and rows[k]["h"] > rows[k + 1]["h"] and c["c"] < rows[k]["l"]:
+            if dh <= -15:
+                out.append(("顶分型破位", "add",
+                            "**低位**顶分型破位 ⇒ **加法位** ✓（他 04-08 原话）；顶分低点 %.2f" % rows[k]["l"]))
+            else:
+                out.append(("顶分型破位", "reduce", "**高位**顶分破位 ⇒ 撤/减 ✗（他 05-08 原话：破位就撤大部分）；顶分低点 %.2f" % rows[k]["l"]))
             break
+
+    # ⑤ 反包/吞没（29 次 ✓ 他常提）
+    if c["c"] > c["o"] and b["c"] < b["o"] and c["o"] <= b["c"] and c["c"] >= b["o"]:
+        out.append(("向上反包", "up", "阳线实体吞没前一根阴线 ✓"))
+    if c["c"] < c["o"] and b["c"] > b["o"] and c["o"] >= b["c"] and c["c"] <= b["o"]:
+        out.append(("向下反包", "down", "阴线实体吞没前一根阳线 ✗"))
+
+    # ⑥ 平台/箱体（17+6 次 ✓）+ 突破
+    seg = rows[i - 19:i + 1]
+    lo20, hi20 = min(x["l"] for x in seg), max(x["h"] for x in seg)
+    if lo20 and (hi20 / lo20 - 1) * 100 <= 6:
+        if c["c"] > hi20 * 0.999:
+            out.append(("箱体上破", "up", "20 日箱体（%.2f~%.2f）向上突破 —— 需量能确认 ✓" % (lo20, hi20)))
+        elif c["c"] < lo20 * 1.001:
+            out.append(("箱体下破", "down", "20 日箱体（%.2f~%.2f）向下破位 ✗" % (lo20, hi20)))
+        else:
+            out.append(("箱体", "neutral", "20 日箱体 %.2f~%.2f（振幅 ≤6%%）" % (lo20, hi20)))
+
+    # ⑦ 跳空缺口（47 次 ✓ 他说"上方两个缺口"）
+    if c["l"] > b["h"]:
+        out.append(("向上跳空", "up", "缺口 %.2f~%.2f（未回补 ✓）" % (b["h"], c["l"])))
+    if c["h"] < b["l"]:
+        out.append(("向下跳空", "down", "缺口 %.2f~%.2f（未回补 ✗）" % (c["h"], b["l"])))
+
+    # ⑧ 长下影（3 次 ✓ 支撑信号）
+    body = abs(c["c"] - c["o"])
+    lower = min(c["o"], c["c"]) - c["l"]
+    rng = c["h"] - c["l"]
+    if rng > 0 and lower >= max(body * 2, rng * 0.4) and lower > 0:
+        out.append(("长下影", "neutral", "下影 %.0f%% 全幅 ⇒ 下方有承接 ✓" % (100.0 * lower / rng)))
+
+    # ⑨ MACD 底背离（16 次 ✓ 需算 DIF）
+    try:
+        dif = _macd_dif(rows[:i + 1])
+        lo_prev = min(range(max(0, i - 40), i - 5), key=lambda k: rows[k]["l"])
+        if rows[i]["l"] <= rows[lo_prev]["l"] and dif[i] > dif[lo_prev] and c["c"] > c["o"]:
+            out.append(("MACD 底背离", "up", "价格新低而 DIF 抬高 ✓（他说的底背离 ✓）"))
+    except Exception:
+        pass
     return out
 
 
@@ -216,8 +296,9 @@ def main():
 
     # ★ 推送正文**只有三行结构** ✓（统计/上下文只进日志 ✓ —— 2026-10-21「提示就该短」✓）
     out = ["🐺 结构提示（%s）" % today]
+    MARK = {"reduce": "✗减法位", "add": "✓加法位", "up": "▲向上", "down": "▼向下", "neutral": "·观察"}
     for name, kind, direction, note in hits:
-        out.append("· %s %s：%s —— %s" % (name, "▲" if direction == "up" else "▼", kind, note))
+        out.append("· %s：%s【%s】—— %s" % (name, kind, MARK.get(direction, direction), note))
     out.append("（提示而已 ✓ 不是买卖信号 ✗）")
     text = "\n".join(out)
     print("\n" + text)
