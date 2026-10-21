@@ -563,6 +563,12 @@ class TMonitor:
                     self._check_logic_time_stop()  # ① 后半句: 13日内未碰前高→逻
                     self._check_ambush_discipline()  # 埋伏纪律: 固定 N 日 + 宽止损（默认关 ✓）
                     self._check_intraday_t_stop()  # 日内T仓紧止损（默认关 ✓；狼大 2026-02-02 口径）辑时间离场(狼大2026-03-05)
+                    # 低位超额反弹线（paper-only）：日期闸 + 方向强 + 入场日 10:00/10:30 日内 trigger
+                    try:
+                        from app.services.wolf_low_position_line import tick as _lowpos_tick
+                        _lowpos_tick()
+                    except Exception as _e_lowpos:
+                        print(f"[TMonitor] 低位超额线异常: {str(_e_lowpos)[:160]}")
                 else:
                     time.sleep(60)  # 非交易时段低频等待
                     continue
