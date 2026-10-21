@@ -69,9 +69,12 @@ def _chain_roles(date8, theme):
 def _build_packet():
     b = pd.read_parquet(os.path.join(ROOT, "data/bars_combined.parquet"),
                         columns=["ts_code", "trade_date", "close", "amount"])
-    h = pd.read_parquet(os.path.join(ROOT, ".dsh-tmp/buyside/bars.parquet"),
-                        columns=["ts_code", "trade_date", "high"])
-    b = b.merge(h, on=["ts_code", "trade_date"], how="left")
+    hp = os.path.join(ROOT, ".dsh-tmp/buyside/bars.parquet")
+    if os.path.exists(hp):
+        h = pd.read_parquet(hp, columns=["ts_code", "trade_date", "high"])
+        b = b.merge(h, on=["ts_code", "trade_date"], how="left")
+    else:
+        b["high"] = b["close"]
     close = b.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
     high = b.pivot_table(index="trade_date", columns="ts_code", values="high", aggfunc="last").sort_index()
     amt = b.pivot_table(index="trade_date", columns="ts_code", values="amount", aggfunc="last").sort_index()

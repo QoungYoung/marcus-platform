@@ -189,9 +189,12 @@ def main():
     a = ap.parse_args()
     base = pd.read_parquet(os.path.join(ROOT, "data/bars_combined.parquet"),
                            columns=["ts_code", "trade_date", "close", "amount"])
-    hb = pd.read_parquet(os.path.join(ROOT, ".dsh-tmp/buyside/bars.parquet"),
-                         columns=["ts_code", "trade_date", "high"])
-    bars = base.merge(hb, on=["ts_code", "trade_date"], how="left")
+    hp = os.path.join(ROOT, ".dsh-tmp/buyside/bars.parquet")
+    if os.path.exists(hp):
+        hb = pd.read_parquet(hp, columns=["ts_code", "trade_date", "high"])
+        bars = base.merge(hb, on=["ts_code", "trade_date"], how="left")
+    else:
+        bars = base.copy(); bars["high"] = bars["close"]
     df = bars.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
     high = bars.pivot_table(index="trade_date", columns="ts_code", values="high", aggfunc="last").sort_index()
     amt = bars.pivot_table(index="trade_date", columns="ts_code", values="amount", aggfunc="last").sort_index()
