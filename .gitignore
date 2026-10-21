@@ -33,13 +33,8 @@ Thumbs.db
 logs/
 *.log
 
-# Data (runtime generated)
-data/m5_local/          # 标的 m5 预取缓存（jobs/fetch_m5_legs.py 可重跑生成）
-data/*.db
-data/*.sqlite
-data/*.json
-data/*.jsonl
-data/strategy_history/
+# Data (runtime generated; 125G 本地数据，不同步/不打包)
+data/
 # keep data directory structure
 !data/.gitkeep
 
@@ -117,3 +112,19 @@ backend/data/
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite
+
+# ── 2026-10-21：生产侧数据/产物噪声（长期让 git status 变脏 ✗ 会挡住 git pull）──
+data/_archive/
+data/_waveagent_backup/
+data/_bt_pg/
+data/decision/
+data/low_position_line/
+data/main_business/
+data/wave_state_history/
+data/指数数据/
+data/*.bak-*
+data/macro_briefing_*.md
+data/strategy_summary_*.md
+data/*.parquet
+.deploy/
+jobs/.diag_*.py
