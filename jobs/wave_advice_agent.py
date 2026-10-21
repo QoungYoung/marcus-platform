@@ -36,48 +36,34 @@ CAND = [("002463.SZ", "沪电股份", "PCB"), ("603228.SH", "景旺电子", "PCB
         ("603688.SH", "石英股份", "材料"), ("603938.SH", "三孚股份", "材料"),
         ("600206.SH", "有研新材", "材料")]
 
-# ★ 规则文件放 `config/` 而不是 `data/` —— `data/` 被 gitignore ✗ 部署不到生产 ✗；
-#   config/ 是入库的 ✓ 改完 push 即生效 ✓。可用 WOLF_RULES_FILE 覆盖 ✓。
-RULES_FILE = (os.environ.get("WOLF_RULES_FILE") or "").strip() or "config/wolf_rules.json"
-RULES_MAX_AGE_DAYS = 3          # ★ 规则超过 3 个自然日未更新 ⇒ 推送里必须标"可能过期" ✗
-RULES_FALLBACK = '''（内置快照 · 无外部文件）只用大方向：自救段不是反转；要么别做、要么别追；
-方向只看 PCB / 二线光 / 半导体材料；放量 2000E + 银行下跌才补 T；反抽到缺口 + 量萎靡才卖。'''
+# ★ 2026-10-21：**彻底去掉帖子/个人内容** ✗（用户：万一他哪天不更新，我们就完蛋了 ✓）
+#   改为读 `config/wave_advice_policy.json` —— **我们自己的操作纪律** ✓（入库 ✓ 版本化 ✓ 每条带出处 ✓）。
+#   每条的来源都是本项目自己的产物（档位表 / tier_target_pct / E1~E5 实验结果 ✓），不依赖任何论坛 ✓。
+POLICY_FILE = (os.environ.get("WAVE_ADVICE_POLICY") or "").strip() or "config/wave_advice_policy.json"
+
+POLICY_FALLBACK = """（内置兜底 · 无外部文件）
+P1 operation=defense ⇒ 买类禁、卖类不受限；总仓 ≤30%
+P2 买侧：候选池（PCB/二线光/半导体材料）且 距MA20 ≥ -3% ∧ 量比 ≥1.2 才小仓试探，否则观察
+P3 卖侧：反抽进上方未回补缺口且量比<0.9 ⇒ 减；跌破 MA20/分型低点 ⇒ 减
+P4 结构只作观察锚（实测无方向优势 ✗），红三兵 10 日唯一弱正向 ✓
+P5 取不到就写「缺」✗ 不猜 P6 只读分析 ✓ 不是投资建议"""
 
 
-def load_rules():
-    """→ (rules_text, meta{updated, age_days, stale, stance}) ✓
-
-    为什么这么做（用户 2026-10-21 指出）：把他的话**硬编码进 prompt 只是快照** ✗ ——
-    「今天的话不能指导明天」✓。改成：规则放 `data/wolf_rules.json`（**每条带日期** ✓），
-    由 harness 侧读帖后更新 ✓（NGA 直连 403 ✗ 无法 cron 抓取 ✓）；agent 每次读最新 ✓，
-    **超过 RULES_MAX_AGE_DAYS 天未更新 ⇒ prompt 与推送都明确标注「可能过期」** ✗，
-    避免拿旧立场指导新行情 ✓。
-    """
-    import datetime as _dt
+def load_policy():
+    """→ (policy_text, meta{version, n, src}) ✓"""
     try:
-        d = json.load(open(RULES_FILE, encoding="utf-8"))
-        rules = d.get("rules") or []
-        if not rules:
-            raise RuntimeError("empty rules")
-        latest = max(str(r.get("date") or "") for r in rules)
-        try:
-            age = (_dt.date.today() - _dt.datetime.strptime(latest, "%Y%m%d").date()).days
-        except Exception:
-            age = 99
-        lines = ["狼大（-阿狼-）的规则（**文件驱动 ✓ 每条带日期 ✓**，按日期从新到旧；过期的要打折扣看）："]
-        for r in sorted(rules, key=lambda x: str(x.get("date") or ""), reverse=True):
-            lines.append("  [%s]（%s）%s" % (r.get("date"), r.get("tag") or "-", r.get("text") or ""))
-        if d.get("stance"):
-            lines.append("  ★ 他当前的立场（综合）：%s" % d["stance"])
-        if age > RULES_MAX_AGE_DAYS:
-            lines.insert(1, "  ⚠️ **注意：这份规则已 %d 天未更新（最新 %s）⇒ 可能已过期** ✗"
-                            " —— 涉及方向的建议要打折扣，只作参考。" % (age, latest))
-        return "\n".join(lines), {"updated": latest, "age_days": age,
-                                  "stale": age > RULES_MAX_AGE_DAYS, "stance": d.get("stance") or ""}
+        d = json.load(open(POLICY_FILE, encoding="utf-8"))
+        items = d.get("policy") or []
+        if not items:
+            raise RuntimeError("empty policy")
+        lines = ["**本项目自己的操作纪律**（不引用任何个人/论坛 ✓ 每条带编号便于引用）："]
+        for it in items:
+            lines.append("  [%s] %s：%s" % (it.get("id"), it.get("topic") or "", it.get("text") or ""))
+        lines.append("  （来源：%s）" % ("；".join(d.get("sources") or [])[:400]))
+        return "\n".join(lines), {"version": d.get("version") or "", "n": len(items)}
     except Exception as e:
-        print("[wave-advice] 读规则文件失败（%s）⇒ 用内置快照 ✗" % str(e)[:80])
-        return RULES_FALLBACK, {"updated": "", "age_days": 999, "stale": True, "stance": ""}
-
+        print("[wave-advice] 读政策文件失败（%s）⇒ 用内置兜底 ✗" % str(e)[:80])
+        return POLICY_FALLBACK, {"version": "", "n": 0}
 
 
 def load(code, fn="index_daily", start="20260101"):
@@ -100,7 +86,7 @@ def open_gaps(rs, n=60):
 
 
 def facts():
-    f = {"date": "", "indexes": {}, "candidates": [], "structures": [], "wave": None}
+    f = {"date": "", "indexes": {}, "candidates": [], "wave": None}
     sh = None
     for code, name in INDEXES:
         rs = load(code)
@@ -114,8 +100,7 @@ def facts():
             "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,
             "dist_hi60_pct": round((rs[-1]["c"] / hi60 - 1) * 100, 1),
             "open_gaps": open_gaps(rs)[-3:],
-            "structures": [{"kind": k, "action": a} for k, a, _ in structures(rs, len(rs) - 1)],
-        }
+            "structures": [{"kind": k, "action": a} for k, a, _ in structures(rs, len(rs) - 1)]}
         if code == "000001.SH":
             sh = rs
     try:
@@ -140,7 +125,6 @@ def facts():
         except Exception:
             continue
     f["candidates"].sort(key=lambda x: -(x.get("dist_ma20_pct") or -99))
-    # 当前浪型档位（生产接口 ✓ 读不到就缺）
     try:
         base = (os.environ.get("MARCUS_API_URL") or "http://localhost:8000/api/v1").rstrip("/")
         with urllib.request.urlopen(base + "/wave/state", timeout=20) as r:
@@ -159,7 +143,7 @@ def rules_advice(f):
     in_gap = [g for g in gaps if cl and g["lo"] <= cl <= g["hi"]]
     near_gap = [g for g in gaps if cl and cl < g["lo"] and (g["lo"] / cl - 1) * 100 <= 2.0]
     if in_gap and (vx or 9) < 0.9:
-        out.append("**减**：上证已反抽进缺口 %s 且量能萎靡（量比 %.2f）✓ 对应他『反抽到缺口+量萎靡就卖』" %
+        out.append("**减**：上证已反抽进缺口 %s 且量能萎靡（量比 %.2f）✓ 依据 [P3] ①" %
                    ("/".join("%.0f~%.0f" % (g["lo"], g["hi"]) for g in in_gap), vx or 0))
     elif near_gap:
         out.append("**盯卖点**：上方缺口 %s 就在 %.1f%% 内 ✓ 反抽进去且量比 <0.9 ⇒ 减" % (
@@ -169,20 +153,20 @@ def rules_advice(f):
         out.append("卖侧：没有触及上方缺口 ✓ 按纪律继续持有/借反抽减")
     bk, dv = f.get("bank_rel5"), f.get("dividend_rel5")
     if dv is not None and dv <= -1:
-        out.append("**换强**：红利 5 日相对 %+.2f%%（被压 ✓）⇒ 可换到他说的三方向；银行 %s" % (
+        out.append("**换强**：红利 5 日相对 %+.2f%%（弱于大盘 ✓）⇒ 可换到候选方向（PCB/二线光/材料 ✓）；银行 %s" % (
             dv, ("%+.2f%%（没被压，先不动）" % bk) if bk is not None else "缺"))
     cond_fang = (vx or 0) >= 1.2 and (bk is not None and bk <= -1.0)
     if cond_fang:
-        out.append("**可补 T**：指数放量（量比 %.2f）+ 银行下跌（%+.2f%%）⇒ 两个条件都满足 ✓（注：闸门现为 defense，买类需你手动确认）" % (vx, bk))
+        out.append("**可加仓（小仓）**：量比 %.2f + 银行 %+.2f%% ⇒ 两个条件满足 ✓（注：闸门现为 defense，买类需你手动确认 [P1]）" % (vx, bk))
     else:
-        out.append("**不补 T**：他要求『放量 2000E + 银行下跌』—— 今天量比 %s、银行 %s ⇒ 不满足 ✗" % (
+        out.append("**不补 T**：加仓需 量比 ≥1.2 且 银行下跌 —— 今天量比 %s、银行 %s ⇒ 不满足 [P1][P2] ✗" % (
             ("%.2fx" % vx) if vx else "缺", ("%+.2f%%" % bk) if bk is not None else "缺"))
     top = [c for c in (f.get("candidates") or []) if (c.get("dist_ma20_pct") or -99) > -3]
     if top:
-        out.append("**观察首选**：%s（距 MA20 %+.2f%%，量比 %.2f）—— 站上 MA20 且量比 ≥1.2 才谈右侧" % (
+        out.append("**观察首选**：%s（距 MA20 %+.2f%%，量比 %.2f）—— [P2] 站上 MA20 且量比 ≥1.2 才谈试探" % (
             "、".join("%s" % c["name"] for c in top[:2]), top[0]["dist_ma20_pct"], top[0].get("volx") or 0))
     else:
-        out.append("**候选全在 MA20 下方** ⇒ 按他『要么别做、要么别追』⇒ 只观察 ✗")
+        out.append("**候选全在 MA20 下方** ⇒ 按 [P2] 只观察 ✗（宁可错过，不追高）")
     return out
 
 
@@ -199,14 +183,13 @@ def http_json(url, payload=None, timeout=300):
         return json.loads(r.read().decode("utf-8", "ignore"))
 
 
-def llm_advice(f, rules_text=None):
-    _rt, _meta = (None, None)
-    if rules_text is None:
-        rules_text, _meta = load_rules()
+def llm_advice(f, policy_text=None):
+    if policy_text is None:
+        policy_text, _m = load_policy()
     prompt = [
-        "你是严谨的 A 股复盘助手。请**严格按下面这位交易者的规则**给建议，不要自创逻辑，不要预测点位。",
-        "规则若标注了日期或『可能过期』，请优先采纳**最近 3 天**的；与旧规则冲突时以新的为准。",
-        rules_text,
+        "你是严谨的 A 股复盘助手。请**严格按下面这套纪律**给建议，不要自创逻辑，不要预测点位。",
+        "每条建议必须标注引用的纪律编号（如 [P2]）✓；取不到的字段写「缺」✗ 不要猜。",
+        policy_text,
         "",
         "=== FACTS（工具取数，确定性 ✓ 缺失就写「缺」）===",
         json.dumps(f, ensure_ascii=False)[:4000],
@@ -258,11 +241,9 @@ def main():
     args = ap.parse_args()
 
     f = facts()
-    rules_text, rmeta = load_rules()
+    policy_text, pmeta = load_policy()
     rules = rules_advice(f)
-    print("规则：最新 %s ｜ 距今 %d 天 ｜ %s ｜ stance=%s" % (
-        rmeta["updated"] or "?", rmeta["age_days"],
-        "⚠️ 可能过期 ✗" if rmeta["stale"] else "新鲜 ✓", rmeta["stance"] or "-"))
+    print("纪律：%d 条 ✓ 版本 %s ｜（**不依赖任何论坛/个人** ✓）" % (pmeta["n"], pmeta["version"] or "-"))
     print("事实：指数 %d 个 ✓ 候选 %d 个 ✓ 浪型 %s" % (
         len(f.get("indexes") or {}), len(f.get("candidates") or []),
         "有" if (f.get("wave") or {}).get("operation") else "缺"))
@@ -271,7 +252,7 @@ def main():
     body, used = None, False
     if not args.no_llm:
         try:
-            body = llm_advice(f, rules_text)
+            body = llm_advice(f, policy_text)
             used = True
             print("\n【agent 版】\n" + body)
         except Exception as e:
@@ -280,9 +261,7 @@ def main():
     wave = (f.get("wave") or {})
     head = "🐺 策略建议（%s）｜ 浪型 %s·%s·%s" % (
         f.get("date"), wave.get("level") or "缺", wave.get("sub_level") or "", wave.get("operation") or "")
-    if rmeta["stale"]:
-        head += "\n⚠️ 他的规则已 %d 天未更新（最新 %s）⇒ 方向建议打折扣 ✗" % (
-            rmeta["age_days"], rmeta["updated"] or "?")
+    head += "\n（纪律：本项目自有 %d 条 ✓ 不依赖任何个人/论坛）" % pmeta["n"]
     if used:
         text = head + "\n\n" + body
     else:
