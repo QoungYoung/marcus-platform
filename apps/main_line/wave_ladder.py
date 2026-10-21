@@ -1090,6 +1090,15 @@ def write_wave_state(asof: Optional[str] = None, dated: bool = False,
             pd = os.path.join(DATA, "wave_state_%s-%s-%s.json" % (d[:4], d[4:6], d[6:8]))
             json.dump(ws, open(pd + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
             os.replace(pd + ".tmp", pd)
+        # ★ 2026-10-21（用户**第二次**困惑「10-21 怎么没有浪型记录」）：再写一份按**服务交易日**命名的副本 ✓
+        #   根因：上面的 dated 件按「数据日期」命名 ✗（10-21 早上写出的档叫 wave_state_2026-10-20.json），
+        #        用户按"今天"找会以为没更新 ✗。这份副本**内容完全相同**，只是文件名用 session_date ✓，
+        #        两者可互为校验（同一天应当一致 ✓）。**不动 dated 命名**（回测 sim8 依赖它 ✗）。
+        _sd = str(ws.get("session_date") or "")
+        if _sd and len(_sd) >= 8:
+            ps = os.path.join(DATA, "wave_state_session_%s-%s-%s.json" % (_sd[:4], _sd[4:6], _sd[6:8]))
+            json.dump(ws, open(ps + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            os.replace(ps + ".tmp", ps)
         return p
     except Exception as _e:
         _silent_alert("wave_ladder.py:write_wave_state", _e)
