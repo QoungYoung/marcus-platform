@@ -45,7 +45,7 @@ def main():
     steps = []
     if not a.skip_agent:
         steps.append(run("agent_confirm", [os.path.join(ROOT, "jobs/agent_confirm_bellwethers.py")], timeout=1200))
-    steps.append(run("state", [os.path.join(ROOT, "jobs/build_bellwether_state.py"), "--history"]))
+    steps.append(run("state", [os.path.join(ROOT, "jobs/build_bellwether_state.py"), "--latest-only"]))
     try:
         ctx = write_context()
         steps.append({k: ctx.get(k) for k in ("step", "n", "returncode")})

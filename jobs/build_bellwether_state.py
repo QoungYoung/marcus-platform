@@ -187,6 +187,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default="")
     ap.add_argument("--history", action="store_true")
+    ap.add_argument("--latest-only", action="store_true")
     a = ap.parse_args()
     bars = load_bars(min_date="20260601")
     df = bars.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
