@@ -41,11 +41,12 @@ INDEXES = [
     ("000688.SH", "科创50"),
 ]
 START = "20260101"
+STAT_START = "20160101"     # ★ 统计用长窗口 ✓（预警用短窗口 ✓ 节省取数）
 HOLD = (5, 10)
 
 
-def load(code):
-    df = relay_query("index_daily", ts_code=code, start_date=START, end_date="20261031")
+def load(code, start=None):
+    df = relay_query("index_daily", ts_code=code, start_date=(start or START), end_date="20261031")
     rows = []
     for _, r in (df.iterrows() if df is not None else []):
         rows.append({"d": str(r["trade_date"]), "o": float(r["open"]), "h": float(r["high"]),
@@ -149,27 +150,44 @@ def main():
     bmap, brow = {}, [x["d"] for x in bk]
 
     if args.stats:
-        print("历史统计（%s ~ %s，%d 根 ✓）—— 判据同线上 ✓，含基线 ✓" % (sh[0]["d"], sh[-1]["d"], len(sh)))
-        hits = {}
-        base = []
-        for i in range(25, len(sh) - max(HOLD)):
-            base.append(i)
-            for kind, _d, _n in structures(sh, i):
-                hits.setdefault(kind, []).append(i)
+        pool = [("000001.SH", "上证"), ("399006.SZ", "创业板"), ("000688.SH", "科创50")]
+        print("历史统计（多指数合并 ✓ %s 起 ✓）—— 判据与线上一致 ✓，含基线 ✓" % STAT_START)
+        agg = {}          # kind -> [excess returns]  （超额 = 结构日之后收益 - 同日全样本均值 ✓）
+        base_all = []
+        for code, name in pool:
+            rows = load(code, STAT_START)
+            if len(rows) < 80:
+                print("  %s 数据不足 ✗ %d" % (name, len(rows)))
+                continue
+            base_idx = list(range(25, len(rows) - max(HOLD)))
+            rets = {n: {i: (rows[i + n]["c"] / rows[i]["c"] - 1) * 100 for i in base_idx} for n in HOLD}
+            for n in HOLD:
+                base_all.extend(rets[n].values())
+            kinds = {}
+            for i in base_idx:
+                for kind, _d, _n in structures(rows, i):
+                    kinds.setdefault(kind, []).append(i)
+            for kind, idxs in kinds.items():
+                for n in HOLD:
+                    b = statistics.mean(rets[n].values())
+                    agg.setdefault((kind, n), []).extend([rets[n][i] for i in idxs])
+            print("  %s：%d 根 ✓ %s ~ %s（结构日 %s）" % (
+                name, len(rows), rows[0]["d"], rows[-1]["d"],
+                {k: len(v) for k, v in sorted(kinds.items())}))
+        print()
         for n in HOLD:
-            def ret(i):
-                return (sh[i + n]["c"] / sh[i]["c"] - 1) * 100
-            b = [ret(i) for i in base]
-            print("\n【%d 日后】基线：均值 %+.2f%% ｜ 上涨占比 %.0f%%" % (
-                n, statistics.mean(b), 100.0 * sum(1 for x in b if x > 0) / len(b)))
-            for kind, idxs in sorted(hits.items()):
-                rs = [ret(i) for i in idxs]
-                if not rs:
+            b = [x for x in base_all if x == x]
+            print("【%d 日后】基线：均值 %+.2f%% ｜ 上涨占比 %.0f%%（n=%d）" % (
+                n, statistics.mean(b), 100.0 * sum(1 for x in b if x > 0) / len(b), len(b)))
+            for (kind, nn), rs in sorted(agg.items()):
+                if nn != n or not rs:
                     continue
-                print("  %-10s n=%-3d 均值 %+.2f%% ｜ 上涨占比 %.0f%% ｜ 最大回撤后 %.1f%%" % (
-                    kind, len(rs), statistics.mean(rs),
-                    100.0 * sum(1 for x in rs if x > 0) / len(rs),
-                    min(rs)))
+                up = 100.0 * sum(1 for x in rs if x > 0) / len(rs)
+                base_up = 100.0 * sum(1 for x in b if x > 0) / len(b)
+                print("  %-12s n=%-4d 均值 %+.2f%% ｜ 上涨 %.0f%% ｜ 差基线 %+.2f%% ｜ %s" % (
+                    kind, len(rs), statistics.mean(rs), up, up - base_up,
+                    "★ 有效（同向且幅度差 ≥3%%）" if (up - base_up >= 3 and statistics.mean(rs) > 0)
+                    else ("✗ 反向" if up - base_up <= -3 else "≈ 基线 ✓ 无优势")))
         return 0
 
     latest = sh[-1]
@@ -198,9 +216,12 @@ def main():
     #   底分型 5 日均值 -0.81%/上涨 30% ✗（**不如基线** 47%）；红三兵 +0.06%/56% ✓（≈基线）；
     #   低位顶分破位 +0.46%/63% ✓（反直觉 ✓）；岛反 0 次（稀有 ✓）
     #   ⇒ 结构**只能当"这一段结束"的时间标记** ✓，**不是买卖信号** ✗（别把预警当方向 ✗）
-    lines.append("⚠️ 统计（2026-01~10 上证，n=16~30）：底分型 5 日 -0.81%/上涨30%（不如基线47%✗）｜"
-                 "红三兵 +0.06%/56%（≈基线）｜顶分破位 +0.46%/63%（反直觉）；"
-                 "⇒ 本预警只是「这一段可能结束」的时间标记 ✓ **不是买卖信号** ✗")
+    lines.append("⚠️ 长样本统计（2016 起，上证+创业板+科创50 合并，n=623~1466 ✓）：")
+    lines.append("   · **红三兵**：10 日均值 +0.77%／上涨 55%（基线 51%）⇒ **唯一有微弱正优势 ✓**")
+    lines.append("   · **底分型**：5 日均值 -0.08%／上涨 47%（基线 51%）⇒ **短线反而偏跌 ✗ 别当买点**")
+    lines.append("   · **低位顶分破位**：≈ 基线 ⇒ 没有杀伤力 ✗（别当卖出信号）")
+    lines.append("   · **岛反**：n=5 太稀有 ⇒ 只能当事件通知 ✓")
+    lines.append("⇒ 本预警是「这一段可能结束」的**时间标记** ✓；方向请以红三兵为参考、其余不作买卖依据 ✗")
     text = "\n".join(lines)
     print(text)
     if args.dry:
