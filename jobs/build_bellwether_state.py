@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""P1：科技子主题风向标 v3（高点递减 + 放量 + 接力/广度）。
+"""P1：全部子主题风向标 v3（高点递减 + 放量 + 接力/广度）。
 
 语料依据：
   · 2021-08-09「一次比一次低，放量的情况就撤」
@@ -19,8 +19,8 @@ from wolf_card.subthemes import stocks as sub_stocks, parent
 from app.services.wolf_card.bellwether_context import permissions_for_state
 
 OUT = os.path.join(ROOT, "data/core_p1"); os.makedirs(OUT, exist_ok=True)
-CONFIRMED = os.path.join(ROOT, "data/core_p05/subtheme_bellwethers_confirmed.json")
-TECH_PARENTS = {"AI/算力/科技", "半导体/芯片", "机器人/智能制造"}
+REGISTRY = os.path.join(ROOT, "data/core_p05/confirmed_daily.json")
+FALLBACK = os.path.join(ROOT, "config/core_p05_confirmed.json")
 _CHAIN_CACHE = {}
 
 
@@ -60,8 +60,10 @@ def _chain_roles(date8, theme):
 
 
 def load_confirmed():
-    x = json.load(open(CONFIRMED, encoding="utf-8"))
-    return [i for i in x.get("items", []) if parent(i["subtheme"]) in TECH_PARENTS]
+    """全部 45 个子主题：优先当日 agent 确认，其次确认锚。"""
+    path = REGISTRY if os.path.exists(REGISTRY) else FALLBACK
+    x = json.load(open(path, encoding="utf-8"))
+    return x.get("items", [])
 
 
 def _breadth(df, codes, date8):
@@ -209,7 +211,7 @@ def main():
         r["alive"] = bool(r.get("state") == "alive")
         r["permissions"] = permissions_for_state(r.get("state"), r.get("successor_code"))
         items.append(r)
-    json.dump({"date": latest_date, "source": "confirmed_tech_highs_volume_successor_v3",
+    json.dump({"date": latest_date, "source": "all_subthemes_confirmed_highs_volume_successor_v3",
                "usage": "environment_gate_not_alpha", "items": items},
               open(os.path.join(OUT, "bellwether_state_latest.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=1)

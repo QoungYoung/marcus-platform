@@ -1501,7 +1501,7 @@ tasks:
 - id: core_p05_bellwether_refresh
   name: '全部子主题风向标刷新（core P0.5 proxy）'
   description: '每日 18:30（chain_map 18:15 之后）重算全部子主题（科技 + 医药/电力/军工/新能源/汽车/资源/金融/消费/农业/基建/传媒）的当日风向标 proxy。写 data/core_p05/latest.json 与历史 CSV；不覆盖人工确认表，只更新 proxy。'
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: '30 18 * * mon-fri'
@@ -1526,7 +1526,7 @@ tasks:
 - id: core_p1_bellwether_state
   name: '科技子主题风向标状态（bellwether_alive）'
   description: '每日 18:35（风向标刷新 18:30 后）计算科技子主题的 alive/warning/dead/rotated/stale/unknown 日频状态，写 data/core_p1/bellwether_state_latest.json 与 bellwether_history.csv。只做状态，不下单。'
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: '35 18 * * mon-fri'
@@ -1576,7 +1576,7 @@ tasks:
 - id: core_p05_agent_confirm
   name: 'DSH agent 每日确认风向标'
   description: '每日 18:45 由 DSH headless agent 代人工确认 45 个子主题：读原始日线+chain_map 候选，不读 proxy；默认 keep，只有真接力才 switch；switch 必须在 raw_candidates 且创新高、相对旧风向标强。agent 失败保持确认表不变。'
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: '45 18 * * mon-fri'
@@ -1595,5 +1595,30 @@ tasks:
     - qqbot
   depends_on:
   - core_p05_bellwether_refresh
+  retry:
+    enabled: true
+
+- id: core_bellwether_daily
+  name: '每日风向标统一流水线（45子主题）'
+  description: '每日 18:30（chain_map 后）统一跑：proxy观察 → DSH agent原始数据确认 → 全45子主题状态 → 权限上下文。输出 data/core_p05/confirmed_daily.json、data/core_p1/bellwether_state_latest.json、context_latest.json、daily_pipeline_latest.json。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '30 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/core_bellwether_daily.py
+    args: []
+  output:
+    log_file: logs/core_bellwether_daily_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - chain_map_daily
   retry:
     enabled: true
