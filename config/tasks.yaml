@@ -1547,3 +1547,28 @@ tasks:
   - core_p05_bellwether_refresh
   retry:
     enabled: true
+
+- id: core_p05_confirmed_refresh
+  name: '确认风向标每日维护（anchor + relay）'
+  description: '每日 18:40 读取当日 proxy，锚定 config/core_p05_confirmed.json，只在“连续2日 top1 + 创新高 + 5日相对强 + 旧风向标走弱 + 广度>=0.35”时切换确认风向标；写 data/core_p05/confirmed_daily.json 与 confirmed_changes.csv。禁止每日 proxy 直接覆盖。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '40 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/refresh_confirmed_bellwethers.py
+    args: []
+  output:
+    log_file: logs/core_p05_confirmed_refresh_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_p05_bellwether_refresh
+  retry:
+    enabled: true

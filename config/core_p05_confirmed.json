@@ -1,0 +1,322 @@
+{
+ "date": "20261015",
+ "source": "tech confirmed + nontech panel confirmed",
+ "note": "风向标只做信号；会换；P1 按日滚动",
+ "items": [
+  {
+   "subtheme": "AI硬件/PCB/液冷",
+   "code": "002463.SZ",
+   "name": "沪电股份",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "AI芯片",
+   "code": "688256.SH",
+   "name": "寒武纪",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "AI软",
+   "code": "002230.SZ",
+   "name": "科大讯飞",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "IDC/算力租赁",
+   "code": "300442.SZ",
+   "name": "润泽科技",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "人形机器人",
+   "code": "688017.SH",
+   "name": "绿的谐波",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "光模块/CPO",
+   "code": "300308.SZ",
+   "name": "中际旭创",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "半导体材料",
+   "code": "300054.SZ",
+   "name": "鼎龙股份",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "半导体设备",
+   "code": "002371.SZ",
+   "name": "北方华创",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "存储芯片",
+   "code": "603986.SH",
+   "name": "兆易创新",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "封测",
+   "code": "600584.SH",
+   "name": "长电科技",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "工业机器人",
+   "code": "300124.SZ",
+   "name": "汇川技术",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "第三代半导体",
+   "code": "688234.SH",
+   "name": "天岳先进",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "芯片设计",
+   "code": "603501.SH",
+   "name": "豪威集团",
+   "group": "tech",
+   "confirm": "confirmed"
+  },
+  {
+   "subtheme": "CXO",
+   "code": "603127.SH",
+   "name": "昭衍新药",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "中药",
+   "code": "000999.SZ",
+   "name": "华润三九",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "保险",
+   "code": "601628.SH",
+   "name": "中国人寿",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "储能",
+   "code": "300274.SZ",
+   "name": "阳光电源",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "养殖",
+   "code": "300498.SZ",
+   "name": "温氏股份",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "军工电子",
+   "code": "688002.SH",
+   "name": "睿创微纳",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "创新药",
+   "code": "688235.SH",
+   "name": "百济神州",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "医疗器械",
+   "code": "300760.SZ",
+   "name": "迈瑞医疗",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  },
+  {
+   "subtheme": "卫星互联网",
+   "code": "600118.SH",
+   "name": "中国卫星",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "地产",
+   "code": "600048.SH",
+   "name": "保利发展",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "基建",
+   "code": "601868.SH",
+   "name": "中国能建",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "家电",
+   "code": "002242.SZ",
+   "name": "九阳股份",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "影视",
+   "code": "300251.SZ",
+   "name": "光线传媒",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  },
+  {
+   "subtheme": "核电",
+   "code": "601985.SH",
+   "name": "中国核电",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  },
+  {
+   "subtheme": "汽车整车",
+   "code": "000625.SZ",
+   "name": "长安汽车",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "汽车电子",
+   "code": "002920.SZ",
+   "name": "德赛西威",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "汽车零部件",
+   "code": "600660.SH",
+   "name": "福耀玻璃",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "游戏",
+   "code": "002555.SZ",
+   "name": "三七互娱",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  },
+  {
+   "subtheme": "煤炭",
+   "code": "600256.SH",
+   "name": "广汇能源",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "电网设备",
+   "code": "600577.SH",
+   "name": "精达股份",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "白酒",
+   "code": "600809.SH",
+   "name": "山西汾酒",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  },
+  {
+   "subtheme": "种植业",
+   "code": "600598.SH",
+   "name": "北大荒",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "稀土",
+   "code": "600111.SH",
+   "name": "北方稀土",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "绿电",
+   "code": "600930.SH",
+   "name": "华电新能",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "航天装备",
+   "code": "601698.SH",
+   "name": "中国卫通",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "船舶",
+   "code": "600685.SH",
+   "name": "中船防务",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "证券",
+   "code": "300059.SZ",
+   "name": "东方财富",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "银行",
+   "code": "600036.SH",
+   "name": "招商银行",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  },
+  {
+   "subtheme": "锂电池",
+   "code": "002812.SZ",
+   "name": "恩捷股份",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "风电",
+   "code": "688349.SH",
+   "name": "三一重能",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  },
+  {
+   "subtheme": "食品饮料",
+   "code": "600887.SH",
+   "name": "伊利股份",
+   "group": "nontech",
+   "confirm": "2/2"
+  },
+  {
+   "subtheme": "黄金",
+   "code": "600988.SH",
+   "name": "赤峰黄金",
+   "group": "nontech",
+   "confirm": "adjudicated"
+  }
+ ]
+}
