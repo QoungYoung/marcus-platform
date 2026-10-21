@@ -190,45 +190,43 @@ def main():
                     else ("✗ 反向" if up - base_up <= -3 else "≈ 基线 ✓ 无优势")))
         return 0
 
-    latest = sh[-1]
-    print("最新收盘：%s ｜ 收 %.2f" % (latest["d"], latest["c"]))
-    found = structures(sh, len(sh) - 1)
-    rel = bank_rel(sh, len(sh) - 1, bk, brow)
-    print("上下文：%s" % ctx(sh, len(sh) - 1, rel))
-    if not found:
-        print("今天没有结构 ✓（按他的口径：这段还没结束，继续观察 ✓）")
+    # ── 三个指数逐个检查 ✓（原来只查了上证 ✗ 2026-10-21 修）──
+    bk = load("399986.SZ")
+    brow = [x["d"] for x in bk]
+    hits, new, seen = [], 0, seen_load()
+    today = ""
+    for code, name in INDEXES:
+        rows = sh if code == "000001.SH" else load(code)
+        if len(rows) < 65:
+            print("  %s 数据不足 ✗ %d" % (name, len(rows)))
+            continue
+        today = rows[-1]["d"]
+        found = structures(rows, len(rows) - 1)
+        print("%s %s 收 %.2f ｜ %d 个结构" % (name, rows[-1]["d"], rows[-1]["c"], len(found)))
+        for kind, direction, note in found:
+            hits.append((name, kind, direction, note))
+            key = "%s|%s|%s" % (rows[-1]["d"], code, kind)
+            if key not in seen or args.force:
+                seen[key] = 1
+                new += 1
+
+    if not hits:
+        print("今天三个指数都没有结构 ✓（他的口径：结构没出 ⇒ 这一段还没结束，继续观察 ✓）")
         return 0
 
-    seen = seen_load()
-    lines = ["🐺 浪型结构预警（%s）" % latest["d"]]
-    new = 0
-    for kind, direction, note in found:
-        key = "%s|000001|%s" % (latest["d"], kind)
-        tag = "向上 ✓" if direction == "up" else "向下 ✗"
-        lines.append("· **%s**（%s）—— %s" % (kind, tag, note))
-        if key not in seen or args.force:
-            seen[key] = 1
-            new += 1
-    lines.append("")
-    lines.append("上下文：" + ctx(sh, len(sh) - 1, rel))
-    lines.append("按他的口径：出了结构才谈「下一阶段是什么级别」✓；没出结构时这一段「要么别做、要么别追」✓")
-    # ★ 如实标注（2026-10-21 实测 2026-01~10 上证 ✓ n=20~30 ✓）：
-    #   底分型 5 日均值 -0.81%/上涨 30% ✗（**不如基线** 47%）；红三兵 +0.06%/56% ✓（≈基线）；
-    #   低位顶分破位 +0.46%/63% ✓（反直觉 ✓）；岛反 0 次（稀有 ✓）
-    #   ⇒ 结构**只能当"这一段结束"的时间标记** ✓，**不是买卖信号** ✗（别把预警当方向 ✗）
-    lines.append("⚠️ 长样本统计（2016 起，上证+创业板+科创50 合并，n=623~1466 ✓）：")
-    lines.append("   · **红三兵**：10 日均值 +0.77%／上涨 55%（基线 51%）⇒ **唯一有微弱正优势 ✓**")
-    lines.append("   · **底分型**：5 日均值 -0.08%／上涨 47%（基线 51%）⇒ **短线反而偏跌 ✗ 别当买点**")
-    lines.append("   · **低位顶分破位**：≈ 基线 ⇒ 没有杀伤力 ✗（别当卖出信号）")
-    lines.append("   · **岛反**：n=5 太稀有 ⇒ 只能当事件通知 ✓")
-    lines.append("⇒ 本预警是「这一段可能结束」的**时间标记** ✓；方向请以红三兵为参考、其余不作买卖依据 ✗")
-    text = "\n".join(lines)
-    print(text)
+    # ★ 推送正文**只有三行结构** ✓（统计/上下文只进日志 ✓ —— 2026-10-21「提示就该短」✓）
+    out = ["🐺 结构提示（%s）" % today]
+    for name, kind, direction, note in hits:
+        out.append("· %s %s：%s —— %s" % (name, "▲" if direction == "up" else "▼", kind, note))
+    out.append("（提示而已 ✓ 不是买卖信号 ✗）")
+    text = "\n".join(out)
+    print("\n" + text)
+    print("\n上下文（只进日志 ✓）：%s" % ctx(sh, len(sh) - 1, bank_rel(sh, len(sh) - 1, bk, brow)))
     if args.dry:
         print("\n（--dry ✓ 不推送）")
         return 0
     if new == 0:
-        print("\n今天这些结构已经推过了 ✓（去重）")
+        print("\n这些结构今天已推过 ✓（去重）")
         return 0
     push(text)
     seen_save(seen)
