@@ -62,7 +62,13 @@ def main():
     out = {"date": datetime.now().strftime("%Y%m%d"), "steps": steps,
            "ok": all(s.get("returncode") == 0 for s in steps)}
     json.dump(out, open(PIPELINE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print(json.dumps({"ok": out["ok"], "steps": [{k: s.get(k) for k in ("step","returncode","seconds")} for s in steps]}, ensure_ascii=False))
+    summary = []
+    for s in steps:
+        d = {k: s.get(k) for k in ("step", "returncode", "seconds")}
+        if s.get("returncode") != 0:
+            d["stderr_tail"] = str(s.get("stderr_tail") or s.get("error") or "")[-600:]
+        summary.append(d)
+    print(json.dumps({"ok": out["ok"], "steps": summary}, ensure_ascii=False))
     if not out["ok"]:
         sys.exit(1)
 

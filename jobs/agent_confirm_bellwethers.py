@@ -21,6 +21,7 @@ for _p in (os.path.join(ROOT, "backend"), os.path.join(ROOT, "backend/app/servic
 from wolf_card.subthemes import stocks as sub_stocks, parent
 
 OUT = os.path.join(ROOT, "data/core_p05")
+os.makedirs(OUT, exist_ok=True)
 DAILY = os.path.join(OUT, "confirmed_daily.json")
 ANCHOR = os.path.join(ROOT, "config/core_p05_confirmed.json")
 CHANGES = os.path.join(OUT, "confirmed_changes.csv")
