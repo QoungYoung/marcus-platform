@@ -1473,3 +1473,53 @@ tasks:
   depends_on: []
   retry:
     enabled: false         # 对账失败是数据问题，自动重跑没有意义（只会重复告警）
+
+- id: core_p05_bellwether_refresh
+  name: '全部子主题风向标刷新（core P0.5 proxy）'
+  description: '每日 18:30（chain_map 18:15 之后）重算全部子主题（科技 + 医药/电力/军工/新能源/汽车/资源/金融/消费/农业/基建/传媒）的当日风向标 proxy。写 data/core_p05/latest.json 与历史 CSV；不覆盖人工确认表，只更新 proxy。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '30 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/build_core_p05.py
+    args: ['--latest-only']
+  output:
+    log_file: logs/core_p05_bellwether_refresh_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - chain_map_daily
+  retry:
+    enabled: true
+
+- id: core_p1_bellwether_state
+  name: '科技子主题风向标状态（bellwether_alive）'
+  description: '每日 18:35（风向标刷新 18:30 后）计算科技子主题的 alive/warning/dead/rotated/stale/unknown 日频状态，写 data/core_p1/bellwether_state_latest.json 与 bellwether_history.csv。只做状态，不下单。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '35 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/build_bellwether_state.py
+    args: []
+  output:
+    log_file: logs/core_p1_bellwether_state_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_p05_bellwether_refresh
+  retry:
+    enabled: true
