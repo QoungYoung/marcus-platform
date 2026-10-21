@@ -1294,6 +1294,30 @@ tasks:
     log_file: logs/wave_ladder_state_{date}.log
     append: true
 
+- id: wave_structure_alert
+  name: 浪型结构预警（出结构才推 QQ）
+  description: | 
+    ★ 2026-10-21：他（狼大）说「延伸浪的终结一定是一个明确的结构」✓，并给了四种（底分/红三兵/岛反/低位顶分破位）。
+    本任务每天收盘后 15:10 用**纯图形判据**检查上证/创业板/科创50 ✓，**出现结构才推 QQ** ✓（去重 ✓ 同一天同一结构只推一次）。
+    ⚠️ 统计上这些结构**没有方向优势** ✗（底分型 5 日 -0.81%/上涨30% vs 基线47% ✗）⇒ 只当「这一段结束」的**时间标记** ✓，不是买卖信号 ✗。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '10 15 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wave_structure_alert.py
+    args: []
+  output:
+    log_file: logs/wave_structure_alert_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+
 - id: wave_ladder_history_regen
   name: 浪型 history 滚动维护（回测取档要它）
   description: |
