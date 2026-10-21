@@ -143,10 +143,13 @@ def main():
         old = json.load(open(OUT, encoding="utf-8")) if os.path.exists(OUT) else {"floors": []}
     except Exception:
         old = {"floors": []}
-    bypid = {f.get("pid"): f for f in old.get("floors") or [] if f.get("pid")}
+    # ★ 去重键：pid 优先 ✓；解析器不产 pid 时用 `lou`（只看楼主视图的楼号 = 他的发言序号 ✓ 稳定 ✓）
+    def _key(f):
+        return f.get("pid") or ("lou:%s" % f.get("lou"))
+
+    bypid = {_key(f): f for f in (old.get("floors") or [])}
     for f in floors:
-        if f.get("pid"):
-            bypid[f["pid"]] = f
+        bypid[_key(f)] = f
     merged = sorted(bypid.values(), key=lambda x: x.get("lou") or 0)
     os.makedirs(DATA_DIR, exist_ok=True)
     json.dump({"tid": TID, "updated": time.strftime("%Y%m%d"), "op_uid": OP_UID,
