@@ -27,6 +27,19 @@ from fastapi import APIRouter, Query
 
 router = APIRouter(prefix="/wave", tags=["Wave Ladder"])
 
+
+@router.get("/state")
+def get_wave_state(asof: Optional[str] = Query(None, description="YYYYMMDD；给了就取 session_date<=asof 的最近一档（回测口径 ✓）")):
+    """**浪型状态的统一出口**（2026-10-21 步 3 ✓）。
+
+    读 `app.services.wave_store`（PG 优先 ✓ 文件兜底 ✓）；前端/外部/脚本一律走这里，
+    不要再各读各的 `data/wave_state.json` ✗。
+    """
+    from app.services import wave_store as _ws
+    w = _ws.get_wave_asof(asof) if asof else _ws.get_wave()
+    return {"ok": bool(w), "store": _ws.mode(), "asof": (asof or ""), "state": w or {},
+            "note": "store=both ⇒ 先 PG 再文件兜底 ✓；读不到返回 ok=false（调用方须 fail-open ✓）"}
+
 _EM_URL = ("https://push2his.eastmoney.com/api/qt/stock/kline/get?secid={secid}"
            "&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1&end=20500101&lmt={lmt}")
 
@@ -294,3 +307,37 @@ def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000
     return {"code": code, "asof": today, "bars": bars, "waves": waves, "display_patterns": disp,
             "last": wmap.get(today or "", None), "ohlc_source": src,
             "wave_source": "wave_ladder.walk" if waves else "none", "note": note}
+
+
+@router.get("/low-position-card")
+def low_position_card():
+    """Portfolio 卡片：低位超额反弹线（paper-only）状态。"""
+    import datetime as _dt
+    try:
+        from app.services.wolf_low_position_line import _load_candidates, enabled
+        today = _dt.datetime.now().strftime("%Y%m%d")
+        c = _load_candidates(today) if enabled() else {"status": "disabled", "stocks": []}
+        # 最后一个有效样本：PostgreSQL（不再读 eval_v3_fixed.json）
+        last_date, last_ret = "-", None
+        try:
+            from app.services.low_position_store import last_valid
+            lv = last_valid()
+            last_date = str(lv.get("trade_date") or "-")
+            last_ret = lv.get("ret")
+        except Exception:
+            pass
+        return {
+            "status": c.get("status"),
+            "candidates": len(c.get("stocks") or []),
+            "signal_date": c.get("signal_date"),
+            "mainline": c.get("mainline"),
+            "mainline_r20": c.get("mainline_r20"),
+            "mainline_sideways": c.get("mainline_sideways"),
+            "reasons": c.get("reasons") or [],
+            "last_valid_date": last_date,
+            "last_return_pct": round(last_ret, 2) if last_ret is not None else None,
+            "updated_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        }
+    except Exception as e:
+        return {"status": "error", "candidates": 0, "reasons": [str(e)[:120]],
+                "last_valid_date": "-", "last_return_pct": None}
