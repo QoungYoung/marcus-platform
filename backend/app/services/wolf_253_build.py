@@ -71,7 +71,8 @@ def run_async(coro):
         loop.close()
 
 def _wave_op():
-    op = (load("wave_state.json").get("operation") or "side").lower()
+    from app.services import wave_store as _ws   # ★ 步 3：PG 优先 ✓
+    op = ((_ws.get_wave() or {}).get("operation") or "side").lower()
     try:
         from app.services.wave_ladder_gate import adopt_wave_op
         op = adopt_wave_op(op)          # ★ 浪型链影子/接管（默认关 ⇒ 原样 ✓）

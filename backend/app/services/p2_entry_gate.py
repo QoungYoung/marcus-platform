@@ -44,7 +44,8 @@ def _mode():
     return os.getenv("P2_GATE_MODE", "1").strip() not in ("0", "false", "no")
 
 def _wave_decision():
-    st=_load("wave_state.json")
+    from app.services import wave_store as _ws   # ★ 2026-10-21 步 3：统一读入口（PG 优先 ✓ 文件兜底 ✓）
+    st=_ws.get_wave()
     if not st: return None
     op=(st.get("operation") or "side").lower()
     try:

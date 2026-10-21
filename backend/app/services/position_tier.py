@@ -107,9 +107,9 @@ def _load_cfg():
 
 def read_wave_state():
     """读生产 wave_state.json（与 p2_entry_gate._wave_decision 同源）。"""
-    p = os.path.join(_workspace(), "data", "wave_state.json")
+    from app.services import wave_store as _ws   # ★ 2026-10-21 步 3：统一读入口（PG 优先 ✓ 文件兜底 ✓）
     try:
-        st = json.load(open(p, encoding="utf-8"))
+        st = _ws.get_wave() or json.load(open(os.path.join(_workspace(), "data", "wave_state.json"), encoding="utf-8"))
         op = str(st.get("operation") or "side").lower()
         return {"level": st.get("level") or "?", "sub_level": st.get("sub_level") or "", "operation": op}
     except Exception:

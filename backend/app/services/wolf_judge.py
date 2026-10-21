@@ -106,7 +106,8 @@ def _pos_pct(dc, date):
 
 def _wave_raw(date):
     try:
-        ws = _load('wave_state.json') or {}
+        from app.services import wave_store as _ws   # ★ 步 3：PG 优先 ✓
+        ws = _ws.get_wave() or {}
         if str(ws.get('date') or ws.get('as_of') or date).replace('-', '') == date:
             lv = ws.get('level')
             if lv:

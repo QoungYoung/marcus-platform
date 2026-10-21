@@ -387,7 +387,8 @@ def current_operation():
     side=观望调仓换股 / defense=防御不建仓 / exit=兑现降仓。
     """
     try:
-        w = _read_json_first("wave_state.json") or {}
+        from app.services import wave_store as _ws   # ★ 步 3：PG 优先 ✓
+        w = _ws.get_wave() or {}
         return str(w.get("operation") or "").strip().lower() or None
     except Exception:
         return None

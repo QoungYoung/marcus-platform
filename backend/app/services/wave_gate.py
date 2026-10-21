@@ -48,6 +48,14 @@ def _wave_path() -> str:
 
 
 def _load_wave() -> Optional[dict]:
+    # ★ 2026-10-21 步 3：**先读 PG**（wave_store ✓ 内部已有文件兜底 ✓），再退回这里的老路径 ✓
+    try:
+        from app.services import wave_store as _ws
+        _w = _ws.get_wave()
+        if _w:
+            return _w
+    except Exception as _e_s:
+        print("[wave_gate] wave_store 读取失败（退回文件 ✓）: %s" % str(_e_s)[:80], file=sys.stderr, flush=True)
     try:
         with open(_wave_path(), encoding="utf-8") as f:
             return json.load(f) or {}
@@ -88,6 +96,15 @@ def _find_archived(sim8: str) -> Optional[dict]:
         ③ `<arm_root>/wave_state_history/<sim8>.json`（历史目录 ✓）
         ④ 原始天目录 `data/_bt_year/<sim8>/wave_state.json`（跑批的复制源 ✓）
     """
+    # ★ 2026-10-21 步 3：**回测取档优先走 PG**（wave_store.get_wave_asof ✓ = session_date<=sim 的最近一档 ✓）
+    #   这一步让回测**不再依赖**稀疏的 data/wave_state_history/<sim8>.json ✗
+    try:
+        from app.services import wave_store as _ws
+        _a = _ws.get_wave_asof(sim8)
+        if _a:
+            return _a
+    except Exception as _e_as:
+        print("[wave_gate] PG 取档失败（退回归档链 ✓）: %s" % str(_e_as)[:80], file=sys.stderr, flush=True)
     import glob as _g
     cands = []
     _d = os.environ.get("DATA_DIR") or ""
