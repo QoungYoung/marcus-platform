@@ -1600,7 +1600,7 @@ tasks:
 
 - id: core_bellwether_daily
   name: '每日风向标统一流水线（45子主题）'
-  description: '每日 18:30（chain_map 后）统一跑：proxy观察 → DSH agent原始数据确认 → 全45子主题状态 → 权限上下文。输出 data/core_p05/confirmed_daily.json、data/core_p1/bellwether_state_latest.json、context_latest.json、daily_pipeline_latest.json。'
+  description: '每日 18:30（chain_map 后）统一跑：DSH agent原始数据确认 → 全45子主题状态 → 权限上下文；proxy 不再进入每日调度。输出 data/core_p05/confirmed_daily.json、data/core_p1/bellwether_state_latest.json、context_latest.json、daily_pipeline_latest.json。'
   enabled: true
   schedule:
     type: cron

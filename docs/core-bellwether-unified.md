@@ -12,13 +12,14 @@ core_bellwether_daily
 ## 步骤
 
 ```text
-1. proxy 观察：jobs/build_core_p05.py --latest-only
-2. agent 确认：jobs/agent_confirm_bellwethers.py
+1. agent 确认：jobs/agent_confirm_bellwethers.py
    - 读原始日线 + chain_map
    - 不读 proxy
-3. 全 45 状态：jobs/build_bellwether_state.py --history
-4. 权限上下文：data/core_p1/context_latest.json
+2. 全 45 状态：jobs/build_bellwether_state.py --history
+3. 权限上下文：data/core_p1/context_latest.json
 ```
+
+proxy 不再进入每日调度；`jobs/build_core_p05.py` 只保留离线研究。
 
 ## 输出
 

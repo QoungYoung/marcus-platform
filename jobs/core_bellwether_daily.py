@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""统一每日风向标流水线：proxy观察 → agent确认 → 全45状态 → 权限上下文。
+"""统一每日风向标流水线：agent确认 → 全45状态 → 权限上下文。
 
-一个调度任务代替原来的 proxy/agent/state 三个任务。
+proxy 不再进入每日调度，仅保留 build_core_p05.py 做离线研究。
 """
 from __future__ import annotations
 import argparse, json, os, subprocess, sys
@@ -38,12 +38,9 @@ def write_context():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--skip-proxy", action="store_true")
     ap.add_argument("--skip-agent", action="store_true")
     a = ap.parse_args()
     steps = []
-    if not a.skip_proxy:
-        steps.append(run("proxy", [os.path.join(ROOT, "jobs/build_core_p05.py"), "--latest-only"]))
     if not a.skip_agent:
         steps.append(run("agent_confirm", [os.path.join(ROOT, "jobs/agent_confirm_bellwethers.py")], timeout=1200))
     steps.append(run("state", [os.path.join(ROOT, "jobs/build_bellwether_state.py"), "--history"]))
