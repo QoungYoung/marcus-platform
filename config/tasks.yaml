@@ -1294,6 +1294,32 @@ tasks:
     log_file: logs/wave_ladder_state_{date}.log
     append: true
 
+- id: wave_advice_agent
+  name: 策略建议 agent（按狼大规则 → 推 QQ）
+  description: |
+    ★ 2026-10-21 用户：「接入 agent，让他结合工具分析给出建议，推送 QQ」。
+    每天 15:20（结构提示 15:10 之后）：① 工具取事实（三指数量价/未回补缺口/银行与红利被压程度/
+    候选池 MA20 位置/当前浪型档位/今日结构）② 交 DSH agent 分析（prompt 里带**他的规则原话** ✓
+    并要求引用规则编号 ✓）③ 推 QQ ✓；DSH 不可用 ⇒ **确定性规则版兜底** ✓ 绝不静默 ✗。
+    定位：只读分析 + 提示 ✓ 不下单 ✗ 不改 wave_state ✗ 不参与闸门 ✗。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '20 15 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wave_advice_agent.py
+    args: []
+  output:
+    log_file: logs/wave_advice_agent_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+
 - id: wave_structure_alert
   name: 浪型结构预警（出结构才推 QQ）
   description: | 
