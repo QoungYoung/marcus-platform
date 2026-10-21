@@ -100,7 +100,11 @@ def facts():
             "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,
             "dist_hi60_pct": round((rs[-1]["c"] / hi60 - 1) * 100, 1),
             "open_gaps": open_gaps(rs)[-3:],
-            "structures": [{"kind": k, "action": a} for k, a, _ in structures(rs, len(rs) - 1)]}
+            "ma20": round(statistics.mean([x["c"] for x in rs[-20:]]), 2),
+            "low5": round(min(x["l"] for x in rs[-5:]), 2),
+            "hi5": round(max(x["h"] for x in rs[-5:]), 2),
+            "structures": [{"kind": k, "action": a, "note": n}
+                           for k, a, n in structures(rs, len(rs) - 1)]}
         if code == "000001.SH":
             sh = rs
     try:
@@ -120,8 +124,15 @@ def facts():
             f["candidates"].append({
                 "name": name, "grp": grp, "close": round(rs[-1]["c"], 2),
                 "dist_ma20_pct": round((rs[-1]["c"] / ma20 - 1) * 100, 2),
+                "ma20": round(ma20, 2),
+                "low5": round(min(x["l"] for x in rs[-5:]), 2),
+                "hi5": round(max(x["h"] for x in rs[-5:]), 2),
                 "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,
-                "dist_hi60_pct": round((rs[-1]["c"] / hi60 - 1) * 100, 1)})
+                "dist_hi60_pct": round((rs[-1]["c"] / hi60 - 1) * 100, 1),
+                # ★ 2026-10-21 修：原来**没给结构** ✗ ⇒ agent 只能说"分型低点缺"✗（它守 P5 没猜 ✓ 是对的 ✓）；
+                #    now 每个候选都带 structures（note 里有底分/顶分的关键位 ✓）
+                "structures": [{"kind": k, "action": a, "note": n}
+                               for k, a, n in structures(rs, len(rs) - 1)]})
         except Exception:
             continue
     f["candidates"].sort(key=lambda x: -(x.get("dist_ma20_pct") or -99))
