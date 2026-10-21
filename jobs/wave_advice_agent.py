@@ -220,6 +220,17 @@ def llm_advice(f, policy_text=None):
     prompt = [
         "你是严谨的 A 股复盘助手。请**严格按下面这套纪律**给建议，不要自创逻辑，不要预测点位。",
         "每条建议必须标注引用的纪律编号（如 [P2]）✓；取不到的字段写「缺」✗ 不要猜。",
+        "",
+        "=== 你可以使用的**只读**工具（2026-10-21 实测生产 DSH 有工具 ✓）===",
+        "· `GET http://backend:8000/api/v1/wave/state` —— 当前浪型档位（operation/mode ✓）",
+        "· `GET http://backend:8000/api/v1/wave/index-history?days=60` —— 指数K线+逐日浪型（含缺口/结构参考 ✓）",
+        "· 读文件 `/app/data/wolf_posts.json` —— 他最近发言（**只作参考** ✓ 与纪律冲突以纪律为准 ✓）",
+        "· 分子数据（量价/缺口/候选池）**已经**在下面的 FACTS 里 ✓ 不需要你再取 ✓",
+        ("· 持仓：`GET http://backend:8000/api/v1/portfolio/positions` —— **只读** ✓（用户已授权 ✓）"
+         if os.environ.get("WAVE_ADVICE_ALLOW_POSITIONS") == "1" else
+         "· 持仓：**不要查**（未授权 ✗）—— 涉及「你持有的票」时只说「若持有则…」✓"),
+        "⚠️ **严禁任何写操作** ✗：不许 POST/PUT/DELETE、不下单、不改任何档位或文件 ✗。",
+        "⚠️ 工具失败就**写「缺」** ✓ 不要重试超过一次 ✗ 不要改用别的接口碰运气 ✗。",
         policy_text,
         "",
         "以下是他**最近的公开发言摘录**（只作参考 ✓；与上面的纪律冲突时**以纪律为准** ✓；为空就是没抓到 ✓）：",
