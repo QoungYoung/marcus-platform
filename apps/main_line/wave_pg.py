@@ -92,9 +92,16 @@ def upsert(ws: Dict[str, Any]) -> bool:
         try:
             with conn, conn.cursor() as cur:
                 cur.execute(DDL)
+                # ★ rung 在 ws 里是 **dict**（{'key','name','index','expect'}）✗ 不是 int ⇒ 取 index ✓
+                _r = ws.get("rung")
+                _r = _r.get("index") if isinstance(_r, dict) else _r
+                try:
+                    _r = int(_r) if _r is not None and str(_r).strip() != "" else None
+                except Exception:
+                    _r = None
                 cur.execute(_SQL_UPSERT, (
                     sd, dd, ws.get("level"), ws.get("sub_level"), ws.get("operation"), ws.get("mode"),
-                    ws.get("rung"), ws.get("family"), ws.get("stage"), ws.get("status"),
+                    _r, ws.get("family"), ws.get("stage"), ws.get("status"),
                     ws.get("confidence"), ws.get("source"), json.dumps(ws, ensure_ascii=False)))
         finally:
             conn.close()
