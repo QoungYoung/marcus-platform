@@ -22,11 +22,15 @@ def _relay():
     return get_relay()
 
 
-def _read(p):
+def _read(p, filters=None):
     try:
-        return pd.read_parquet(p) if os.path.exists(p) else pd.DataFrame()
+        if not os.path.exists(p): return pd.DataFrame()
+        return pd.read_parquet(p, filters=filters) if filters else pd.read_parquet(p)
     except Exception:
-        return pd.DataFrame()
+        try:
+            return pd.read_parquet(p) if os.path.exists(p) else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
 
 
 def _write(p, frames):
@@ -83,7 +87,12 @@ def _fetch_daily(dates, codes=None):
 
 
 def load_bars(min_date: str | None = None, latest_only: bool = False, codes=None) -> pd.DataFrame:
-    base = _read(BASE)
+    filters = []
+    if codes:
+        filters.append(("ts_code", "in", list(codes)))
+    if min_date and not latest_only:
+        filters.append(("trade_date", ">=", min_date))
+    base = _read(BASE, filters=filters or None)
     if codes and len(base):
         base = base[base.ts_code.isin(codes)].copy()
     if len(base):
