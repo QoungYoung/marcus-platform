@@ -55,6 +55,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="真写库（默认 dry-run ✓）")
     ap.add_argument("--include-bt", action="store_true", help="连 _bt_* 回测沙箱的档一起灌")
+    ap.add_argument("--allow-legacy", action="store_true",
+                    help="连**老 agent**（无 session_date）时代的档也灌（默认拒收 ✗）")
     args = ap.parse_args()
 
     files = _files(args.include_bt)
@@ -62,6 +64,7 @@ def main():
 
     best = {}       # session_date -> (data_date, mtime, path, ws)
     bad = 0
+    legacy = 0
     for f in files:
         try:
             ws = json.load(open(f, encoding="utf-8"))
@@ -74,7 +77,11 @@ def main():
         sd = _date8(ws.get("session_date"))
         dd = _date8(ws.get("date")) or sd
         if not sd:
-            # 老档（无 session_date）：用数据日的**下一个工作日**近似 ✓
+            # ★ **拒收老 agent 时代的档** ✗（它们没有 session_date/family ⇒ 语义与浪型链不同 ✗，
+            #   灌进去会让"这行是谁算的"说不清 ✓；如确需，用 --allow-legacy ✓）
+            if not args.allow_legacy:
+                legacy += 1
+                continue
             if not dd:
                 bad += 1
                 continue
@@ -97,8 +104,8 @@ def main():
         if cur is None or key > (cur[0], cur[1]):
             best[sd] = (dd, mtime, f, ws)
 
-    print("可用档：%d 天（跳过坏档 %d 个）｜ session_date 范围 %s ~ %s" % (
-        len(best), bad, min(best) if best else "-", max(best) if best else "-"))
+    print("可用档：%d 天（坏档 %d ｜ 拒收老 agent 档 %d）｜ session_date 范围 %s ~ %s" % (
+        len(best), bad, legacy, min(best) if best else "-", max(best) if best else "-"))
     dist = {}
     for sd, (dd, _m, _f, ws) in best.items():
         dist[ws.get("operation") or "?"] = dist.get(ws.get("operation") or "?", 0) + 1
