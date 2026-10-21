@@ -1601,7 +1601,7 @@ tasks:
 
 - id: core_p05_agent_confirm
   name: 'DSH agent 每日确认风向标'
-  description: '每日 18:45 由 DSH headless agent 代人工确认 45 个子主题：读原始日线+chain_map 候选，不读 proxy；默认 keep，只有真接力才 switch；switch 必须在 raw_candidates 且创新高、相对旧风向标强。agent 失败保持确认表不变。'
+  description: '每日 18:30 由 DSH /chat agent 代人工确认 45 个子主题：读原始日线+chain_map 候选，不读 proxy；默认 keep，只有真接力才 switch；switch 必须在 raw_candidates 且创新高、相对旧风向标强。agent 失败保持确认表不变。'
   enabled: false
   schedule:
     type: cron

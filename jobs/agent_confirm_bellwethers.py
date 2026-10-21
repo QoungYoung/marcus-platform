@@ -3,14 +3,15 @@
 
 流程：
   1. 从 subthemes 成分、日线 close/high/amount、chain_map leader/second 生成 raw candidates
-  2. 调 `dsh --profile headless -`，默认 keep；只有真接力才 switch
+  2. 调 DSH 容器 HTTP `/chat`，默认 keep；只有真接力才 switch
   3. switch 必须在 raw candidates 且创新高、相对旧风向标更强
   4. 写 confirmed_daily / changes / audit；agent 失败保持原表
 """
 from __future__ import annotations
 from datetime import datetime
-import glob, json, os, re, shutil, subprocess
+import glob, json, os, re
 import numpy as np, pandas as pd
+import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import sys
@@ -23,7 +24,8 @@ OUT = os.path.join(ROOT, "data/core_p05")
 DAILY = os.path.join(OUT, "confirmed_daily.json")
 ANCHOR = os.path.join(ROOT, "config/core_p05_confirmed.json")
 CHANGES = os.path.join(OUT, "confirmed_changes.csv")
-DSH = os.environ.get("DSH_BIN", "dsh")
+CHAT_URL = (os.environ.get("BELLWETHER_CHAT_URL") or os.environ.get("MAIN_LINE_CHAT_URL")
+            or os.environ.get("PI_SERVER_URL") or "http://marcus-dsh:3001/chat")
 TIMEOUT = int(os.environ.get("DSH_AGENT_TIMEOUT", "600"))
 
 
@@ -114,9 +116,13 @@ def _run_agent(d, items):
     packet = {"date": d, "source": "raw_bars_chain_map", "items": items,
               "criterion": "默认keep；只有真接力（同子主题、创新高、相对旧风向标强、旧龙头走弱、广度）才switch"}
     json.dump(packet, open(rp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    prompt = f"""你是 Marcus core 线的每日风向标确认员，代人工确认。工作区：{ROOT}。
-读取：{rp}
+    packet_text = json.dumps(packet, ensure_ascii=False)
+    prompt = f"""你是 Marcus core 线的每日风向标确认员，代人工确认。
 这是原始日线 + chain_map 候选，不是 proxy，不要使用任何 proxy 分数。
+
+=== REVIEW（当天复核包）===
+{packet_text}
+=== END REVIEW ===
 
 对每个子主题：
 - 默认 keep；
@@ -128,28 +134,21 @@ def _run_agent(d, items):
 {{"date":"{d}","items":[{{"subtheme":"AI芯片","decision":"keep|switch","code":"...","name":"...","reason":"不超过40字"}}]}}
 必须覆盖每个子主题；不确定就 keep。
 """
-    try:
-        proc = subprocess.run([DSH, "--profile", "headless", "-"], input=prompt, text=True,
-                              capture_output=True, timeout=TIMEOUT, cwd=ROOT)
-        raw = (proc.stdout or "").strip()
-        txt = re.sub(r"^```(?:json)?\s*", "", raw); txt = re.sub(r"\s*```\s*$", "", txt)
-        return json.loads(txt), rp
-    except Exception as e:
-        return {"items": [], "error": str(e)}, rp
+    last = None
+    for attempt in (1, 2):
+        try:
+            r = requests.post(CHAT_URL, json={"message": prompt, "session_id": f"bellwether_{d}"},
+                              timeout=TIMEOUT)
+            r.raise_for_status()
+            raw = str((r.json() or {}).get("reply") or "").strip()
+            txt = re.sub(r"^```(?:json)?\s*", "", raw); txt = re.sub(r"\s*```\s*$", "", txt)
+            return json.loads(txt), rp
+        except Exception as e:
+            last = e
+    return {"items": [], "error": str(last)}, rp
 
 
 def main():
-    if not shutil.which(DSH):
-        print(f"agent unavailable: {DSH} not found; confirmed unchanged")
-        try:
-            daily = _json(DAILY) or _json(ANCHOR, {})
-            json.dump({"date": datetime.now().strftime("%Y%m%d"), "agent_error": f"{DSH} not found",
-                       "items": daily.get("items", [])},
-                      open(os.path.join(OUT, f"agent_confirm_{datetime.now().strftime('%Y%m%d')}.json"), "w", encoding="utf-8"),
-                      ensure_ascii=False, indent=1)
-        except Exception:
-            pass
-        return
     d, items = _build_packet()
     if not items:
         print("no raw candidates"); return
