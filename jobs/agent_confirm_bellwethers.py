@@ -19,6 +19,7 @@ for _p in (os.path.join(ROOT, "backend"), os.path.join(ROOT, "backend/app/servic
            os.path.join(ROOT, "app/services"), ROOT):
     if os.path.isdir(_p): sys.path.insert(0, _p)
 from wolf_card.subthemes import stocks as sub_stocks, parent
+from bars_source import load_bars
 
 OUT = os.path.join(ROOT, "data/core_p05")
 os.makedirs(OUT, exist_ok=True)
@@ -67,14 +68,7 @@ def _chain_roles(date8, theme):
 
 
 def _build_packet():
-    b = pd.read_parquet(os.path.join(ROOT, "data/bars_combined.parquet"),
-                        columns=["ts_code", "trade_date", "close", "amount"])
-    hp = os.path.join(ROOT, ".dsh-tmp/buyside/bars.parquet")
-    if os.path.exists(hp):
-        h = pd.read_parquet(hp, columns=["ts_code", "trade_date", "high"])
-        b = b.merge(h, on=["ts_code", "trade_date"], how="left")
-    else:
-        b["high"] = b["close"]
+    b = load_bars(latest_only=True)
     close = b.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
     high = b.pivot_table(index="trade_date", columns="ts_code", values="high", aggfunc="last").sort_index()
     amt = b.pivot_table(index="trade_date", columns="ts_code", values="amount", aggfunc="last").sort_index()
