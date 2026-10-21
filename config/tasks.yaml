@@ -1549,9 +1549,9 @@ tasks:
     enabled: true
 
 - id: core_p05_confirmed_refresh
-  name: '确认风向标每日维护（anchor + relay）'
-  description: '每日 18:40 读取当日 proxy，锚定 config/core_p05_confirmed.json，只在“连续2日 top1 + 创新高 + 5日相对强 + 旧风向标走弱 + 广度>=0.35”时切换确认风向标；写 data/core_p05/confirmed_daily.json 与 confirmed_changes.csv。禁止每日 proxy 直接覆盖。'
-  enabled: true
+  name: '确认风向标 proxy 兜底（已停用）'
+  description: '已停用：该任务基于 proxy 做确定性兜底；正式确认改由 core_p05_agent_confirm 读原始日线+chain_map。保留脚本，不再每日运行。'
+  enabled: false
   schedule:
     type: cron
     expr: '40 18 * * mon-fri'
@@ -1575,7 +1575,7 @@ tasks:
 
 - id: core_p05_agent_confirm
   name: 'DSH agent 每日确认风向标'
-  description: '每日 18:45 由 DSH headless agent 代人工复核 45 个子主题：默认 keep，只有满足真接力条件才 switch；switch 目标必须在当日 proxy top5。写 data/core_p05/agent_review_/agent_confirm_ 与 confirmed_changes.csv。agent 失败时保持确认表不变。'
+  description: '每日 18:45 由 DSH headless agent 代人工确认 45 个子主题：读原始日线+chain_map 候选，不读 proxy；默认 keep，只有真接力才 switch；switch 必须在 raw_candidates 且创新高、相对旧风向标强。agent 失败保持确认表不变。'
   enabled: true
   schedule:
     type: cron
@@ -1594,6 +1594,6 @@ tasks:
     channels:
     - qqbot
   depends_on:
-  - core_p05_confirmed_refresh
+  - core_p05_bellwether_refresh
   retry:
     enabled: true

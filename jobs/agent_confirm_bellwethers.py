@@ -1,117 +1,172 @@
 # -*- coding: utf-8 -*-
-"""用 DSH agent 代人工做每日确认风向标（确认锚 + 接力）。
+"""用 DSH agent 代人工确认风向标：只读原始行情 + chain_map，不读 proxy。
 
 流程：
-  1. 生成 data/core_p05/agent_review_<date>.json（当前 confirmed + proxy top5）
-  2. 调用 `dsh --profile headless -`，让 agent 输出 keep/switch
-  3. 校验：switch 的目标必须在当日 proxy top5；否则拒绝
-  4. 写 confirmed_daily.json / confirmed_changes.csv / agent_confirm_<date>.json
-失败时保持 confirmed 不变，不阻塞后续任务。
+  1. 从 subthemes 成分、日线 close/high/amount、chain_map leader/second 生成 raw candidates
+  2. 调 `dsh --profile headless -`，默认 keep；只有真接力才 switch
+  3. switch 必须在 raw candidates 且创新高、相对旧风向标更强
+  4. 写 confirmed_daily / changes / audit；agent 失败保持原表
 """
 from __future__ import annotations
-import json, os, re, subprocess, sys
-from datetime import datetime
+import glob, json, os, re, subprocess
+import numpy as np, pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import sys
+sys.path.insert(0, os.path.join(ROOT, "backend")); sys.path.insert(0, os.path.join(ROOT, "backend/app/services"))
+from wolf_card.subthemes import stocks as sub_stocks, parent
+
 OUT = os.path.join(ROOT, "data/core_p05")
 DAILY = os.path.join(OUT, "confirmed_daily.json")
-PROXY = os.path.join(OUT, "subtheme_bellwethers.csv")
+ANCHOR = os.path.join(ROOT, "config/core_p05_confirmed.json")
 CHANGES = os.path.join(OUT, "confirmed_changes.csv")
 DSH = os.environ.get("DSH_BIN", "dsh")
 TIMEOUT = int(os.environ.get("DSH_AGENT_TIMEOUT", "600"))
 
 
-def _load_json(p, default=None):
+def _json(p, default=None):
+    try: return json.load(open(p, encoding="utf-8"))
+    except Exception: return default
+
+
+def _names():
+    import sqlite3
     try:
-        return json.load(open(p, encoding="utf-8"))
+        con = sqlite3.connect(os.path.join(ROOT, ".dsh-tmp/buyside/prod_data/stock_pool.db"))
+        return dict(con.execute("select ts_code,name from stock_pool"))
     except Exception:
-        return default
+        return {}
 
 
-def _proxy_rows():
-    import pandas as pd
-    try:
-        df = pd.read_csv(PROXY, dtype={"date": str, "bellwether_code": str})
-    except Exception:
-        return None, []
-    if df.empty:
-        return None, []
-    d = str(df.date.max())
-    rows = df[df.date == d].to_dict("records")
-    return d, rows
+def _chain_roles(date8, theme):
+    files = sorted([p for p in glob.glob(os.path.join(ROOT, "data/chain_map_2026*.json")) if "_v2_cmp" not in p])
+    use = None
+    for p in files:
+        d = os.path.basename(p).replace("chain_map_", "").replace(".json", "")
+        if d <= date8: use = p
+    if not use: return None
+    try: x = json.load(open(use, encoding="utf-8"))
+    except Exception: return None
+    roles = {}
+    for t in x.get("themes", []):
+        if t.get("theme") != theme: continue
+        for seg in t.get("segments", []):
+            for i, z in enumerate(seg.get("leading_verified") or [], 1):
+                roles[z.get("ts")] = {"role": "leader", "rank": i, "segment": seg.get("label")}
+            lead = {z.get("ts") for z in seg.get("leading_verified") or []}
+            for z in seg.get("verified_all") or []:
+                if z.get("ts") in lead: continue
+                roles[z.get("ts")] = {"role": "second", "rank": None, "segment": seg.get("label")}
+    return roles or None
 
 
-def _top5_codes(top5):
-    # top5 字段格式：名称(score) / 名称(score)；返回名称，供 agent 参考
-    return [re.sub(r"\(.*$", "", x).strip() for x in str(top5 or "").split("/") if x.strip()]
-
-
-def main():
-    daily = _load_json(DAILY) or _load_json(os.path.join(ROOT, "config/core_p05_confirmed.json"), {})
-    d, p = _proxy_rows()
-    if not d:
-        print("no proxy"); return
+def _build_packet():
+    b = pd.read_parquet(os.path.join(ROOT, "data/bars_combined.parquet"),
+                        columns=["ts_code", "trade_date", "close", "amount"])
+    h = pd.read_parquet(os.path.join(ROOT, ".dsh-tmp/buyside/bars.parquet"),
+                        columns=["ts_code", "trade_date", "high"])
+    b = b.merge(h, on=["ts_code", "trade_date"], how="left")
+    close = b.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
+    high = b.pivot_table(index="trade_date", columns="ts_code", values="high", aggfunc="last").sort_index()
+    amt = b.pivot_table(index="trade_date", columns="ts_code", values="amount", aggfunc="last").sort_index()
+    d = str(close.index[-1])
+    names = _names()
+    daily = _json(DAILY) or _json(ANCHOR, {})
     items = []
     for it in daily.get("items", []):
-        sub = it.get("subtheme")
-        row = next((x for x in p if x.get("subtheme") == sub), None)
-        if not row:
-            continue
-        items.append({"subtheme": sub, "current_code": it.get("code"), "current_name": it.get("name"),
-                      "proxy_code": row.get("bellwether_code"), "proxy_name": row.get("bellwether_name"),
-                      "top5": row.get("top5"), "top5_names": _top5_codes(row.get("top5"))})
-    review = {"date": d, "items": items,
-              "criterion": "只做信号；默认keep；只有真接力（同子主题、创新高、相对强、旧龙头走弱、广度）才switch"}
+        sub = it.get("subtheme"); old = it.get("code")
+        if not sub or not old: continue
+        codes = [c for c in sub_stocks(sub) if c in close.columns]
+        if not codes: continue
+        roles = _chain_roles(d, parent(sub))
+        rows = []
+        for c in codes:
+            try:
+                s = close[c].loc[:d].dropna()
+                if len(s) < 25: continue
+                a = amt[c].loc[:d].dropna().tail(20).mean()
+                hi = high[c].loc[:d].dropna().tail(21)
+                new_high = bool(pd.notna(hi.iloc[:-1].max()) and s.iloc[-1] >= hi.iloc[:-1].max() * 0.995)
+                r5 = float(s.iloc[-1] / s.iloc[-6] - 1)
+                r20 = float(s.iloc[-1] / s.iloc[-21] - 1)
+                role = (roles or {}).get(c, {})
+                rows.append({"code": c, "name": names.get(c, c), "r5": round(r5*100,2),
+                             "r20": round(r20*100,2), "amt20": round(float(a),1) if pd.notna(a) else None,
+                             "new_high": new_high, "chain_role": role.get("role"),
+                             "chain_rank": role.get("rank")})
+            except Exception:
+                continue
+        # 原始候选：优先 chain leader/second + 创新高 + 5日相对强；无 chain 时按新高/r5
+        rows = [x for x in rows if (roles is None or x.get("chain_role") is not None or x["code"] == old)]
+        rows.sort(key=lambda x: (bool(x["new_high"]), x.get("chain_rank") == 1, x["r5"] or -99, x["amt20"] or 0), reverse=True)
+        top = rows[:8]
+        oldrow = next((x for x in rows if x["code"] == old), None)
+        items.append({"subtheme": sub, "parent": parent(sub), "current": it,
+                      "current_metrics": oldrow, "raw_candidates": top})
+    return d, items
+
+
+def _run_agent(d, items):
     rp = os.path.join(OUT, f"agent_review_{d}.json")
-    json.dump(review, open(rp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    prompt = f"""你是 Marcus core 线的每日风向标确认员，代人工做确认。工作区：{ROOT}。
+    packet = {"date": d, "source": "raw_bars_chain_map", "items": items,
+              "criterion": "默认keep；只有真接力（同子主题、创新高、相对旧风向标强、旧龙头走弱、广度）才switch"}
+    json.dump(packet, open(rp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    prompt = f"""你是 Marcus core 线的每日风向标确认员，代人工确认。工作区：{ROOT}。
 读取：{rp}
-规范：docs/core-p0-role-spec.md、docs/core-p05-nontech-confirmed.md。
-任务：对每个子主题默认 keep；只有明确满足“真接力”才 switch：
-- 同子主题/链段
-- 连续2日 proxy top1
-- 创20日新高
-- 5日相对旧风向标更强
-- 旧风向标走弱
-- 广度没有崩
-不要因为单日涨幅、成交额大、跨链大票就 switch。
+这是原始日线 + chain_map 候选，不是 proxy，不要使用任何 proxy 分数。
+
+对每个子主题：
+- 默认 keep；
+- 只有明确真接力才 switch：同子主题/链段、创新高、5日相对旧风向标更强、旧风向标走弱、广度没崩；
+- switch 目标必须来自 raw_candidates；
+- 单日涨幅、成交额大、跨链大票都不算接力。
+
 只输出 JSON，不要 markdown：
 {{"date":"{d}","items":[{{"subtheme":"AI芯片","decision":"keep|switch","code":"...","name":"...","reason":"不超过40字"}}]}}
-必须覆盖给出的每个子主题；不确定就 keep。
+必须覆盖每个子主题；不确定就 keep。
 """
     try:
         proc = subprocess.run([DSH, "--profile", "headless", "-"], input=prompt, text=True,
                               capture_output=True, timeout=TIMEOUT, cwd=ROOT)
         raw = (proc.stdout or "").strip()
         txt = re.sub(r"^```(?:json)?\s*", "", raw); txt = re.sub(r"\s*```\s*$", "", txt)
-        ans = json.loads(txt)
+        return json.loads(txt), rp
     except Exception as e:
-        ans = {"items": [], "error": str(e)}
-    decisions = {x.get("subtheme"): x for x in ans.get("items", []) if isinstance(x, dict)}
+        return {"items": [], "error": str(e)}, rp
+
+
+def main():
+    d, items = _build_packet()
+    if not items:
+        print("no raw candidates"); return
+    ans, rp = _run_agent(d, items)
+    by_sub = {x.get("subtheme"): x for x in ans.get("items", []) if isinstance(x, dict)}
+    daily = _json(DAILY) or _json(ANCHOR, {})
     changes, rejected = [], []
     for it in daily.get("items", []):
-        sub = it.get("subtheme"); dec = decisions.get(sub) or {}
-        dcs = str(dec.get("decision", "keep")).lower()
-        code = dec.get("code") or it.get("code")
-        row = next((x for x in p if x.get("subtheme") == sub), None)
-        top5_names = _top5_codes(row.get("top5")) if row else []
-        allowed = bool(row and code == row.get("bellwether_code")) or (dec.get("name") in top5_names) or (code == it.get("code"))
-        if dcs == "switch" and code != it.get("code"):
-            if not allowed:
-                rejected.append({"subtheme": sub, "code": code, "reason": "not in top5"})
-                dec = {"decision": "keep", "code": it.get("code"), "name": it.get("name"), "reason": "agent switch rejected: not in top5"}
-            else:
-                old = {"code": it.get("code"), "name": it.get("name")}
-                it.update({"code": code, "name": dec.get("name") or code})
-                changes.append({"date": d, "subtheme": sub, "old_code": old["code"], "old_name": old["name"],
-                                "new_code": code, "new_name": dec.get("name") or code,
-                                "reason": dec.get("reason", "agent switch")})
-    daily = {"date": d, "source": "dsh_agent_confirmation", "items": daily.get("items", [])}
+        sub = it.get("subtheme"); dec = by_sub.get(sub) or {}
+        packet = next((x for x in items if x["subtheme"] == sub), None)
+        raw_codes = {x["code"]: x for x in (packet or {}).get("raw_candidates", [])}
+        if str(dec.get("decision", "keep")).lower() != "switch":
+            continue
+        code = dec.get("code"); target = raw_codes.get(code)
+        if not target:
+            rejected.append({"subtheme": sub, "code": code, "reason": "not in raw_candidates"})
+            continue
+        old_metrics = (packet or {}).get("current_metrics") or {}
+        if not target.get("new_high") or (target.get("r5") or -99) < (old_metrics.get("r5") or -99) + 2:
+            rejected.append({"subtheme": sub, "code": code, "reason": "guard: no new high or rel<2pp"})
+            continue
+        old = {"code": it.get("code"), "name": it.get("name")}
+        it.update({"code": code, "name": target.get("name") or code})
+        changes.append({"date": d, "subtheme": sub, "old_code": old["code"], "old_name": old["name"],
+                        "new_code": code, "new_name": target.get("name") or code,
+                        "reason": dec.get("reason", "agent switch")})
+    daily = {"date": d, "source": "dsh_agent_raw_confirmation", "items": daily.get("items", [])}
     json.dump(daily, open(DAILY, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    audit = {"date": d, "agent_raw": ans, "changes": changes, "rejected": rejected}
-    json.dump(audit, open(os.path.join(OUT, f"agent_confirm_{d}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    json.dump({"date": d, "review": rp, "agent": ans, "changes": changes, "rejected": rejected},
+              open(os.path.join(OUT, f"agent_confirm_{d}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     if changes:
-        import pandas as pd
         df = pd.DataFrame(changes)
         if os.path.exists(CHANGES):
             df = pd.concat([pd.read_csv(CHANGES), df], ignore_index=True)
