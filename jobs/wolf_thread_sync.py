@@ -29,8 +29,27 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
 
 def cookie():
+    """环境变量优先 ✓，其次读 `data/nga_cookie.env`（KEY=VALUE ✓ 宿主可写 ✓ 免重建容器 ✗）。
+
+    为什么加文件回退（2026-10-21 实测）：`docker restart` **不会**重新读 compose 的 env_file ✗，
+    新加的 NGA_UID/NGA_CID 在容器里看不到 ✗；而 `data/` 是 bind-mount ✓ ⇒ 写个文件就能被读到 ✓，
+    且 600 权限 ✓ 不进仓库 ✓（.gitignore 的 data/*.json 之外，本文件也用 *.env 忽略 ✓）。
+    """
     uid = (os.environ.get("NGA_UID") or "").strip()
     cid = (os.environ.get("NGA_CID") or "").strip()
+    if not (uid and cid):
+        try:
+            for line in open(os.path.join(DATA_DIR, "nga_cookie.env"), encoding="utf-8"):
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == "NGA_UID":
+                    uid = v.strip()
+                elif k.strip() == "NGA_CID":
+                    cid = v.strip()
+        except Exception:
+            pass
     return uid, cid
 
 
