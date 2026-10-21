@@ -33,10 +33,11 @@ def write_context():
         items.append({**it, "permissions": permissions_for_state(it.get("state"), it.get("successor_code"))})
     json.dump({"date": x.get("date"), "source": "unified_all_subthemes", "items": items},
               open(CONTEXT, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    return {"step": "context", "n": len(items), "returncode": 0}
+    return {"step": "context", "n": len(items), "date": x.get("date"), "items": items, "returncode": 0}
 
 
 def main():
+    os.makedirs(OUT_P1, exist_ok=True)
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-agent", action="store_true")
     a = ap.parse_args()
@@ -45,7 +46,15 @@ def main():
         steps.append(run("agent_confirm", [os.path.join(ROOT, "jobs/agent_confirm_bellwethers.py")], timeout=1200))
     steps.append(run("state", [os.path.join(ROOT, "jobs/build_bellwether_state.py"), "--history"]))
     try:
-        steps.append(write_context())
+        ctx = write_context()
+        steps.append({k: ctx.get(k) for k in ("step", "n", "returncode")})
+        try:
+            sys.path.insert(0, os.path.join(ROOT, "backend"))
+            from app.services.bellwether_store import upsert_items
+            n = upsert_items(ctx["date"], ctx["items"], source="unified_all_subthemes")
+            steps.append({"step": "pgsql", "n": n, "returncode": 0})
+        except Exception as pe:
+            steps.append({"step": "pgsql", "returncode": 1, "error": str(pe)})
     except Exception as e:
         steps.append({"step": "context", "returncode": 1, "error": str(e)})
     out = {"date": datetime.now().strftime("%Y%m%d"), "steps": steps,
