@@ -399,3 +399,33 @@ def test_window_defaults_unchanged():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "80 60 20 900", out.stdout
+
+
+def test_write_wave_state_without_ev_uses_latched_walk(monkeypatch, tmp_path):
+    """★ 2026-10-21：write_wave_state(ev=None) 必须走**带锁回放**（原来走 evaluate 无锁 ✗
+    ⇒ 实测直接把生产档从 defense 写成 t_only ✗）。假数据：破位后小幅反弹（<5%）⇒ 锁必须保持 ✓"""
+    import datetime as dt
+    import json
+
+    import wave_ladder as W
+
+    d = dt.date(2026, 1, 5)
+
+    def nxt():
+        nonlocal d
+        while d.weekday() >= 5:
+            d += dt.timedelta(days=1)
+        out = d.strftime("%Y%m%d")
+        d += dt.timedelta(days=1)
+        return out
+
+    rows = [(nxt(), 100.0, 101.0, 1e9) for _ in range(100)]   # 要 > MIN_BARS(80) 才有结论 ✓
+    rows.append((nxt(), 95.0, 96.0, 1e9))          # 破位 -5% ⇒ rung3 上锁
+    rows += [(nxt(), 95.5, 96.0, 1e9) for _ in range(9)]   # 反弹 +0.5% < 5% ⇒ 锁保持
+
+    monkeypatch.setattr(W, "DATA", str(tmp_path))
+    monkeypatch.setattr(W, "load_rows", lambda code=None: rows)
+    p = W.write_wave_state(dated=True)
+    assert p, "应写出文件"
+    ws = json.load(open(p, encoding="utf-8"))
+    assert int((ws.get("rung") or {}).get("index", -1)) == 3, ws.get("rung")

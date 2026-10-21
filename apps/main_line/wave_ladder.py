@@ -1069,10 +1069,19 @@ def write_wave_state(asof: Optional[str] = None, dated: bool = False,
     传 ev（来自 walk，含单向锁）时按它写；否则用 `evaluate()` 现算（无降级锁，实时口径）。
     """
     if ev is None:
+        # ★ 2026-10-21 修（二次踩坑 ✗）：原来这里走 `evaluate()`（**单日、无锁** ✗）⇒
+        #   任何"不带 ev 的调用方"都会把上锁的档位写成未上锁的 ✗（实测：直接调本函数一次，
+        #   生产 wave_state 就从 defense 变成了 t_only ✗）。改为**带锁回放 walk** ✓ 取末档 ✓。
         rows = rows or load_rows()
         if not rows:
             return None
-        ev = evaluate(rows, str(asof)[:8] if asof else rows[-1][0])
+        _asof8 = str(asof)[:8] if asof else ""
+        if _asof8:
+            rows = [r for r in rows if r[0] <= _asof8] or rows
+        _evs = walk(rows)
+        if not _evs:
+            return None
+        ev = _evs[-1]
     ws = to_wave_state(ev, asof)
     if not ws:
         return None
