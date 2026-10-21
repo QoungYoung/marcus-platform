@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
-"""生产行情高开低收：datahubco/promax 补 high/low，本地缓存。
+"""行情源：优先 datahubco/promax daily，不依赖本地 bars_combined.parquet。
 
-data/bars_combined.parquet 只有 close/amount；
-高/低缺失时按交易日调 Tushare relay 的 daily，缓存到 data/bars_high_low.parquet。
+- 有 data/bars_combined.parquet：只补 high/low
+- 没有：按日期调 daily 取 close/high/low/amount，缓存 data/bars_api.parquet
 """
 from __future__ import annotations
 import os, sys
+from datetime import datetime, timedelta
 import pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.path.join(ROOT, "data/bars_combined.parquet")
-CACHE = os.path.join(ROOT, "data/bars_high_low.parquet")
+API_CACHE = os.path.join(ROOT, "data/bars_api.parquet")
+HL_CACHE = os.path.join(ROOT, "data/bars_high_low.parquet")
+FIELDS = "ts_code,trade_date,close,amount,high,low"
 
 
 def _relay():
@@ -19,63 +22,102 @@ def _relay():
     return get_relay()
 
 
-def _cache() -> pd.DataFrame:
-    if os.path.exists(CACHE):
-        try:
-            return pd.read_parquet(CACHE)
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
+def _read(p):
+    try:
+        return pd.read_parquet(p) if os.path.exists(p) else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
 
 
-def _save(rows):
-    if not rows:
-        return
-    df = pd.DataFrame(rows)
-    old = _cache()
+def _write(p, frames):
+    frames = [x for x in frames if x is not None and len(x)]
+    if not frames: return
+    df = pd.concat(frames, ignore_index=True)
+    df["trade_date"] = df["trade_date"].astype(str)
+    df = df.drop_duplicates(["ts_code", "trade_date"], keep="last")
+    old = _read(p)
     if len(old):
+        old["trade_date"] = old["trade_date"].astype(str)
         df = pd.concat([old, df], ignore_index=True).drop_duplicates(["ts_code", "trade_date"], keep="last")
-    df.to_parquet(CACHE, index=False)
+    df.to_parquet(p, index=False)
+
+
+def _weekdays(start=None, end=None):
+    end = end or datetime.now().strftime("%Y%m%d")
+    start = start or (datetime.strptime(end, "%Y%m%d") - timedelta(days=30)).strftime("%Y%m%d")
+    d = datetime.strptime(start, "%Y%m%d"); e = datetime.strptime(end, "%Y%m%d")
+    out = []
+    while d <= e:
+        if d.weekday() < 5: out.append(d.strftime("%Y%m%d"))
+        d += timedelta(days=1)
+    return out
+
+
+def _fetch_daily(dates):
+    cache = _read(API_CACHE)
+    have = set(cache.trade_date.astype(str)) if len(cache) else set()
+    missing = [d for d in dates if d not in have]
+    if missing:
+        try:
+            pro = _relay(); rows = []
+            for i, d in enumerate(missing, 1):
+                try:
+                    x = pro.daily(trade_date=d, fields=FIELDS)
+                    if x is not None and len(x): rows.append(x)
+                except Exception:
+                    continue
+                if i % 10 == 0: _write(API_CACHE, rows); rows = []
+            _write(API_CACHE, rows)
+        except Exception:
+            pass
+    return _read(API_CACHE)
 
 
 def load_bars(min_date: str | None = None, latest_only: bool = False) -> pd.DataFrame:
-    base = pd.read_parquet(BASE, columns=["ts_code", "trade_date", "close", "amount"])
-    dates = sorted(base.trade_date.astype(str).unique())
+    base = _read(BASE)
+    if len(base):
+        dates = sorted(base.trade_date.astype(str).unique())
+        if latest_only: dates = dates[-1:]
+        elif min_date: dates = [d for d in dates if d >= min_date]
+        hl = _read(HL_CACHE)
+        have = set(hl.trade_date.astype(str)) if len(hl) else set()
+        missing = [d for d in dates if d not in have]
+        if missing:
+            try:
+                pro = _relay(); rows = []
+                for i, d in enumerate(missing, 1):
+                    try:
+                        x = pro.daily(trade_date=d, fields="ts_code,trade_date,high,low")
+                        if x is not None and len(x): rows.append(x)
+                    except Exception:
+                        continue
+                    if i % 10 == 0: _write(HL_CACHE, rows); rows = []
+                _write(HL_CACHE, rows)
+            except Exception:
+                pass
+        hl = _read(HL_CACHE)
+        out = base.merge(hl, on=["ts_code", "trade_date"], how="left") if len(hl) else base.copy()
+        if "high" not in out: out["high"] = out["close"]
+        if "low" not in out: out["low"] = out["close"]
+        out["high"] = out["high"].fillna(out["close"]); out["low"] = out["low"].fillna(out["close"])
+        return out
+
+    # 没有基础 parquet：直接走 Tushare daily
     if latest_only:
-        dates = dates[-1:]
-    elif min_date:
-        dates = [d for d in dates if d >= min_date]
-    cache = _cache()
-    have = set(cache.trade_date.astype(str).unique()) if len(cache) else set()
-    missing = [d for d in dates if d not in have]
-    rows = []
-    if missing:
-        try:
-            pro = _relay()
-            for i, d in enumerate(missing, 1):
-                try:
-                    x = pro.daily(trade_date=d, fields="ts_code,trade_date,high,low")
-                    if x is not None and len(x):
-                        rows.append(x)
-                except Exception:
-                    continue
-                if i % 5 == 0:
-                    _save(rows); rows = []
-            _save(rows)
-        except Exception:
-            pass
-    cache = _cache()
-    if len(cache):
-        base = base.merge(cache, on=["ts_code", "trade_date"], how="left")
-    else:
-        base["high"] = base["close"]; base["low"] = base["close"]
-    if "high" not in base.columns: base["high"] = base["close"]
-    if "low" not in base.columns: base["low"] = base["close"]
-    base["high"] = base["high"].fillna(base["close"])
-    base["low"] = base["low"].fillna(base["close"])
-    return base
+        dates = _weekdays()[-15:]
+        api = _fetch_daily(dates)
+        if len(api):
+            api = api.sort_values("trade_date")
+            last = str(api.trade_date.max())
+            return api[api.trade_date == last].copy()
+        return pd.DataFrame(columns=["ts_code","trade_date","close","amount","high","low"])
+    dates = _weekdays(min_date or "20260601", datetime.now().strftime("%Y%m%d"))
+    return _fetch_daily(dates)
 
 
 def latest_date() -> str:
-    base = pd.read_parquet(BASE, columns=["trade_date"])
-    return str(base.trade_date.astype(str).max())
+    base = _read(BASE)
+    if len(base): return str(base.trade_date.astype(str).max())
+    api = _read(API_CACHE)
+    if len(api): return str(api.trade_date.astype(str).max())
+    return datetime.now().strftime("%Y%m%d")
