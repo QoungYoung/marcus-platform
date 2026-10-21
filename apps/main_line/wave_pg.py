@@ -14,6 +14,7 @@
   · `ON CONFLICT` 带 `WHERE data_date <= EXCLUDED.data_date` ⇒ **旧数据不会覆盖新数据** ✓；
   · 超时 5 秒 ✓（不能因为库慢拖住 08:10 的定时任务 ✗）。
 """
+import json
 import os
 from typing import Any, Dict, Optional
 
@@ -43,7 +44,7 @@ _SQL_UPSERT = """
 INSERT INTO wave_state
   (session_date, data_date, level, sub_level, operation, mode, rung,
    family, stage, status, confidence, source, payload)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
 ON CONFLICT (session_date) DO UPDATE SET
   data_date  = EXCLUDED.data_date,
   level      = EXCLUDED.level,
@@ -85,7 +86,6 @@ def upsert(ws: Dict[str, Any]) -> bool:
         dd = _date8(ws.get("date")) or sd
         if not sd or not dd:
             return False
-        from psycopg2.extras import Json
         conn = _conn()
         if conn is None:
             return False
@@ -95,7 +95,7 @@ def upsert(ws: Dict[str, Any]) -> bool:
                 cur.execute(_SQL_UPSERT, (
                     sd, dd, ws.get("level"), ws.get("sub_level"), ws.get("operation"), ws.get("mode"),
                     ws.get("rung"), ws.get("family"), ws.get("stage"), ws.get("status"),
-                    ws.get("confidence"), ws.get("source"), Json(ws)))
+                    ws.get("confidence"), ws.get("source"), json.dumps(ws, ensure_ascii=False)))
         finally:
             conn.close()
         return True
