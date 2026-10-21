@@ -42,6 +42,29 @@
    （实证：E1b 里 `side` 期间他照样减仓，把 `side` 当买信号命中仅 29% ✗）
 4. **长驻进程别永久缓存** ✗（2026-10-20 事故：接口缓存无 TTL ⇒ 卡片色带冻在 10-15 ✗）⇒ ≤60s TTL 或按 mtime ✓。
 
+## 3.5 ★ 2026-10-21 起：**统一读入口**（不要再直接开文件 ✗）
+
+读浪型状态一律走这两条之一 ✓：
+
+```python
+# 后端 Python
+from app.services import wave_store
+w = wave_store.get_wave()               # 当前档（PG 优先 ✓ 文件兜底 ✓ 30s TTL ✓）
+w = wave_store.get_wave_asof("20260803")  # 回测口径：session_date <= 该日的最近一档 ✓
+```
+
+```
+# 前端 / 其它语言 / 脚本
+GET /api/v1/wave/state                 # 当前档
+GET /api/v1/wave/state?asof=20260803   # 回测口径
+→ {ok, store: "both", asof, state:{...}}
+```
+
+· 开关 `WOLF_WAVE_STORE=both|pg|file`（默认 `both` ✓ 可随时回滚 ✓）；
+· 数据已在 PostgreSQL `wave_state` 表（**session_date 主键** ✓ 433 天回填 ✓，2025-01-03 ~ 2026-10-21）；
+· 已切换的读点（8 个）：`p2_entry_gate` / `wolf_253_build` / `wolf_discipline` / `wolf_judge` /
+  `position_tier` / `wave_gate`（含回测取档 `_find_archived` ✓）/ `wolf_pick.card` / `wolf_pick.state_guard` ✓。
+
 ## 4. 推荐写法（贴这两段就够）
 
 ### 4.1 门禁（买类 / 卖类都走它，别自己写 if）
