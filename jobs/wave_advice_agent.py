@@ -36,15 +36,48 @@ CAND = [("002463.SZ", "沪电股份", "PCB"), ("603228.SH", "景旺电子", "PCB
         ("603688.SH", "石英股份", "材料"), ("603938.SH", "三孚股份", "材料"),
         ("600206.SH", "有研新材", "材料")]
 
-RULES = '''狼大（-阿狼-）的现行规则（原话，务必照此，不要自创）：
-1) 定位：这里是**自救段、不是反转**——「要么别做，要么别追。要做就要早做」（10-21 10:18）；「不能 fomo，等右侧第一根黑 K」（10-21 10:03）。
-2) 方向：自救资金会在 **PCB、二线光、半导体材料** 三个方向里反复做成本（10-21 10:18）；设备 ETF 逐渐换成这三类（10-21 09:55）。
-3) 日内：**下跌不割肉**；**指数放量 2000E + 银行下跌** 时才补仓做正 T（10-21 12:25）。
-4) 卖：等指数**反抽到上方未回补缺口**且**量能萎靡**才开始卖（10-21 12:25）。
-5) 权重：银行/红利是**被用来压指数**的工具（10-21 10:09/10:18）——「抗完下跌，能涨时就换到更强的」（13:17）。
-6) 分型按**位置**翻转：**高位**底分型=减法位 ✗；**破低点之后的**顶分型=加法位 ✓（2026-04-08 原话）。
-7) 联动：宁德破位放巨量 ⇒ 半导体和光不可能大跌（保指数的资金会保）（10-21 13:22）。
-8) 纪律：结构只是「这一段结束」的观察点，**不是买卖信号**；卖侧永远可以做。'''
+# ★ 规则文件放 `config/` 而不是 `data/` —— `data/` 被 gitignore ✗ 部署不到生产 ✗；
+#   config/ 是入库的 ✓ 改完 push 即生效 ✓。可用 WOLF_RULES_FILE 覆盖 ✓。
+RULES_FILE = (os.environ.get("WOLF_RULES_FILE") or "").strip() or "config/wolf_rules.json"
+RULES_MAX_AGE_DAYS = 3          # ★ 规则超过 3 个自然日未更新 ⇒ 推送里必须标"可能过期" ✗
+RULES_FALLBACK = '''（内置快照 · 无外部文件）只用大方向：自救段不是反转；要么别做、要么别追；
+方向只看 PCB / 二线光 / 半导体材料；放量 2000E + 银行下跌才补 T；反抽到缺口 + 量萎靡才卖。'''
+
+
+def load_rules():
+    """→ (rules_text, meta{updated, age_days, stale, stance}) ✓
+
+    为什么这么做（用户 2026-10-21 指出）：把他的话**硬编码进 prompt 只是快照** ✗ ——
+    「今天的话不能指导明天」✓。改成：规则放 `data/wolf_rules.json`（**每条带日期** ✓），
+    由 harness 侧读帖后更新 ✓（NGA 直连 403 ✗ 无法 cron 抓取 ✓）；agent 每次读最新 ✓，
+    **超过 RULES_MAX_AGE_DAYS 天未更新 ⇒ prompt 与推送都明确标注「可能过期」** ✗，
+    避免拿旧立场指导新行情 ✓。
+    """
+    import datetime as _dt
+    try:
+        d = json.load(open(RULES_FILE, encoding="utf-8"))
+        rules = d.get("rules") or []
+        if not rules:
+            raise RuntimeError("empty rules")
+        latest = max(str(r.get("date") or "") for r in rules)
+        try:
+            age = (_dt.date.today() - _dt.datetime.strptime(latest, "%Y%m%d").date()).days
+        except Exception:
+            age = 99
+        lines = ["狼大（-阿狼-）的规则（**文件驱动 ✓ 每条带日期 ✓**，按日期从新到旧；过期的要打折扣看）："]
+        for r in sorted(rules, key=lambda x: str(x.get("date") or ""), reverse=True):
+            lines.append("  [%s]（%s）%s" % (r.get("date"), r.get("tag") or "-", r.get("text") or ""))
+        if d.get("stance"):
+            lines.append("  ★ 他当前的立场（综合）：%s" % d["stance"])
+        if age > RULES_MAX_AGE_DAYS:
+            lines.insert(1, "  ⚠️ **注意：这份规则已 %d 天未更新（最新 %s）⇒ 可能已过期** ✗"
+                            " —— 涉及方向的建议要打折扣，只作参考。" % (age, latest))
+        return "\n".join(lines), {"updated": latest, "age_days": age,
+                                  "stale": age > RULES_MAX_AGE_DAYS, "stance": d.get("stance") or ""}
+    except Exception as e:
+        print("[wave-advice] 读规则文件失败（%s）⇒ 用内置快照 ✗" % str(e)[:80])
+        return RULES_FALLBACK, {"updated": "", "age_days": 999, "stale": True, "stance": ""}
+
 
 
 def load(code, fn="index_daily", start="20260101"):
@@ -166,10 +199,14 @@ def http_json(url, payload=None, timeout=300):
         return json.loads(r.read().decode("utf-8", "ignore"))
 
 
-def llm_advice(f):
+def llm_advice(f, rules_text=None):
+    _rt, _meta = (None, None)
+    if rules_text is None:
+        rules_text, _meta = load_rules()
     prompt = [
         "你是严谨的 A 股复盘助手。请**严格按下面这位交易者的规则**给建议，不要自创逻辑，不要预测点位。",
-        RULES,
+        "规则若标注了日期或『可能过期』，请优先采纳**最近 3 天**的；与旧规则冲突时以新的为准。",
+        rules_text,
         "",
         "=== FACTS（工具取数，确定性 ✓ 缺失就写「缺」）===",
         json.dumps(f, ensure_ascii=False)[:4000],
@@ -221,7 +258,11 @@ def main():
     args = ap.parse_args()
 
     f = facts()
+    rules_text, rmeta = load_rules()
     rules = rules_advice(f)
+    print("规则：最新 %s ｜ 距今 %d 天 ｜ %s ｜ stance=%s" % (
+        rmeta["updated"] or "?", rmeta["age_days"],
+        "⚠️ 可能过期 ✗" if rmeta["stale"] else "新鲜 ✓", rmeta["stance"] or "-"))
     print("事实：指数 %d 个 ✓ 候选 %d 个 ✓ 浪型 %s" % (
         len(f.get("indexes") or {}), len(f.get("candidates") or []),
         "有" if (f.get("wave") or {}).get("operation") else "缺"))
@@ -230,7 +271,7 @@ def main():
     body, used = None, False
     if not args.no_llm:
         try:
-            body = llm_advice(f)
+            body = llm_advice(f, rules_text)
             used = True
             print("\n【agent 版】\n" + body)
         except Exception as e:
@@ -239,6 +280,9 @@ def main():
     wave = (f.get("wave") or {})
     head = "🐺 策略建议（%s）｜ 浪型 %s·%s·%s" % (
         f.get("date"), wave.get("level") or "缺", wave.get("sub_level") or "", wave.get("operation") or "")
+    if rmeta["stale"]:
+        head += "\n⚠️ 他的规则已 %d 天未更新（最新 %s）⇒ 方向建议打折扣 ✗" % (
+            rmeta["age_days"], rmeta["updated"] or "?")
     if used:
         text = head + "\n\n" + body
     else:
