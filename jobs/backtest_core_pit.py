@@ -9,6 +9,7 @@
 from __future__ import annotations
 import json, os, sys
 import numpy as np, pandas as pd
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "jobs"))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAB = os.path.join(ROOT, "data/pit/chain_map/labels_weekly.csv")
 OBS = os.path.join(ROOT, "data/pit/theme_members/observations.csv")
@@ -33,23 +34,38 @@ def stage_of(members, close, d):
     else: st = "strong"
     return st, {"r5": r5, "r20": r20, "breadth20": b20}
 
-def leader_state(lab_theme, close, d):
-    x = lab_theme[(lab_theme["rank"] == 1)]
-    if not len(x): return "unknown"
-    code = str(x.iloc[0].ts_code)
-    s = close[code].loc[:d].dropna()
-    if len(s) < 21: return "unknown"
-    ma20 = s.iloc[-20:].mean(); low20 = s.iloc[-21:-1].min()
-    if s.iloc[-1] < low20: return "dead"
-    if s.iloc[-1] < ma20: return "warning"
-    return "alive"
+_STATE_HIST = {}
+
+
+def build_states(lab, obs, close, high, amt):
+    from build_bellwether_state import compute_history
+    for theme, g in lab.groupby("theme"):
+        leaders = g[g["rank"] == 1].sort_values("date")
+        if not len(leaders): continue
+        leader = str(leaders.iloc[-1].ts_code)
+        members = sorted(set(obs[obs.theme == theme].ts_code.dropna()) | set(g.ts_code.dropna()))
+        try:
+            _STATE_HIST[theme] = compute_history(close, high, amt, theme, leader, min_date="20241001",
+                                                 codes_override=[c for c in members if c in close.columns])
+        except Exception:
+            _STATE_HIST[theme] = []
+    print("states", {k: len(v) for k, v in _STATE_HIST.items()})
+
+
+def state_at(theme, d):
+    rows = [r for r in _STATE_HIST.get(theme, []) if str(r.get("date")) <= str(d)]
+    return rows[-1].get("state") if rows else "unknown"
 
 def main():
     lab = pd.read_csv(LAB, dtype={"date": str, "ts_code": str})
     obs = pd.read_csv(OBS, dtype={"as_of_date": str, "ts_code": str})
-    bars = pd.read_parquet(os.path.join(ROOT, "data/bars_combined.parquet"),
-                           columns=["ts_code", "trade_date", "close"])
+    # 生产 API 缓存：2024-11~2026-10，含 high/low；PIT 重放用同一份
+    bars = pd.read_parquet(os.path.join(ROOT, "data/bars_api.parquet"),
+                           columns=["ts_code", "trade_date", "close", "high", "amount"])
     close = bars.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
+    high = bars.pivot_table(index="trade_date", columns="ts_code", values="high", aggfunc="last").sort_index()
+    amt = bars.pivot_table(index="trade_date", columns="ts_code", values="amount", aggfunc="last").sort_index()
+    build_states(lab, obs, close, high, amt)
     dates = sorted(lab.date.unique())
     idx = {str(d): i for i, d in enumerate(close.index)}
     picks, themes = [], []
@@ -69,7 +85,7 @@ def main():
                 cand = g[g["rank"] == 1]
             if not len(cand): cand = g[g["rank"] == 1]
             cand = cand.drop_duplicates("ts_code").head(2)
-            ls = leader_state(g, close, d)
+            ls = state_at(theme, d)
             mult = {"alive": 1.0, "warning": 0.5, "dead": 0.25, "unknown": 0.5}.get(ls, 0.5)
             for _, p in cand.iterrows():
                 c = str(p.ts_code)

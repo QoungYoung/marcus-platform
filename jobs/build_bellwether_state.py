@@ -78,8 +78,8 @@ def _breadth(df, codes, date8):
     return float(ok / max(len(codes), 1))
 
 
-def compute_history(df, high, amt, sub, bell, min_date="20260615"):
-    codes = [c for c in sub_stocks(sub) if c in df.columns]
+def compute_history(df, high, amt, sub, bell, min_date="20260615", codes_override=None):
+    codes = [c for c in (codes_override or sub_stocks(sub)) if c in df.columns]
     if not codes or bell not in df.columns:
         return []
     subp = df[codes]
