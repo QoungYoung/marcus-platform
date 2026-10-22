@@ -19,6 +19,7 @@ import json
 import os
 import statistics
 import sys
+import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -309,8 +310,12 @@ def main():
             print("\n[wave-advice] agent 不可用（%s）⇒ 走规则版兜底 ✓" % str(e)[:100])
 
     wave = (f.get("wave") or {})
+    # ★ 2026-10-22：标题日期要用**今天**（运行日 ✓），数据日单独标 —— 盘中收盘数据还是昨天的 ✗
+    _today = time.strftime("%Y%m%d")
     head = "🐺 策略建议（%s）｜ 浪型 %s·%s·%s" % (
-        f.get("date"), wave.get("level") or "缺", wave.get("sub_level") or "", wave.get("operation") or "")
+        _today, wave.get("level") or "缺", wave.get("sub_level") or "", wave.get("operation") or "")
+    if f.get("date") and f["date"] != _today:
+        head += "\n（数据截至 %s 收盘 ✓ 今日盘中请以工具实时值为准 ✓）" % f["date"]
     head += "\n（纪律：本项目自有 %d 条 ✓ 不依赖任何个人/论坛）" % pmeta["n"]
     if used:
         text = head + "\n\n" + body
