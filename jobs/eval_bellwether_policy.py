@@ -22,8 +22,8 @@ def main():
     out = {"n_picks": len(p), "n_dates": int(p.date.nunique())}
     out["role_state"] = p.groupby(["leader_state", "role"]).f20.agg(["count", "mean"]).round(4).reset_index().to_dict("records")
     out["forbidden"] = {
-        "dead_second": int(((p.leader_state == "dead") & (p.role == "second")).sum()),
-        "warning_second": int(((p.leader_state == "warning") & (p.role == "second")).sum()),
+        "dead_second": int(((p.leader_state == "dead") & (p.role == "second") & p.allow).sum()),
+        "warning_second": int(((p.leader_state == "warning") & (p.role == "second") & p.allow).sum()),
         "dead_or_warning_positive": int((p.leader_state.isin(["dead", "warning"]) & (p.f20 > 0)).sum()),
         "dead_or_warning_total": int(p.leader_state.isin(["dead", "warning"]).sum()),
     }

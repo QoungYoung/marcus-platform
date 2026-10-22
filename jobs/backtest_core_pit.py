@@ -86,8 +86,9 @@ def main():
             if not len(cand): cand = g[g["rank"] == 1]
             cand = cand.drop_duplicates("ts_code").head(2)
             ls = state_at(theme, d)
-            mult = {"alive": 1.0, "warning": 0.5, "dead": 0.25, "unknown": 0.5}.get(ls, 0.5)
             for _, p in cand.iterrows():
+                role = "second" if p.get("bucket") == "second" else "leader"
+                allow = not (ls == "dead" or (ls in ("warning", "stale", "unknown") and role == "second"))
                 c = str(p.ts_code)
                 if c not in close.columns: continue
                 try:
@@ -97,8 +98,8 @@ def main():
                 except Exception:
                     continue
                 picks.append({"date": d, "theme": theme, "code": c, "name": p.get("name"),
-                              "stage": st, "role": "second" if str(p.get("bucket")) == "second" else "leader",
-                              "leader_state": ls, "mult": mult, "f20": r})
+                              "stage": st, "role": role,
+                              "leader_state": ls, "allow": bool(allow), "f20": r})
             try:
                 mm = [c for c in m if c in close.columns]
                 e = close[mm].iloc[i + 1]; f = close[mm].iloc[i + 1 + 20]
@@ -118,8 +119,9 @@ def main():
     # 日期组合
     daily = df.groupby("date").apply(lambda g: pd.Series({
         "A": g.f20.mean(),
-        "B": np.average(g.f20, weights=g.mult),
-        "n": len(g)})).reset_index()
+        # gate 挡掉的仓位留现金，不重新分配给剩余票
+        "B": g.loc[g.allow, "f20"].sum() / max(len(g), 1),
+        "n": len(g), "n_gate": int(g.allow.sum())})).reset_index()
     daily = daily.merge(td.groupby("date").f20.mean().rename("C"), on="date", how="left")
     for c in ["A","B","C"]:
         print(c, stat(daily[c]))

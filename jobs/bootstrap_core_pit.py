@@ -11,7 +11,9 @@ def main():
     p = pd.read_csv(os.path.join(OUT, "picks.csv"), dtype={"date": str})
     t = pd.read_csv(os.path.join(OUT, "themes.csv"), dtype={"date": str})
     daily = p.groupby("date").apply(lambda g: pd.Series({
-        "A": g.f20.mean(), "B": np.average(g.f20, weights=g.mult), "n": len(g)})).reset_index()
+        "A": g.f20.mean(),
+        "B": g.loc[g.allow, "f20"].sum() / max(len(g), 1),
+        "n": len(g), "n_gate": int(g.allow.sum())})).reset_index()
     daily = daily.merge(t.groupby("date").f20.mean().rename("C"), on="date", how="left").sort_values("date")
     daily.to_csv(os.path.join(OUT, "daily.csv"), index=False, encoding="utf-8-sig")
     # 4-week blocks
