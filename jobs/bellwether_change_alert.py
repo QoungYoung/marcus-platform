@@ -23,6 +23,20 @@ def changes():
         if len(older):
             last_date = older.date.max()
             prev = {str(r.subtheme): str(r.state) for _, r in older[older.date == last_date].iterrows()}
+    if not prev:
+        # 生产 history 可能为空：用 PG 上一交易日兜底
+        try:
+            import sys
+            sys.path.insert(0, os.path.join(ROOT, "backend"))
+            from sqlalchemy import text
+            from app.database import engine
+            with engine.connect() as conn:
+                row = conn.execute(text("SELECT max(trade_date) FROM bellwether_daily WHERE trade_date < :d"), {"d": date}).scalar()
+                if row:
+                    rs = conn.execute(text("SELECT subtheme, state FROM bellwether_daily WHERE trade_date = :d"), {"d": str(row)}).mappings()
+                    prev = {str(r["subtheme"]): str(r["state"]) for r in rs}
+        except Exception as e:
+            print("[bellwether-alert] PG prev fallback failed:", str(e)[:120])
     out = []
     for it in items:
         sub = str(it.get("subtheme")); st = str(it.get("state"))
