@@ -73,15 +73,26 @@ def today_snapshot():
 
 
 def evaluate(h, t):
-    """→ (volx, ok_volume, ok_close_up, triggered) ✓"""
-    if len(h) < 21:
+    """→ (volx, ok_vol, ok_up, ok_downtrend, triggered) ✓
+
+    ★ 2026-10-22 补上第三条（这是胜率的来源 ✓）：
+      「**必须在下跌段**」= 上证收盘 < MA60 ✓
+      实测（2016~2026 ✓ 基准 n=214）：
+        放量+收阳                 ⇒ 20 日 +0.77%，胜率 57% ✗
+        放量+收阳 ∧ 收<MA60(下跌段) ⇒ 20 日 **+2.57%**，胜率 **74%** ✓✓（n=53 ✓ 每年约 5 次）
+        放量+收阳 ∧ 收>MA60(上涨段) ⇒ 20 日 +0.17%，胜率 52% ✗
+      依据他的原话：「这里就是**自救**」（= 下跌段 ✓）、「底是买出来的」✓
+    """
+    if len(h) < 61:
         return None
     a20 = statistics.mean([x["a"] for x in h[-20:]])
     volx = (t["a"] / a20) if a20 else 0.0
     rng = t["h"] - t["l"]
+    ma60 = statistics.mean([x["c"] for x in h[-59:]] + [t["c"]])
     ok_v = volx >= VOL_MULT
     ok_u = (t["c"] > t["o"]) and (t["c"] > t["prev"]) and (rng > 0 and (t["c"] - t["l"]) / rng >= UPPER_HALF)
-    return volx, ok_v, ok_u, bool(ok_v and ok_u)
+    ok_d = t["c"] < ma60
+    return volx, ok_v, ok_u, ok_d, bool(ok_v and ok_u and ok_d), ma60
 
 
 def wave_cap():
@@ -145,7 +156,7 @@ def backfill(year):
         if not r:
             continue
         n += 1
-        if r[3]:
+        if r[4]:
             f5 = (rs[i+5]["c"]/t["c"]-1)*100
             f20 = (rs[i+20]["c"]/t["c"]-1)*100
             hit.append((t["d"], round(r[0], 2), round(f5, 2), round(f20, 2)))
@@ -175,11 +186,13 @@ def main():
     if not r:
         print("[entry] 历史不足 ✗")
         return 1
-    volx, ok_v, ok_u, trig = r
+    volx, ok_v, ok_u, ok_d, trig, ma60 = r
     cap, op = wave_cap()
-    print("[entry] %s 上证 %.2f（%+.2f%%）｜成交 %.0f 亿 = 20日均 %.2fx %s｜收阳 %s %s" % (
-        t["d"], t["c"], (t["c"]/t["prev"]-1)*100, t["a"]/1e5, volx,
-        "✓" if ok_v else "✗", "✓" if ok_u else "✗", "⇒ **触发 ✓**" if trig else "⇒ 不触发 ✗"))
+    print("[entry] %s 上证 %.2f（%+.2f%%）｜MA60 %.2f %s｜成交 %.0f 亿 = 20日均 %.2fx %s｜收阳 %s ⇒ %s" % (
+        t["d"], t["c"], (t["c"]/t["prev"]-1)*100, ma60,
+        "下跌段 ✓" if ok_d else "上涨段 ✗", t["a"]/1e5, volx,
+        "✓" if ok_v else "✗", "✓" if ok_u else "✗",
+        "**触发 ✓**" if trig else "不触发 ✗"))
     print("[entry] 浪型档位 %s ⇒ 仓位上限 %d%%" % (op or "缺", cap))
 
     st = load_state()
@@ -210,14 +223,14 @@ def main():
         st["open"] = {"signal_date": t["d"], "etf": code, "etf_name": q.get("name") or name,
                       "etf_close": q.get("close"), "index_close": t["c"], "volx": round(volx, 2),
                       "cap_pct": cap, "hold_days": HOLD_DAYS}
-        msgs.append("🎯 **入场信号触发**（放量 %.2fx ∧ 收阳 ✓）\n"
+        msgs.append("🎯 **入场信号触发**（下跌段 ✓ ∧ 放量 %.2fx ✓ ∧ 收阳 ✓）\n"
                     "· 标的：%s（%s）现价 %s\n"
                     "· 仓位上限：**%d%%**（浪型 %s）\n"
                     "· 持有：**%d 个交易日**后了结 ✓（20 日口径，5 日超额扣成本≈0 ✗）" % (
                         volx, q.get("name") or name, code, q.get("close"),
                         cap, op or "缺", HOLD_DAYS))
     if msgs:
-        text = "🐺 入场时机（%s）\n\n%s\n\n（依据：上证放量≥1.2x ∧ 收阳 ⇒ 5/20 日正超额 ✓ 胜率 61% ✓ n=222 ✓）" % (
+        text = "🐺 入场时机（%s）\n\n%s\n\n（依据：上证 收<MA60 ∧ 放量≥1.2x ∧ 收阳 ⇒ 5日 +1.13%/20日 **+2.57%**，20日胜率 **74%** ✓ n=53 ✓）" % (
             t["d"], "\n\n".join(msgs))
         print("\n" + text)
         if args.dry:
