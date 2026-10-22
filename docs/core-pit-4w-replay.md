@@ -65,3 +65,42 @@ warning + second = 0
 - `data/core_pit/replay_4w.csv`
 - `data/core_pit/replay_4w.json`
 - `jobs/replay_core_gate_4w.py`
+
+---
+
+## 更早的完整 4 周窗口（20260828 ~ 20260918）
+
+为拿到完整 20 日 forward，回放更早的 4 周：
+
+```text
+总 picks: 97
+allowed: 59
+blocked: 38
+```
+
+状态：
+
+| 状态 | allow | block |
+|---|---:|---:|
+| alive | 29 | 0 |
+| rotated | 6 | 0 |
+| warning | 14 | 34 |
+| stale | 10 | 4 |
+
+结果：
+
+| horizon | allowed | blocked |
+|---|---:|---:|
+| 5日 | -1.98% (n59) | **-3.22% (n38)** |
+| 10日 | **-4.53% (n59)** | -3.73% (n38) |
+| 20日 | **-5.26% (n49)** | -4.28% (n24) |
+
+结论：
+
+- 5 日 gate 挡得更好；
+- **10/20 日 blocked 反而更好** → gate 挡掉了一些后来反弹的票；
+- 样本 24-38，仍小；
+- 该窗口整体是下跌市，收益全负，不能以此判断绝对好坏；
+- 不能证明 20 日风险改善。
+
+> 数据说明：`bars_api` 缺失的日期用 `bars_combined` 补，high 暂用 close；这会影响状态精度。
