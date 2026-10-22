@@ -172,7 +172,8 @@ def facts():
         hi60 = max(x["h"] for x in rs[-60:])
         q = rt.get(code) or {}
         f["indexes"][name] = {
-            "close": round(rs[-1]["c"], 2), "amt_yi": round(rs[-1]["amt"] / 1e5, 0),
+            "close": round(rs[-1]["c"], 2), "close_date": rs[-1]["d"],
+            "amt_yi": round(rs[-1]["amt"] / 1e5, 0),
             "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,   # ★ 上一交易日收盘口径 ✗ 只作参考
             "volx_today": q.get("volx_today"),        # ★ 当日实时量比 ✓（判断放量只用它 ✓）
             "pct_today": q.get("pct_today"),          # ★ 当日实时涨跌幅 % ✓
@@ -205,6 +206,9 @@ def facts():
             q = rt.get(code) or {}
             f["candidates"].append({
                 "name": name, "grp": grp, "close": round(rs[-1]["c"], 2),
+                # ★ 2026-10-22：close 是**上一交易日**收盘（K线最后一根 ✓ 通常不是今天 ✗）
+                #   而 price_today 是今日实时 ⇒ 两者不同日 ✗ 不许做一致性校验 ✗（agent 曾误报"矛盾"✗）
+                "close_date": rs[-1]["d"],
                 "dist_ma20_pct": round((rs[-1]["c"] / ma20 - 1) * 100, 2),
                 "ma20": round(ma20, 2),
                 "low5": round(min(x["l"] for x in rs[-5:]), 2),
@@ -365,6 +369,10 @@ def llm_advice(f, policy_text=None):
         "   `create_t_condition` / `auto_gen_conditions` / `rebalance_floors` / `update_golden_pit_etf_config` /",
         "   `run_t_backtest` / `write` / `edit` / `bash` —— 一个都不许 ✗（这是只读复盘 ✓ 不是交易 ✓）。",
         "⚠️ 工具失败就写「缺」✓ 每个工具最多试一次 ✗ 不要换接口碰运气 ✗。",
+        "⚠️ **口径说明（2026-10-22 加 ✓ 曾误报「矛盾」✗）**：",
+        "   · `close` / `close_date` = **上一交易日收盘**（K线最后一根 ✓ 通常不是今天 ✗）",
+        "   · `price_today` / `pct_today` / `volx_today` = **今日实时** ✓",
+        "   · 两者**不是同一天** ✗ ⇒ **绝不要因为 close ≠ price_today 就判定数据矛盾** ✗（差额就是今天的涨跌幅 ✓）",
         "⚠️ **判断买侧（P2）必须用「今日」量比与阴阳**：用 FACTS 的 `volx_today` ✓，也可用 `get_stock_quote` 复核 ✓；",
         "   FACTS 里的 `volx` 是**上一交易日**口径 ✗；判断今日是否放量**必须用 `volx_today`** ✓。",
         "   （2026-10-22 教训：沪电昨日 volx 1.09 ✗ 今日 volx_today 1.37 ✓ —— 差一步就判反了 ✓）",
