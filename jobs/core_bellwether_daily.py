@@ -43,15 +43,13 @@ def main():
     ap.add_argument("--skip-agent", action="store_true")
     a = ap.parse_args()
     steps = []
-    if not a.skip_agent:
-        steps.append(run("agent_confirm", [os.path.join(ROOT, "jobs/agent_confirm_bellwethers.py")], timeout=1200))
+    # 先 state，避免 agent/DSH 内存与 pandas 峰值叠加
     state_step = run("state", [os.path.join(ROOT, "jobs/build_bellwether_state.py"), "--latest-only"])
     steps.append(state_step)
     if state_step.get("returncode") != 0:
         steps.append({"step": "context", "returncode": 1, "error": "state failed; skip stale context"})
         steps.append({"step": "pgsql", "returncode": 1, "error": "state failed; skip stale pgsql"})
-        out = {"date": datetime.now().strftime("%Y%m%d"), "steps": steps,
-               "ok": False}
+        out = {"date": datetime.now().strftime("%Y%m%d"), "steps": steps, "ok": False}
         json.dump(out, open(PIPELINE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print(json.dumps({"ok": False, "steps": [{k: s.get(k) for k in ("step","returncode","seconds","error")} for s in steps]}, ensure_ascii=False))
         sys.exit(1)
@@ -68,6 +66,8 @@ def main():
             steps.append({"step": "pgsql", "returncode": 1, "error": str(pe)})
     except Exception as e:
         steps.append({"step": "context", "returncode": 1, "error": str(e)})
+    if not a.skip_agent:
+        steps.append(run("agent_confirm", [os.path.join(ROOT, "jobs/agent_confirm_bellwethers.py")], timeout=1200))
     out = {"date": datetime.now().strftime("%Y%m%d"), "steps": steps,
            "ok": all(s.get("returncode") == 0 for s in steps)}
     json.dump(out, open(PIPELINE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
