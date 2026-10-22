@@ -32,12 +32,33 @@ def main():
                          "stage": (r.get("stage") or {}).get("stage"),
                          "rule": p.get("rule"),
                          })
-    out = {"date": date8, "source": "select_core+bellwether_soft_overlay",
-           "n_subthemes": len(items), "n_picks": len(flat), "items": items}
+    # 风向标只作为任务级环境上下文；不挂到每只 pick，也不产生乘数
+    bw = {"date": None, "source": None, "usage": "advisory_only", "states": {},
+          "dead_subthemes": [], "note": "不参与选股/过滤/仓位；picks 不携带 bellwether 字段是设计"}
+    for fp in (os.path.join(ROOT, "data/core_p1/ai_state_latest.json"),
+               os.path.join(ROOT, "data/core_p1/bellwether_state_latest.json")):
+        if os.path.exists(fp):
+            try:
+                x = json.load(open(fp, encoding="utf-8"))
+                cnt = {}
+                dead = []
+                for it in x.get("items", []):
+                    st = it.get("state") or it.get("ai_state") or "unknown"
+                    cnt[st] = cnt.get(st, 0) + 1
+                    if st == "dead": dead.append(it.get("subtheme"))
+                bw = {"date": x.get("date"), "source": x.get("source") or os.path.basename(fp),
+                      "usage": "advisory_only", "states": cnt, "dead_subthemes": dead,
+                      "note": "不参与选股/过滤/仓位；picks 不携带 bellwether 字段是设计"}
+                break
+            except Exception:
+                pass
+    out = {"date": date8, "source": "select_core+bellwether_advisory",
+           "n_subthemes": len(items), "n_picks": len(flat), "bellwether": bw, "items": items}
     json.dump(out, open(os.path.join(OUT, "latest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     import pandas as pd
     pd.DataFrame(flat).to_csv(os.path.join(OUT, f"select_core_{date8}.csv"), index=False, encoding="utf-8-sig")
-    print(json.dumps({"date": date8, "subthemes": len(items), "picks": len(flat)}, ensure_ascii=False))
+    print(json.dumps({"date": date8, "subthemes": len(items), "picks": len(flat),
+                      "bellwether": bw}, ensure_ascii=False))
     if flat:
         print(pd.DataFrame(flat)[["subtheme","code","name","stage"]].head(20).to_string(index=False))
     else:
