@@ -1145,6 +1145,13 @@ class SchedulerService:
                     "报告结构：今日重大新闻 → 情绪倾向 → 热点板块关联 → 明日关注。"
                     "侧重新闻对个股和板块的潜在影响，不重复市场数据。"
                 )
+            elif ('风向标' in task_name) or ('core 选股' in task_name) or ('core选股' in task_name):
+                report_guide = (
+                    "报告结构：45子主题风向标状态概览 → alive/rotated/warning/dead 分布 → "
+                    "当前 core picks 与 position_multiplier → 风险/观察建议。\n"
+                    "这是只读分析：可以说「观察/等待/不追」，不要改仓位、不要下单；"
+                    "picks=0 时直接说明当前规则没有可买 core，不要硬推票。\n"
+                )
             else:
                 report_guide = (
                     "报告结构：市场概况 → 板块资金 → 指数复盘 → 风险关注点。\n"
@@ -1198,7 +1205,7 @@ class SchedulerService:
                 stance = 'yellow'
                 position_limit = 60
                 reason_str = ''
-                if signal_match:
+                if signal_match and not (('风向标' in task_name) or ('core 选股' in task_name) or ('core选股' in task_name)):
                     try:
                         stance = signal_match.group(1).lower()
                         position_limit = int(signal_match.group(2))
