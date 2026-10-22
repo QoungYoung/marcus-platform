@@ -5,7 +5,8 @@ import argparse, json, os, re, sys
 from datetime import datetime
 import numpy as np, pandas as pd, requests
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for p in (os.path.join(ROOT,"backend"),os.path.join(ROOT,"backend/app/services"),ROOT,os.path.join(ROOT,"jobs")):
+for p in (os.path.join(ROOT,"backend"),os.path.join(ROOT,"backend/app/services"),
+          os.path.join(ROOT,"app/services"),os.path.join(ROOT,"app"),ROOT,os.path.join(ROOT,"jobs")):
     if os.path.isdir(p): sys.path.insert(0,p)
 from wolf_card.subthemes import stocks as sub_stocks, parent
 from bars_source import load_bars
