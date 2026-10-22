@@ -40,7 +40,10 @@ def main():
     import pandas as pd
     pd.DataFrame(flat).to_csv(os.path.join(OUT, f"select_core_{date8}.csv"), index=False, encoding="utf-8-sig")
     print(json.dumps({"date": date8, "subthemes": len(items), "picks": len(flat)}, ensure_ascii=False))
-    print(pd.DataFrame(flat)[["subtheme","code","name","stage","bellwether_state","position_multiplier"]].head(20).to_string(index=False))
+    if flat:
+        print(pd.DataFrame(flat)[["subtheme","code","name","stage","bellwether_state","position_multiplier"]].head(20).to_string(index=False))
+    else:
+        print("no picks (stage/role rules returned empty); this is not a task failure")
 
 
 if __name__ == "__main__":
