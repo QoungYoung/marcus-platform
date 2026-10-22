@@ -15,7 +15,15 @@ import glob, json, os, sqlite3
 from typing import Any, Dict, List
 import pandas as pd
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT_CANDS = [
+    os.path.join(_HERE, "..", "..", "..", ".."),
+    os.path.join(_HERE, "..", "..", ".."),
+    "/app",
+]
+ROOT = next((os.path.normpath(p) for p in _ROOT_CANDS
+             if os.path.exists(os.path.normpath(os.path.join(p, "data", "theme_strength_daily.parquet")))),
+            os.path.normpath(_ROOT_CANDS[0]))
 DATA = os.path.join(ROOT, "data")
 _POOL_CANDS = [
     os.path.join(ROOT, ".dsh-tmp", "buyside", "prod_data", "stock_pool.db"),
