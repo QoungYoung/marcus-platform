@@ -141,7 +141,42 @@ def _chain(date8: str):
     return None
 
 
-def theme_stage(theme: str, date8: str) -> Dict[str, Any]:
+def _fallback_theme_stage(subtheme: str, date8: str) -> Dict[str, Any]:
+    """主题统计缺失时，用子主题成分按同一口径现算。"""
+    key = ("fb", subtheme, date8)
+    if key in _C:
+        return _C[key]
+    try:
+        try:
+            from .subthemes import stocks as _sub_stocks
+        except ImportError:
+            from subthemes import _sub_stocks  # type: ignore
+        codes = [c for c in _sub_stocks(subtheme)]
+        df = _bars()
+        x = df[(df.ts_code.isin(codes)) & (df.trade_date <= date8)]
+        if not len(x):
+            _C[key] = {}
+            return {}
+        piv = x.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index().tail(60)
+        if len(piv) < 21:
+            _C[key] = {}
+            return {}
+        last = piv.iloc[-1]
+        r5 = float((last / piv.iloc[-6] - 1).mean())
+        r20 = float((last / piv.iloc[-21] - 1).mean())
+        ma20 = piv.rolling(20).mean()
+        b20 = float((last > ma20.iloc[-1]).mean())
+        b5 = float((piv.iloc[-6] > ma20.iloc[-6]).mean()) if len(piv) >= 26 else b20
+        out = {"theme": subtheme, "date": date8, "r20": r20, "r5": r5,
+               "breadth20": b20, "breadth_chg5": b20 - b5, "source": "subtheme_fallback"}
+        _C[key] = out
+        return out
+    except Exception:
+        _C[key] = {}
+        return {}
+
+
+def theme_stage(theme: str, date8: str, subtheme: str | None = None) -> Dict[str, Any]:
     s = _strength(); b = _breadth()
     out = {"theme": theme, "date": date8, "r20": None, "r5": None, "breadth20": None,
            "breadth_chg5": None, "stage": "unknown"}
@@ -154,6 +189,10 @@ def theme_stage(theme: str, date8: str) -> Dict[str, Any]:
         if len(x):
             r = x.iloc[0]; out.update({"breadth20": float(r.breadth20),
                                        "breadth_chg5": float(r.breadth_chg5) if pd.notna(r.breadth_chg5) else None})
+    if out["r20"] is None and subtheme:
+        fb = _fallback_theme_stage(subtheme, date8)
+        if fb:
+            out.update({k: fb[k] for k in ("r20", "r5", "breadth20", "breadth_chg5", "source") if k in fb})
     if out["r20"] is None:
         return out
     r20, r5, b20, bchg = out["r20"], out["r5"] or 0, out["breadth20"] or 0, out["breadth_chg5"] or 0
@@ -293,7 +332,7 @@ def select_for_theme(theme: str, date8: str, top: int = 5, line: str = "core",
         except ImportError:
             from subthemes import parent as _sub_parent
         theme = _sub_parent(subtheme) or theme
-    st = theme_stage(theme, date8)
+    st = theme_stage(theme, date8, subtheme=subtheme)
     cands = _theme_candidates(theme, date8, subtheme=subtheme)
     feat = _features_many([x["code"] for x in cands], theme, date8, st)
     rows = [{**x, **feat[x["code"]]} for x in cands if x["code"] in feat and feat[x["code"]]]
