@@ -32,13 +32,32 @@ from tushare_relay import relay_query   # noqa: E402
 
 DATA = os.path.dirname(os.path.join(os.environ.get("DATA_DIR", "").strip() or "data", "x"))
 SIGNALS = os.path.join(DATA, "breb_signals.json")
-SYMBOLS = [("588170.SH", "科创半导体设备(170)"), ("512480.SH", "半导体(512480)")]
+# ★ 2026-10-22：标的改为**配置化**（用户：要监控个股，不是只有 ETF ✓）
+WATCHLIST = (os.environ.get("BREB_WATCHLIST") or "").strip() or "config/breb_watchlist.json"
+
+
+def load_symbols():
+    """→ [(code, name)] ✓ 读不到配置就用内置两只 ETF ✓（fail-open ✓）"""
+    try:
+        d = json.load(open(WATCHLIST, encoding="utf-8"))
+        items = [(str(x["code"]), str(x.get("name") or x["code"])) for x in (d.get("items") or [])]
+        if items:
+            return items
+    except Exception as e:
+        print("[breb] 读观察池失败（%s）⇒ 用内置 ETF ✓" % str(e)[:80])
+    return [("588170.SH", "科创半导体设备(170)"), ("512480.SH", "半导体(512480)")]
+
+
+SYMBOLS = load_symbols()
 VOL_MULT = 3.0          # 放量倍数（相对前 30 分钟均量）
 # ★ 2026-10-22 实测结论（用户：「尾盘能检测到 B反 也可以」✓）：
 #   早盘窗口（09:30-11:00）命中 0~6/11 ✗ 且总是**晚于当日低点** ✗（低点 35% 在 09:30-10:00 ✓）；
 #   尾盘窗口（13:30 之后）在 588170 上 **8/10 天命中** ✓，且 2026-08-03 当天 14:07 就给出信号 ✓
 #   （当日低 0.828 / 信号价 0.837 = 差 1% ✓）⇒ **比日线 down_tag 早 2 个交易日** ✓ ⇒ 采用尾盘 ✓
-WIN_START, WIN_END = "13:30", "15:00"
+# ★ 2026-10-22 二次修正：窗口从 13:30 → **13:00** ✓
+#   13:30 会把 13:01/13:05 那批**真正可执行**的信号过滤掉 ✗（用户实测 13:39 才是可进场时刻 ✓，
+#   而 14:00 那根已经是离低 +5~6% ✗）。13:00 起 = 午后开盘第一波 ✓
+WIN_START, WIN_END = "13:00", "15:00"
 COOL_MIN = 30           # 同一标的两次提示的最小间隔（分钟）
 
 
@@ -164,7 +183,11 @@ def main():
     ap.add_argument("--backtest", nargs=2, metavar=("D0", "D1"))
     ap.add_argument("--date")
     ap.add_argument("--dry", action="store_true")
+    ap.add_argument("--symbols", help="临时覆盖观察池，逗号分隔，如 002156.SZ,600584.SH ✓")
     args = ap.parse_args()
+    global SYMBOLS
+    if args.symbols:
+        SYMBOLS = [(c.strip(), c.strip()) for c in args.symbols.split(",") if c.strip()]
     if args.backtest:
         return backtest(args.backtest[0], args.backtest[1])
 
