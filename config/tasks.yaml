@@ -1774,3 +1774,28 @@ tasks:
   - core_bellwether_daily
   retry:
     enabled: false
+
+- id: core_bellwether_ai
+  name: 'AI 风向标旁路（45子主题，只读）'
+  description: '18:40 在生产旁路跑 AI 结构化判断：只写 data/core_p1/ai_state_latest.json，不替换机械状态、不参与 select_core、不接 gate。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '40 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/ai_bellwether_daily.py
+    args: []
+  output:
+    log_file: logs/core_bellwether_ai_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_bellwether_daily
+  retry:
+    enabled: false
