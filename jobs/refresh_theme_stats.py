@@ -8,6 +8,7 @@ for _p in (os.path.join(ROOT, "backend"), os.path.join(ROOT, "backend/app/servic
            os.path.join(ROOT, "app/services"), ROOT):
     if os.path.isdir(_p): sys.path.insert(0, _p)
 from wolf_card.subthemes import SUBTEMES, stocks as sub_stocks, parent
+from bars_source import load_bars
 
 DATA = os.path.join(ROOT, "data")
 ST = os.path.join(DATA, "theme_strength_daily.parquet")
@@ -16,22 +17,24 @@ BR = os.path.join(DATA, "theme_breadth_daily.parquet")
 
 def main():
     st = pd.read_parquet(ST); br = pd.read_parquet(BR)
-    parents = {parent(x) for x in SUBTEMES}
-    missing = sorted(parents - set(st.theme.unique()))
-    print("missing", missing)
-    if not missing:
-        print("no missing theme"); return
-    bars = pd.read_parquet(os.path.join(DATA, "bars_combined.parquet"),
+    parents = sorted({parent(x) for x in SUBTEMES})
+    hist = pd.read_parquet(os.path.join(DATA, "bars_combined.parquet"),
                            columns=["ts_code", "trade_date", "close", "amount"])
+    latest = load_bars(latest_only=True)
+    bars = pd.concat([hist, latest], ignore_index=True).drop_duplicates(["ts_code", "trade_date"], keep="last")
+    bars["trade_date"] = bars.trade_date.astype(str)
     # market total amount by date
     mkt = bars.groupby("trade_date").amount.sum()
+    calendar = sorted(set(st.trade_date.astype(str)) | set(bars.trade_date.astype(str)))
     add_st, add_br = [], []
-    for theme in missing:
+    for theme in parents:
         codes = sorted({c for s in SUBTEMES if parent(s) == theme for c in sub_stocks(s)})
         x = bars[bars.ts_code.isin(codes)]
+        if not len(x): continue
         piv = x.pivot_table(index="trade_date", columns="ts_code", values="close", aggfunc="last").sort_index()
         amt = x.pivot_table(index="trade_date", columns="ts_code", values="amount", aggfunc="last").sort_index()
-        dates = [d for d in st[st.theme == st.theme.iloc[0]].trade_date.astype(str) if d in piv.index]
+        existing = set(st[st.theme == theme].trade_date.astype(str)) if len(st[st.theme == theme]) else set()
+        dates = [d for d in calendar if d in piv.index and d not in existing]
         for d in dates:
             try:
                 s = piv.loc[:d].tail(61); a = amt.loc[:d].tail(60)

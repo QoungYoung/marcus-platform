@@ -87,6 +87,12 @@ def _fetch_daily(dates, codes=None):
 
 
 def load_bars(min_date: str | None = None, latest_only: bool = False, codes=None) -> pd.DataFrame:
+    # 始终尝试 API：即使本地 base 存在，也要补“base 之后的新交易日”
+    if latest_only:
+        dates = _weekdays()[-15:]
+    else:
+        dates = _weekdays(min_date or "20260601", datetime.now().strftime("%Y%m%d"))
+    api = _fetch_daily(dates, codes)
     filters = []
     if codes:
         filters.append(("ts_code", "in", list(codes)))
@@ -95,44 +101,17 @@ def load_bars(min_date: str | None = None, latest_only: bool = False, codes=None
     base = _read(BASE, filters=filters or None)
     if codes and len(base):
         base = base[base.ts_code.isin(codes)].copy()
-    if len(base):
-        dates = sorted(base.trade_date.astype(str).unique())
-        if latest_only: dates = dates[-1:]
-        elif min_date: dates = [d for d in dates if d >= min_date]
-        hl = _read(HL_CACHE)
-        have = set(hl.trade_date.astype(str)) if len(hl) else set()
-        missing = [d for d in dates if d not in have]
-        if missing:
-            try:
-                pro = _relay(); rows = []
-                for i, d in enumerate(missing, 1):
-                    try:
-                        x = pro.daily(trade_date=d, fields="ts_code,trade_date,high,low")
-                        if x is not None and len(x): rows.append(x)
-                    except Exception:
-                        continue
-                    if i % 10 == 0: _write(HL_CACHE, rows); rows = []
-                _write(HL_CACHE, rows)
-            except Exception:
-                pass
-        hl = _read(HL_CACHE)
-        out = base.merge(hl, on=["ts_code", "trade_date"], how="left") if len(hl) else base.copy()
-        if "high" not in out: out["high"] = out["close"]
-        if "low" not in out: out["low"] = out["close"]
-        out["high"] = out["high"].fillna(out["close"]); out["low"] = out["low"].fillna(out["close"])
-        return out
-
-    # 没有基础 parquet：直接走 Tushare daily
-    if latest_only:
-        dates = _weekdays()[-15:]
-        api = _fetch_daily(dates, codes)
-        if len(api):
-            api = api.sort_values("trade_date")
-            last = str(api.trade_date.max())
-            return api[api.trade_date == last].copy()
-        return pd.DataFrame(columns=["ts_code","trade_date","close","amount","high","low"])
-    dates = _weekdays(min_date or "20260601", datetime.now().strftime("%Y%m%d"))
-    return _fetch_daily(dates, codes)
+    frames = [x for x in (base, api) if x is not None and len(x)]
+    if frames:
+        out = pd.concat(frames, ignore_index=True).drop_duplicates(["ts_code", "trade_date"], keep="last")
+    else:
+        out = pd.DataFrame(columns=["ts_code","trade_date","close","amount","high","low"])
+    if latest_only and len(out):
+        out = out[out.trade_date.astype(str) == str(out.trade_date.astype(str).max())].copy()
+    if "high" not in out: out["high"] = out["close"]
+    if "low" not in out: out["low"] = out["close"]
+    out["high"] = out["high"].fillna(out["close"]); out["low"] = out["low"].fillna(out["close"])
+    return out
 
 
 def latest_date() -> str:
