@@ -1294,6 +1294,38 @@ tasks:
     log_file: logs/wave_ladder_state_{date}.log
     append: true
 
+- id: entry_timing
+  name: 入场时机层（上证放量 ∧ 收阳 → 推 QQ）
+  description: |
+    ★ 2026-10-22 用户拍板建立。**唯一通过检验的入场信号** ✓（其余 6 种形态全部证否 ✗）
+    规则（事前写死 ✓）：
+      ① 放量：上证当日成交额 / 前 20 日均额 ≥ **1.20**
+      ② 收阳：收盘 > 开盘 ∧ 收盘 > 昨收 ∧ (收−低)/(高−低) ≥ **0.50**
+      ③ 同时满足 ⇒ 触发 ✓
+    动作：买宽基 ETF（默认 510300 沪深300ETF ✓）；持有 **20 个交易日** ✓ 到期提示了结；
+          仓位上限按浪型档位（defense 30% ✓ 读 wave_state.json ✓）。
+    实证（2016~2026 上证 ✓）：5 日超额 +0.37% ✓ 20 日 +0.51% ✓ 胜率 **61%** ✓ n=222 ✓
+      中位数为正 ✓（非尾部驱动 ✓）；2019 年后 8 年全正 ✓ 2016~2018 为负 ✗（已知局限 ✓）
+    频率：每月 1~2 次 ✓（可执行 ✓）
+    ⚠️ 只提示 ✓ 不下单 ✗ 不改 wave_state ✗ 不参与闸门 ✗
+  enabled: true
+  schedule:
+    type: cron
+    expr: '5 15 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/entry_timing.py
+    args: []
+  output:
+    log_file: logs/entry_timing_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+
 - id: wave_breb_watch
   name: B反 尾盘信号（缩量转放量 → 推 QQ）
   description: |
