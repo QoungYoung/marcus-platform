@@ -80,7 +80,7 @@ def main():
             st, meta = stage_of(m, close, d)
             if st in ("low_flat", "oversold", "unknown"): continue
             if st in ("strong", "extended"):
-                cand = g[(g.is_second == 1) | (g["rank"].isin([2, 3, 4]))]
+                cand = g[g.bucket == "second"]
             else:
                 cand = g[g["rank"] == 1]
             if not len(cand): cand = g[g["rank"] == 1]
@@ -97,7 +97,7 @@ def main():
                 except Exception:
                     continue
                 picks.append({"date": d, "theme": theme, "code": c, "name": p.get("name"),
-                              "stage": st, "role": "second" if p.get("is_second") == 1 else "leader",
+                              "stage": st, "role": "second" if str(p.get("bucket")) == "second" else "leader",
                               "leader_state": ls, "mult": mult, "f20": r})
             try:
                 mm = [c for c in m if c in close.columns]
