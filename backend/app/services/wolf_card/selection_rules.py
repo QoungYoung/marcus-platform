@@ -476,6 +476,19 @@ _OVERLAY = {
 }
 
 
+def annotate_bellwether(picks: list[dict], ctx: dict) -> list[dict]:
+    """只标注风向标上下文，不删票、不改权重、不 gate。"""
+    state = str((ctx or {}).get("state") or "unknown")
+    perms = (ctx or {}).get("permissions") or {}
+    for p in picks:
+        p["bellwether_state"] = state
+        p["bellwether_code"] = (ctx or {}).get("bellwether_code")
+        p["bellwether_name"] = (ctx or {}).get("bellwether_name")
+        p["bellwether_permissions"] = perms
+        p["bellwether_context"] = "advisory"
+    return picks
+
+
 def apply_bellwether_gate(picks: list[dict], ctx: dict) -> list[dict]:
     """风向标动作闸：不是仓位乘数，warning/dead 直接限制新买。"""
     state = str((ctx or {}).get("state") or "unknown")
@@ -516,5 +529,7 @@ def select_core(theme: str, date8: str, top: int = 5, subtheme: str | None = Non
     except Exception:
         ctx = {"subtheme": subtheme or theme, "state": "unknown", "permissions": {}}
     r["bellwether"] = ctx
-    r["picks"] = apply_bellwether_gate(r.get("picks") or [], ctx)
+    # 只标注，不参与选股/过滤/仓位
+    r["picks"] = annotate_bellwether(r.get("picks") or [], ctx)
+    r["bellwether_usage"] = "advisory_only"
     return r
