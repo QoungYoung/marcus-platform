@@ -33,10 +33,16 @@ def facts(theme, date, seg=None):
     last = close.iloc[-1]; ma20 = close.tail(20).mean()
     hh = high.tail(20).max(); lh = high.iloc[-10:-1].max()
     lower = int((high.tail(20).diff() < 0).sum())
+    hv = [float(x) for x in high.tail(20).tolist()]
+    consec = 0
+    for i in range(len(hv)-1, 0, -1):
+        if hv[i] < hv[i-1]: consec += 1
+        else: break
     vol_ratio = float(amt.tail(5).mean() / max(amt.tail(20).mean(), 1))
     # 机械状态（只作参照，不喂给 AI 判断结论）
     mech = "unknown"; prior_state = None; prev_leader = None
     cycle_start = last_high = leader_ret = lag = None; extended = None
+    event_lower_count = 0; event_reason = ""
     if os.path.exists(EV):
         e = pd.read_csv(EV, dtype={"date": str})
         x = e[(e.date == date) & (e.theme == theme) & (e.segment_role == seg)]
@@ -47,6 +53,8 @@ def facts(theme, date, seg=None):
             leader_ret = x.iloc[0].get("leader_ret")
             lag = x.iloc[0].get("lag")
             extended = bool(x.iloc[0].get("extended"))
+            event_lower_count = int(x.iloc[0].get("lower_high_count") or 0)
+            event_reason = str(x.iloc[0].get("reason") or "")
         older = e[(e.date < date) & (e.theme == theme) & (e.segment_role == seg)].sort_values("date")
         if len(older):
             prior_state = str(older.iloc[-1].state)
@@ -65,8 +73,14 @@ def facts(theme, date, seg=None):
             "leader_name": lead.iloc[0].get("name"),
             "last_close": round(float(last),2), "ma20": round(float(ma20),2),
             "high20": round(float(hh),2), "low20": round(float(close.tail(20).min()),2),
-            "lower_high_days": lower, "vol_ratio5_20": round(vol_ratio,2),
+            "lower_high_days": lower, "consecutive_lower_highs": consec,
+            "close_vs_last_high": round(float(last / ((x.iloc[0].get("last_high") if len(x) else None) or hh) - 1), 4),
+            "volume_distribution": bool(vol_ratio > 1.2 and last < close.iloc[-2]),
+            "vol_ratio5_20": round(vol_ratio,2),
             "mechanical_state": mech, "output_mechanical_state": mech,
+            "event_lower_high_count": event_lower_count,
+            "event_volume_distribution": bool("放量" in event_reason),
+            "event_reason": event_reason,
             "previous_state": prior_state, "prev_leader": prev_leader,
             "leader_changed": leader_changed, "cycle_start": cycle_start,
             "last_high": last_high, "leader_ret_since_cycle": leader_ret,
