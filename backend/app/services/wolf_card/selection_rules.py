@@ -476,19 +476,32 @@ _OVERLAY = {
 }
 
 
-def apply_bellwether_overlay(picks: list[dict], ctx: dict) -> list[dict]:
-    """把风向标状态作为软 overlay 挂到 core picks 上，不删除任何票。"""
+def apply_bellwether_gate(picks: list[dict], ctx: dict) -> list[dict]:
+    """风向标动作闸：不是仓位乘数，warning/dead 直接限制新买。"""
     state = str((ctx or {}).get("state") or "unknown")
-    mult = _OVERLAY.get(state, 0.5)
     perms = (ctx or {}).get("permissions") or {}
+    out = []
     for p in picks:
+        role = str(p.get("role") or "")
+        allow = True
+        reason = ""
+        if state == "dead":
+            allow = False; reason = "dead: 禁止该主题新买"
+        elif state in ("warning", "stale", "unknown") and role == "second":
+            allow = False; reason = f"{state}: 禁止新做 second/补涨"
         p["bellwether_state"] = state
         p["bellwether_code"] = (ctx or {}).get("bellwether_code")
         p["bellwether_name"] = (ctx or {}).get("bellwether_name")
         p["bellwether_permissions"] = perms
-        p["position_multiplier"] = mult
-        p["overlay_rule"] = "bellwether_soft_overlay"
-    return picks
+        p["bellwether_gate"] = "allow" if allow else "block"
+        p["bellwether_gate_reason"] = reason
+        if allow: out.append(p)
+    return out
+
+
+def apply_bellwether_overlay(picks: list[dict], ctx: dict) -> list[dict]:
+    """旧接口保留兼容：现在返回 action gate，不再产生仓位乘数。"""
+    return apply_bellwether_gate(picks, ctx)
 
 
 def select_core(theme: str, date8: str, top: int = 5, subtheme: str | None = None) -> Dict[str, Any]:
@@ -503,5 +516,5 @@ def select_core(theme: str, date8: str, top: int = 5, subtheme: str | None = Non
     except Exception:
         ctx = {"subtheme": subtheme or theme, "state": "unknown", "permissions": {}}
     r["bellwether"] = ctx
-    r["picks"] = apply_bellwether_overlay(r.get("picks") or [], ctx)
+    r["picks"] = apply_bellwether_gate(r.get("picks") or [], ctx)
     return r
