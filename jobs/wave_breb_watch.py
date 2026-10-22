@@ -187,9 +187,9 @@ def main():
         if not sig:
             print("  %s 无信号 ✗" % name)
             continue
-        t, px, mult = sig[-1]
+        t, px, mult = sig[0]   # ★ 用**第一次**（最早可执行 ✓ 2026-10-22 修：原来用 sig[-1] ✗ 报的是 13:59 而首次是 13:01 ✗）
         if key in seen and not args.dry:
-            print("  %s 今天已推过 ✓（最新 %s @ %.3f）" % (name, t, px))
+            print("  %s 今天已推过 ✓（首次 %s @ %.3f）" % (name, t, px))
             continue
         new.append((name, t, px, mult, sig))
     if not new:
@@ -197,7 +197,8 @@ def main():
         return 0
     lines = ["🐺 B反 分钟级提示（%s）" % day]
     for name, t, px, mult, sig in new:
-        lines.append("· %s：%s 放量 %.1fx 下跌 @ %.3f（今天第 %d 次）" % (name, t, mult, px, len(sig)))
+        lines.append("· %s：**首次 %s** 放量 %.1fx 下跌 @ %.3f（今天共 %d 次，最新 %s）" % (
+            name, t, mult, px, len(sig), sig[-1][0]))
     lines.append("含义：**尾盘放量砸盘** = 恐慌盘被接住的瞬间（他 08-12「量能开始缩转放」✓）｜实测比日线标签早 0~2 天 ✓ 且价位贴着当日低点 ✓")
     lines.append("⚠️ 只作**提前提示** ✓ 不是买入指令 ✗（B反 确认仍以日线 down_tag 为准 ✓）")
     text = "\n".join(lines)
