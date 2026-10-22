@@ -31,6 +31,7 @@ for p in (ROOT, os.path.join(ROOT, "core")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from adj_quote import qfq_bars, kind_of   # noqa: E402  前复权取数 ✓（core/adj_quote.py ✓）
 from tushare_relay import relay_query   # noqa: E402
 
 DATA = os.path.join(os.environ.get("DATA_DIR", "").strip() or "data")
@@ -41,17 +42,29 @@ INDEXES = [
     ("000688.SH", "科创50"),
 ]
 START = "20260101"
+END = "20261031"
 STAT_START = "20160101"     # ★ 统计用长窗口 ✓（预警用短窗口 ✓ 节省取数）
 HOLD = (5, 10)
 
 
 def load(code, start=None):
-    df = relay_query("index_daily", ts_code=code, start_date=(start or START), end_date="20261031")
-    rows = []
-    for _, r in (df.iterrows() if df is not None else []):
-        rows.append({"d": str(r["trade_date"]), "o": float(r["open"]), "h": float(r["high"]),
-                     "l": float(r["low"]), "c": float(r["close"]), "amt": float(r.get("amount") or 0)})
-    return sorted(rows, key=lambda x: x["d"])
+    """→ [{"d","o","h","l","c","amt"}] 升序 ✓（`structures()` 的输入格式**不变** ✓）
+
+    ★ 2026-10-22 修（P0-1）：**ETF 走前复权** ✓（`core/adj_quote.qfq_bars`）；
+      指数仍走 `index_daily` **不复权** ✓（指数无拆分/分红 ✓）。
+      为什么：512480.SH 2026-07-03 1:2、588170.SH 2026-07-06 1:3 份额折算 ✗
+      ⇒ 原始价那两天 -50% / -67% 假暴跌 ✗ ⇒ 会误报「箱体下破 / 顶分破位」✗。
+    """
+    s = start or START
+    if kind_of(code) == "index":
+        df = relay_query("index_daily", ts_code=code, start_date=s, end_date=END)
+        rows = []
+        for _, r in (df.iterrows() if df is not None else []):
+            rows.append({"d": str(r["trade_date"]), "o": float(r["open"]), "h": float(r["high"]),
+                         "l": float(r["low"]), "c": float(r["close"]), "amt": float(r.get("amount") or 0)})
+        return sorted(rows, key=lambda x: x["d"])
+    return [{"d": x["d"], "o": x["o"], "h": x["h"], "l": x["l"], "c": x["c"], "amt": x["amt"]}
+            for x in qfq_bars(code, s, END)]
 
 
 def _hi60(rows, i):

@@ -27,9 +27,11 @@ for p in (ROOT, os.path.join(ROOT, "core"), os.path.join(ROOT, "jobs")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from adj_quote import qfq_bars, kind_of        # noqa: E402  前复权取数 ✓（core/adj_quote.py ✓）
 from tushare_relay import relay_query          # noqa: E402
 from wave_structure_alert import structures    # noqa: E402  结构判定同源 ✓
 
+END = "20261031"
 INDEXES = [("000001.SH", "上证"), ("399006.SZ", "创业板"), ("000688.SH", "科创50")]
 CAND = [("002463.SZ", "沪电股份", "PCB"), ("603228.SH", "景旺电子", "PCB"), ("600183.SH", "生益科技", "PCB"),
         ("002281.SZ", "光迅科技", "二线光"), ("000988.SZ", "华工科技", "二线光"),
@@ -68,12 +70,82 @@ def load_policy():
 
 
 def load(code, fn="index_daily", start="20260101"):
-    df = relay_query(fn, ts_code=code, start_date=start, end_date="20261031")
-    rs = []
-    for _, r in (df.iterrows() if df is not None else []):
-        rs.append({"d": str(r["trade_date"]), "o": float(r["open"]), "h": float(r["high"]),
-                   "l": float(r["low"]), "c": float(r["close"]), "amt": float(r.get("amount") or 0)})
-    return sorted(rs, key=lambda x: x["d"])
+    """→ [{"d","o","h","l","c","amt"}] 升序 ✓（下游字段名不变 ✓ prompt 依赖它 ✗ 别改）
+
+    ★ 2026-10-22 修（P0-1）：**ETF/个股一律走前复权** ✓（`core/adj_quote.qfq_bars`）；
+      指数 `index_daily` **不复权** ✓ 原样保留（指数无拆分/分红 ✓）。
+      为什么：512480.SH 2026-07-03 1:2 份额折算 ✗ ⇒ 原始价那天 -50.7% 假暴跌 ✗
+      ⇒ dist_ma20_pct / dist_hi60_pct / low5 全被带偏 ⇒ 误判「跌破 MA20 ⇒ 减」✗。
+      所以下面算 ma20 / low5 / hi5 / 距离一律吃**复权价** ✓。
+    """
+    if fn == "index_daily" or kind_of(code) == "index":
+        df = relay_query("index_daily", ts_code=code, start_date=start, end_date=END)
+        rs = []
+        for _, r in (df.iterrows() if df is not None else []):
+            rs.append({"d": str(r["trade_date"]), "o": float(r["open"]), "h": float(r["high"]),
+                       "l": float(r["low"]), "c": float(r["close"]), "amt": float(r.get("amount") or 0)})
+        return sorted(rs, key=lambda x: x["d"])
+    # ETF ⇒ fund_daily + fund_adj ✓；个股 ⇒ daily + adj_factor ✓（都由 qfq_bars 自动判断 ✓）
+    return [{"d": x["d"], "o": x["o"], "h": x["h"], "l": x["l"], "c": x["c"], "amt": x["amt"]}
+            for x in qfq_bars(code, start, END)]
+
+
+def _ts_symbol(code):
+    """`588170.SH` → `sh588170` ✓（腾讯口径 ✓；.CSI 等指数它没有这个 symbol ✗ 直接空 ✓）"""
+    c = (code or "").strip().upper()
+    if "." not in c:
+        return ""
+    num, mkt = c.split(".", 1)
+    return {"SH": "sh" + num, "SZ": "sz" + num}.get(mkt, "")
+
+
+def _fnum(v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x       # NaN/空 ⇒ None ✓ 不猜 ✗
+
+
+def realtime_quotes(codes):
+    """腾讯实时 → {code: {"price_today","pct_today","volx_today","amt_today_yi"}} ✓
+
+    ★ 2026-10-22（P0-2）：原来的 `volx` 是**上一交易日收盘**口径 ✗（rs[-1].amt / 20 日均额），
+      但决策问的是**今天放没放量** ✓ ⇒ 必须用当日实时量比 ✓。
+      口径（用户给定 ✓ 腾讯 `qt.gtimg.cn`，GBK 解码 ✓，`~` 分割 ✓）：
+        索引 3 = 现价 ✓ ｜ 32 = 涨跌幅 % ✓ ｜ 37 = 成交额（万元 ✓） ｜ 49 = 量比 ✓
+      失败 ⇒ 只打日志 ✓ 字段给 None ✓，**绝不中断 facts()** ✗。
+    """
+    out = {}
+    syms = {_ts_symbol(c): c for c in codes}
+    syms = {s: c for s, c in syms.items() if s}
+    if not syms:
+        return out
+    try:
+        url = "http://qt.gtimg.cn/q=" + ",".join(sorted(syms))
+        req = urllib.request.Request(url, headers={"Referer": "http://finance.qq.com"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            raw = r.read()
+        for line in raw.decode("gbk", "ignore").split(";"):
+            if "=" not in line:
+                continue
+            sym, body = line.split("=", 1)
+            sym = sym.strip()
+            if sym.startswith("v_"):
+                sym = sym[2:]
+            code = syms.get(sym)
+            f = body.strip().strip('"').split("~")
+            if not code or len(f) < 50:
+                continue
+            amt = _fnum(f[37])
+            out[code] = {"price_today": _fnum(f[3]),
+                         "pct_today": _fnum(f[32]),
+                         "volx_today": _fnum(f[49]),
+                         "amt_today_yi": round(amt / 1e4, 0) if amt else None}
+        print("[wave-advice] 实时量比 ✓ 取到 {} / {} 只（腾讯 qt.gtimg.cn ✓）".format(len(out), len(syms)))
+    except Exception as e:
+        print("[wave-advice] 实时接口失败（{}）⇒ volx_today/pct_today/price_today 给 None ✗".format(str(e)[:100]))
+    return out
 
 
 def open_gaps(rs, n=60):
@@ -88,6 +160,8 @@ def open_gaps(rs, n=60):
 
 def facts():
     f = {"date": "", "indexes": {}, "candidates": [], "wave": None}
+    # ★ 2026-10-22（P0-2）：一次批量拿**当日实时**量比 ✓（10 只候选 + 3 个指数 ✓ 一个请求 ✓）
+    rt = realtime_quotes([c for c, _n in INDEXES] + [c for c, _n, _g in CAND])
     sh = None
     for code, name in INDEXES:
         rs = load(code)
@@ -96,9 +170,13 @@ def facts():
         f["date"] = rs[-1]["d"]
         amt20 = statistics.mean([x["amt"] for x in rs[-21:-1]])
         hi60 = max(x["h"] for x in rs[-60:])
+        q = rt.get(code) or {}
         f["indexes"][name] = {
             "close": round(rs[-1]["c"], 2), "amt_yi": round(rs[-1]["amt"] / 1e5, 0),
-            "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,
+            "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,   # ★ 上一交易日收盘口径 ✗ 只作参考
+            "volx_today": q.get("volx_today"),        # ★ 当日实时量比 ✓（判断放量只用它 ✓）
+            "pct_today": q.get("pct_today"),          # ★ 当日实时涨跌幅 % ✓
+            "price_today": q.get("price_today"),      # ★ 当日实时现价 ✓
             "dist_hi60_pct": round((rs[-1]["c"] / hi60 - 1) * 100, 1),
             "open_gaps": open_gaps(rs)[-3:],
             "ma20": round(statistics.mean([x["c"] for x in rs[-20:]]), 2),
@@ -119,16 +197,22 @@ def facts():
     for code, name, grp in CAND:
         try:
             rs = load(code, "daily")
+            # ★ 2026-10-22（P0-1）：rs 已是**前复权**价 ✓ ⇒ 下面 ma20/low5/hi5/距离 全部是复权口径 ✓
+            #   （折价/拆分当天不会再出现假的「跌破 MA20」✗ ✓）
             ma20 = statistics.mean([x["c"] for x in rs[-20:]])
             amt20 = statistics.mean([x["amt"] for x in rs[-21:-1]])
             hi60 = max(x["h"] for x in rs[-60:])
+            q = rt.get(code) or {}
             f["candidates"].append({
                 "name": name, "grp": grp, "close": round(rs[-1]["c"], 2),
                 "dist_ma20_pct": round((rs[-1]["c"] / ma20 - 1) * 100, 2),
                 "ma20": round(ma20, 2),
                 "low5": round(min(x["l"] for x in rs[-5:]), 2),
                 "hi5": round(max(x["h"] for x in rs[-5:]), 2),
-                "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,
+                "volx": round(rs[-1]["amt"] / amt20, 2) if amt20 else None,   # ★ 上一交易日收盘口径 ✗
+                "volx_today": q.get("volx_today"),        # ★ 当日实时量比 ✓（买侧 P2 看它 ✓）
+                "pct_today": q.get("pct_today"),          # ★ 当日实时涨跌幅 % ✓
+                "price_today": q.get("price_today"),      # ★ 当日实时现价 ✓
                 "dist_hi60_pct": round((rs[-1]["c"] / hi60 - 1) * 100, 1),
                 # ★ 2026-10-21 修：原来**没给结构** ✗ ⇒ agent 只能说"分型低点缺"✗（它守 P5 没猜 ✓ 是对的 ✓）；
                 #    now 每个候选都带 structures（note 里有底分/顶分的关键位 ✓）
@@ -169,7 +253,10 @@ def wolf_recent(days=2, limit=8):
 def rules_advice(f):
     """确定性规则版（DSH 不可用时的兜底 ✓ 也用于和 agent 结果并列展示 ✓）"""
     sh = (f.get("indexes") or {}).get("上证") or {}
-    vx, gaps = sh.get("volx"), (sh.get("open_gaps") or [])
+    # ★ 2026-10-22（P0-2）：规则版也优先吃**当日实时**量比 ✓（volx_today ✓）；
+    #   实时接口挂了才退回 `volx`（上一交易日收盘口径 ✗ 只作兜底 ✓，绝不静默换口径 ✗）。
+    vx = sh.get("volx_today") if sh.get("volx_today") is not None else sh.get("volx")
+    gaps = (sh.get("open_gaps") or [])
     cl = sh.get("close")
     out = []
     in_gap = [g for g in gaps if cl and g["lo"] <= cl <= g["hi"]]
@@ -195,8 +282,10 @@ def rules_advice(f):
             ("%.2fx" % vx) if vx else "缺", ("%+.2f%%" % bk) if bk is not None else "缺"))
     top = [c for c in (f.get("candidates") or []) if (c.get("dist_ma20_pct") or -99) > -3]
     if top:
-        out.append("**观察首选**：%s（距 MA20 %+.2f%%，量比 %.2f）—— [P2] 站上 MA20 且量比 ≥1.2 才谈试探" % (
-            "、".join("%s" % c["name"] for c in top[:2]), top[0]["dist_ma20_pct"], top[0].get("volx") or 0))
+        t0 = top[0]
+        tvx = t0.get("volx_today") if t0.get("volx_today") is not None else t0.get("volx")
+        out.append("**观察首选**：{}（距 MA20 {:+.2f}%，今日量比 {:.2f}）—— [P2] 站上 MA20 且量比 ≥1.2 才谈试探".format(
+            "、".join("{}".format(c["name"]) for c in top[:2]), t0["dist_ma20_pct"], tvx or 0))
     else:
         out.append("**候选全在 MA20 下方** ⇒ 按 [P2] 只观察 ✗（宁可错过，不追高）")
     return out
@@ -233,9 +322,9 @@ def llm_advice(f, policy_text=None):
         "   `create_t_condition` / `auto_gen_conditions` / `rebalance_floors` / `update_golden_pit_etf_config` /",
         "   `run_t_backtest` / `write` / `edit` / `bash` —— 一个都不许 ✗（这是只读复盘 ✓ 不是交易 ✓）。",
         "⚠️ 工具失败就写「缺」✓ 每个工具最多试一次 ✗ 不要换接口碰运气 ✗。",
-        "⚠️ **判断买侧（P2）必须用「今日」量比与阴阳**：用 `get_stock_quote` 取候选的今日量比/涨跌/开盘价 ✓；",
-        "   FACTS 里的 `volx` 是**昨日收盘**口径 ✗ 只能作参考，**不能**用来判断今天是否放量 ✓。",
-        "   （2026-10-22 教训：沪电昨日 volx 1.09 ✗ 今日 1.37 ✓ —— 差一步就判反了 ✓）",
+        "⚠️ **判断买侧（P2）必须用「今日」量比与阴阳**：用 FACTS 的 `volx_today` ✓，也可用 `get_stock_quote` 复核 ✓；",
+        "   FACTS 里的 `volx` 是**上一交易日**口径 ✗；判断今日是否放量**必须用 `volx_today`** ✓。",
+        "   （2026-10-22 教训：沪电昨日 volx 1.09 ✗ 今日 volx_today 1.37 ✓ —— 差一步就判反了 ✓）",
         "（FACTS 里的数字由我们的脚本取 ✓；与工具冲突时：**持仓以工具为准 ✓**，其余以 FACTS 为准 ✓）",
         policy_text,
         "",
