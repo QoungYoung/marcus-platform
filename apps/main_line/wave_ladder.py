@@ -874,7 +874,10 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             "ov_spec": ov,
             # 只留 B反 标签：ABC 的判据太宽（实测 1614 天几乎覆盖整段下跌 ⇒ 无信息量 ✗ 去掉）；
             # 下跌浪4反弹 需子级计数 ✗ 未实现（留缺口 ✓）。
-            "down_tag": ("B反" if (idx >= RUNG_INDEX["w45_fail"] and f.get("b_rebound")) else ""),
+            # ★ 2026-10-22 用户要求：B反 也要能在 **4-5 段** 标出来（他 2026-08 在做的那段，
+            #   我们叫 4-5、他叫 B反 ✗ 口径不一致 ✓）⇒ 条件从「仅 down 段」放宽到「4-5 及以下」。
+            #   仍**不改 operation** ✗（4-5=side / down1=defense 都已经是"不追"✓ 纯标签 ✓）。
+            "down_tag": ("B反" if (idx >= RUNG_INDEX["w45_ok"] and f.get("b_rebound")) else ""),
             "main_up": ("3-3" if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else ""),
             "main_up_pb_info": bool(f.get("main_up_pb")),
             "main_up_spec": (MAIN_UP if (idx <= RUNG_INDEX["w45_ok"] and f.get("main_up_up")) else None),
