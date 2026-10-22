@@ -93,13 +93,15 @@ def main():
                 if c not in close.columns: continue
                 try:
                     e = close[c].iloc[i + 1]; f = close[c].iloc[i + 1 + 20]
+                    f5 = close[c].iloc[i + 1 + 5]
                     if pd.isna(e) or pd.isna(f) or e <= 0: continue
                     r = float(f / e - 1)
+                    r5 = float(f5 / e - 1) if pd.notna(f5) else None
                 except Exception:
                     continue
                 picks.append({"date": d, "theme": theme, "code": c, "name": p.get("name"),
                               "stage": st, "role": role,
-                              "leader_state": ls, "allow": bool(allow), "f20": r})
+                              "leader_state": ls, "allow": bool(allow), "f5": r5, "f20": r})
             try:
                 mm = [c for c in m if c in close.columns]
                 e = close[mm].iloc[i + 1]; f = close[mm].iloc[i + 1 + 20]
