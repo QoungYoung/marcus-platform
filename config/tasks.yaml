@@ -1294,6 +1294,33 @@ tasks:
     log_file: logs/wave_ladder_state_{date}.log
     append: true
 
+- id: wave_breb_watch
+  name: B反 尾盘信号（缩量转放量 → 推 QQ）
+  description: |
+    ★ 2026-10-22 用户：「加"缩量→放量"分钟级信号」「尾盘能检测到 B反 也可以」。
+    每交易日 **14:50**（收盘前 10 分钟 ✓ 还能动手 ✓）检查 170/512480 的分钟线：
+    某分钟量 ≥ 前 30 分钟均量 3 倍 且 该分钟下跌 ⇒ 推 QQ ✓（一天一标的只推一次 ✓）。
+    实测：588170 在 2026-08-03~08-14 命中 8/10 天 ✓，08-03 当天 14:07 就报（当日低 0.828 / 信号 0.837 ✓）
+    ⇒ **比日线 down_tag 早 2 个交易日** ✓；6 月窗口与日线同日 ✓。
+    ⚠️ 只作**提前提示** ✓ 不是买入指令 ✗ 不参与闸门 ✗ 不改 wave_state ✗。
+  enabled: true
+  schedule:
+    type: cron
+    expr: '50 14 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wave_breb_watch.py
+    args: []
+  output:
+    log_file: logs/wave_breb_watch_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: false
+    pi_analysis: false
+    channels:
+    - qqbot
+
 - id: wolf_thread_sync
   name: 狼大帖子同步（楼主发言 → data/wolf_posts.json）
   description: |
