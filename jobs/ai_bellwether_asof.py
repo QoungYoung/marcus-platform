@@ -35,11 +35,23 @@ def facts(theme, date, seg=None):
     lower = int((high.tail(20).diff() < 0).sum())
     vol_ratio = float(amt.tail(5).mean() / max(amt.tail(20).mean(), 1))
     # 机械状态（只作参照，不喂给 AI 判断结论）
-    mech = "unknown"
+    mech = "unknown"; prior_state = None; prev_leader = None
+    cycle_start = last_high = leader_ret = lag = None; extended = None
     if os.path.exists(EV):
         e = pd.read_csv(EV, dtype={"date": str})
         x = e[(e.date == date) & (e.theme == theme) & (e.segment_role == seg)]
-        if len(x): mech = str(x.iloc[0].state)
+        if len(x):
+            mech = str(x.iloc[0].state)
+            cycle_start = x.iloc[0].get("cycle_start")
+            last_high = x.iloc[0].get("last_high")
+            leader_ret = x.iloc[0].get("leader_ret")
+            lag = x.iloc[0].get("lag")
+            extended = bool(x.iloc[0].get("extended"))
+        older = e[(e.date < date) & (e.theme == theme) & (e.segment_role == seg)].sort_values("date")
+        if len(older):
+            prior_state = str(older.iloc[-1].state)
+            prev_leader = str(older.iloc[-1].leader)
+    leader_changed = bool(prev_leader and prev_leader != code)
     # 二线
     sec = g[g.bucket == "second"].drop_duplicates("ts_code").head(5)
     seconds = []
@@ -54,7 +66,12 @@ def facts(theme, date, seg=None):
             "last_close": round(float(last),2), "ma20": round(float(ma20),2),
             "high20": round(float(hh),2), "low20": round(float(close.tail(20).min()),2),
             "lower_high_days": lower, "vol_ratio5_20": round(vol_ratio,2),
-            "mechanical_state": mech, "seconds": seconds,
+            "mechanical_state": mech, "output_mechanical_state": mech,
+            "previous_state": prior_state, "prev_leader": prev_leader,
+            "leader_changed": leader_changed, "cycle_start": cycle_start,
+            "last_high": last_high, "leader_ret_since_cycle": leader_ret,
+            "second_lag": lag, "extended": extended,
+            "seconds": seconds,
             "last30": [{"d": str(r.trade_date), "c": round(float(r.close),2),
                         "h": round(float(r.high),2), "amt": round(float(r.amount),1)}
                        for _, r in b.tail(30).iterrows()]}
@@ -67,6 +84,7 @@ PROMPT = """你是风向标裁判，只按下面的狼大规则判断，不做�
 - dead 后不能高切低、不能补涨；
 - alive 时自己的票没涨，可以拿着等补涨；
 - 龙头换人但接得上，只影响短期，不是 direct dead；
+- 只有 leader_changed=true + 新龙头有独立 impulse，才可判 rotated；否则不要猜 rotated；
 - 不要把“跌一天/跌 10%”直接叫 dead。
 
 只输出 JSON：
@@ -86,7 +104,7 @@ def main():
     for item in a.cases.split(","):
         theme,date=item.rsplit(":",1); f=facts(theme,date)
         if not f: print("skip",item); continue
-        ai_facts = {k:v for k,v in f.items() if k != "mechanical_state"}
+        ai_facts = {k:v for k,v in f.items() if k not in ("mechanical_state", "output_mechanical_state")}
         prompt=PROMPT.format(facts=json.dumps(ai_facts,ensure_ascii=False,indent=1))
         try:
             sid = f"asof_{theme}_{date}_{datetime.now().strftime('%H%M%S')}"
