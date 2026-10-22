@@ -13,7 +13,15 @@ from __future__ import annotations
 import json, os
 from typing import Any, Dict, Optional
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT_CANDS = [
+    os.path.join(_HERE, "..", "..", "..", ".."),
+    os.path.join(_HERE, "..", "..", ".."),
+    "/app",
+]
+ROOT = next((os.path.normpath(p) for p in _ROOT_CANDS
+             if os.path.exists(os.path.normpath(os.path.join(p, "data", "core_p1", "bellwether_state_latest.json")))),
+            os.path.normpath(_ROOT_CANDS[0]))
 STATE_FILE = os.path.join(ROOT, "data/core_p1/bellwether_state_latest.json")
 
 PERMISSIONS = {
