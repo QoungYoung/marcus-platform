@@ -1007,6 +1007,11 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         "reasons": ("【浪型链 rung%d/%s】%s；预期：%s；操作：%s（invest %.2f）" % (
             int(ev.get("rung_index", -1)), ev.get("name") or "?", ev.get("reasons") or "",
             ev.get("expect") or "", ev.get("operation") or "", float(ev.get("invest") or 0))),
+        # ★ 2026-10-22：把**B反**标签暴露到 state（此前只在 evaluate() 内 ✓ 没进 to_wave_state ✗）
+        #   语义：`down` 段内的反弹（`b_rebound`）⇒ 只做 T、不追（原表 B反 = t_only ✓）；
+        #   **不改 operation** ✗（t_only 会放松 defense ✗ 见 evaluate 里的注释 ✓）⇒ 纯标签 ✓ 供展示/提示 ✓
+        "down_tag": ev.get("down_tag") or "",
+        "b_rebound": bool(fi.get("b_rebound")),
         "features": fi,
         "mode": MODE_OF_RUNG.get(key, ""),
         "mode_note": MODE_NOTE.get(MODE_OF_RUNG.get(key, ""), ""),
