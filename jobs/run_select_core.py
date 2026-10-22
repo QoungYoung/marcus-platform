@@ -52,7 +52,15 @@ def main():
                 break
             except Exception:
                 pass
-    out = {"date": date8, "source": "select_core+bellwether_advisory",
+    # ★ 2026-10-22：选股输出带上**入场时机层**的状态 ✓
+    #   目的：用户一眼看出"为什么今天只 probe、不建仓"（市场级入场未触发 ✓）
+    _et = None
+    try:
+        _et = json.load(open(os.path.join(os.path.dirname(OUT), "entry_timing.json"), encoding="utf-8"))
+        _et = {"open": _et.get("open"), "last_signal": (_et.get("history") or [{}])[-1] if _et.get("history") else None}
+    except Exception:
+        _et = {"state": "无信号文件（今日未触发 ✓）"}
+    out = {"date": date8, "source": "select_core+bellwether_advisory", "entry_timing": _et,
            "n_subthemes": len(items), "n_picks": len(flat), "bellwether": bw, "items": items}
     json.dump(out, open(os.path.join(OUT, "latest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     import pandas as pd

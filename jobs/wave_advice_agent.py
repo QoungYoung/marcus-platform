@@ -222,6 +222,49 @@ def facts():
             continue
     f["candidates"].sort(key=lambda x: -(x.get("dist_ma20_pct") or -99))
     f["wolf_recent"] = wolf_recent()
+    # ★ 2026-10-22（用户要求 #1）：把**各层结论**汇进 facts ⇒ 输出一张"今天做什么"决策卡片 ✓
+    #   浪型 f["wave"] 已在上面取 ✓；这里补 主线 / 选股 / 风向标 / 入场时机 ✓
+    def _rj(rel, limit=None):
+        try:
+            d = json.load(open(os.path.join(os.environ.get("DATA_DIR", "").strip() or "data", rel), encoding="utf-8"))
+            return d if limit is None else d
+        except Exception:
+            return None
+
+    # ★ 只取**紧凑投影**（原始 JSON 近 30KB ✗ 会把 prompt 挤爆 ⇒ 每层只留关键字段 ✓）
+    f["layers"] = {}
+    _D = os.environ.get("DATA_DIR", "").strip() or "data"
+    try:
+        ml = _rj("wolf_mainline_select.json") or {}
+        f["layers"]["mainline"] = {"date": ml.get("date"), "mainline": ml.get("mainline")}
+    except Exception:
+        pass
+    try:
+        sl = _rj(os.path.join("core_select", "latest.json")) or {}
+        items = sl.get("items") or []
+        top = []
+        for it in sorted(items, key=lambda x: -len(x.get("picks") or []))[:6]:
+            top.append({"sub": it.get("subtheme"), "rule": it.get("rule"),
+                        "picks": [p.get("symbol") or p.get("code") for p in (it.get("picks") or [])[:2]]})
+        f["layers"]["select"] = {"date": sl.get("date"), "n_subthemes": len(items),
+                                 "n_picks": sl.get("n_picks"), "top": top}
+    except Exception:
+        pass
+    try:
+        bw = _rj(os.path.join("core_p1", "bellwether_state_latest.json")) or {}
+        its = bw.get("items") or []
+        f["layers"]["bellwether"] = {"date": bw.get("date"),
+                                     "top": [{"sub": x.get("subtheme"), "state": x.get("state"),
+                                              "code": x.get("bellwether_code")} for x in its[:6]]}
+    except Exception:
+        pass
+    try:
+        et = _rj("entry_timing.json")
+        f["layers"]["entry_timing"] = ({"open": (et or {}).get("open"),
+                                        "history": ((et or {}).get("history") or [])[-2:]}
+                                       if et else {"state": "无信号（今日未触发 ✓）"})
+    except Exception:
+        pass
     try:
         base = (os.environ.get("MARCUS_API_URL") or "http://localhost:8000/api/v1").rstrip("/")
         with urllib.request.urlopen(base + "/wave/state", timeout=20) as r:
@@ -336,14 +379,18 @@ def llm_advice(f, policy_text=None):
         json.dumps(f.get("wolf_recent") or [], ensure_ascii=False)[:1800],
         "",
         "=== FACTS（工具取数，确定性 ✓ 缺失就写「缺」）===",
-        json.dumps(f, ensure_ascii=False)[:4000],
+        json.dumps(f, ensure_ascii=False)[:7000],
         "",
-        "输出要求（中文，纯文本，不要 markdown 表格）：",
-        "1) 第一行写『结论：』+ 一句话（今天该偏防守还是可小仓试探 ✓ 按纪律判断）；",
-        "2) 『今天该做』：最多 3 条，每条必须引用纪律编号（如 [P3]）和目标价位/量能条件；",
-        "3) 『不该做』：最多 2 条（尤其是否满足加仓条件、是否该追高）；",
-        "4) 『止损/失效位』：给出上证与**我实际持仓**（用 get_portfolio_positions ✓）的关键位；没有持仓就写「缺」✓；",
-        "5) 最后单独一行：『以上为按既定规则的复盘，不是投资建议。』",
+        "输出要求 —— 必须是**一张『今天做什么』决策卡片**（中文，纯文本，不要 markdown 表格）：",
+        "『① 今天该不该动』：看 FACTS.layers.entry_timing（市场级入场 = 下跌段 ∧ 放量 ∧ 收阳 ✓）",
+        "   · 已触发 ✓ ⇒ 可以加仓/建仓，给出仓位%；未触发 ✗ ⇒ **只允许 probe/不动**，写明原因 ✓",
+        "『② 动什么』：结合 FACTS.layers.mainline（主线）+ FACTS.layers.select（选股 top）+ bellwether（风向标）",
+        "   · 最多列 **3 只**，每只给归属细分；没有合格的就写「空仓等待」✓ 不许凑数 ✗",
+        "『③ 动多少』：浪型档位上限（defense 30% / side 40% / t_only 50% / build 75%）× 入场状态",
+        "   · 必须给出**这一次买入的金额或比例** ✓ 不许只写「可考虑」✗",
+        "『④ 持仓怎么办』：用 get_portfolio_positions ✓ 逐只给 持有/减半/清仓 + 关键价位；没有持仓写「缺」✓",
+        "『⑤ 不该做』：最多 2 条（追高 / 补 T / 接刀 等）",
+        "最后单独一行：『以上为按既定规则的复盘，不是投资建议。』",
         "总字数 600 字以内，不要寒暄。",
     ]
     last = None
