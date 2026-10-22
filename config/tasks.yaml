@@ -1698,3 +1698,27 @@ tasks:
   - core_bellwether_daily
   retry:
     enabled: true
+
+- id: theme_stats_native
+  name: '主题统计原生覆盖（补齐缺失父主题）'
+  description: '每日 18:20 用子主题成分补齐 theme_strength/theme_breadth 的缺失父主题（当前为 传媒/游戏），并重算 r5/r20/share5 排名；不覆盖已有主题行。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '20 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/refresh_theme_stats.py
+    args: []
+  output:
+    log_file: logs/theme_stats_native_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
