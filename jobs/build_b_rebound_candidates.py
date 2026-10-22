@@ -42,7 +42,7 @@ def main():
   if any(abs(i-j)<=2 for j in pos_idx): continue
   neg.append(d.trade_date.iloc[i])
  # 抽样，避免连续太多
- neg=neg[::4][:15]
+ neg=neg[::2][:30]
  rows=[]
  for day in POS+neg:
   m=mins(day)
