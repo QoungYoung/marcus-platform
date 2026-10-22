@@ -46,6 +46,7 @@ def main():
     for (theme, seg), gg in lab.groupby(["theme", "segment_role"]):
         gg = gg.sort_values("date")
         prev_leader = None; prev_state = None; cycle = None; episode = 0
+        dead_locked = False; lh_count = 0
         for d in sorted(gg.date.unique()):
             if d not in close.index: continue
             g = gg[gg.date == d]
@@ -55,9 +56,10 @@ def main():
             rotated = False; change = False
             if prev_leader and code != prev_leader:
                 rotated = prev_state == "dead"
-                cycle = None; change = True
+                cycle = None; change = True; dead_locked = False; lh_count = 0
             prev_leader = code
             imp = impulses(close, high, amt, low, code, d)
+            pre_high = cycle["last_high"] if cycle else None
             if cycle is None and imp:
                 f = imp[0]
                 cycle = {"start": f[0], "start_close": f[3], "last_high": f[1],
@@ -69,6 +71,9 @@ def main():
                     cycle["last_high"] = max(cycle["last_high"], z[1])
                     cycle["last_low"] = z[2]
                     cycle["last_impulse"] = z[0]
+            new_imp = bool(cycle and pre_high is not None and cycle["last_high"] > pre_high * 1.001)
+            if dead_locked and new_imp:
+                dead_locked = False; lh_count = 0
             c = close[code].loc[:d].iloc[-1]
             state = "unknown"; reason = ""
             leader_ret = None; dead_line = None
@@ -79,14 +84,20 @@ def main():
                 hi_now = high[code].loc[:d].iloc[-1] if code in high.columns else np.nan
                 a5 = amt[code].loc[:d].tail(5).mean(); a20 = amt[code].loc[:d].tail(20).mean()
                 vol_dist = bool(pd.notna(a20) and a20 > 0 and a5 >= a20 * 1.2 and c < close[code].loc[:d].iloc[-2])
-                if c < dead_line:
-                    state = "dead"; reason = "跌破cycle失效线"
-                elif vol_dist and pd.notna(hi_now) and hi_now < cycle["last_high"] * 0.995:
-                    state = "dead"; reason = "放量出货+高点递减"
+                lh_now = bool(pd.notna(hi_now) and hi_now < cycle["last_high"] * 0.995)
+                lh_count = lh_count + 1 if lh_now else 0
+                # 语料对齐：连续 lower highs + 放量才 dead；不再用 10% 自创线
+                if dead_locked:
+                    state = "dead"; reason = "dead持续，等待新龙头/新周期"
+                elif pd.notna(hi_now) and pd.notna(cycle["last_low"]) and cycle["last_low"] < cycle["last_high"] * 0.98 and c < cycle["last_low"] * 0.98:
+                    state = "dead"; reason = "跌破真实impulse低点"
+                elif lh_count >= 2 and vol_dist:
+                    state = "dead"; reason = "连续lower high+放量"
                 elif c >= cycle["last_high"] * 0.98:
-                    state = "alive"
+                    state = "alive"; lh_count = 0
                 else:
                     state = "warning"; reason = "低于last_high"
+                if state == "dead": dead_locked = True
             if rotated:
                 state = "rotated" if imp else "unknown"; reason = "leader更换"
             change = change or (prev_state is not None and prev_state != state)
@@ -112,7 +123,7 @@ def main():
                          "reason": reason, "cycle_start": (cycle or {}).get("start"),
                          "last_impulse": (cycle or {}).get("last_impulse"),
                          "last_high": (cycle or {}).get("last_high"),
-                         "dead_line": None if dead_line is None else round(float(dead_line), 4),
+                         "lower_high_count": lh_count,
                          "leader_ret": None if leader_ret is None else round(leader_ret, 4),
                          "lag": None if lag is None else round(float(lag), 4),
                          "extended": ext, "second_codes": ",".join(sec_codes),
