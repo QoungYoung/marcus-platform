@@ -133,7 +133,7 @@ def main():
     df = pd.DataFrame(rows)
     df.to_csv(os.path.join(OUT, "bellwether_events.csv"), index=False, encoding="utf-8-sig")
     # 段级统计：dead 只数 episode，不数周
-    episodes = int(df.dead_episode.nunique(dropna=True))
+    episodes = int(df[df.dead_episode.notna()].groupby(["theme","segment_role","dead_episode"]).ngroups)
     transitions = df[df.state_change].groupby(["date","theme","segment_role"]).size().shape[0]
     summary = {"n_rows": len(df), "dates": int(df.date.nunique()), "themes": int(df.theme.nunique()),
                "state": df.state.value_counts().to_dict(),

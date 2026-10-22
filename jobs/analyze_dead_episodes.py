@@ -18,7 +18,7 @@ def fwd(code, i, h=5):
 
 dead = ev[ev.state=="dead"].dropna(subset=["dead_episode"])
 rows=[]
-for ep, g in dead.groupby("dead_episode"):
+for (theme, seg, ep), g in dead.groupby(["theme","segment_role","dead_episode"]):
     g=g.sort_values("date"); r=g.iloc[0]; d=str(r.date)
     if d not in idx: continue
     i=idx[d]; high=float(r.last_high) if pd.notna(r.last_high) else None
@@ -34,7 +34,7 @@ for ep, g in dead.groupby("dead_episode"):
     sr=[fwd(x,i) for x in secs]; sr=[x for x in sr if x is not None]
     lr=fwd(str(r.leader),i)
     if not sr or lr is None: continue
-    rows.append({"episode":int(ep),"date":d,"theme":r.theme,"segment_role":r.segment_role,"leader":r.leader,
+    rows.append({"episode":int(ep),"date":d,"theme":theme,"segment_role":seg,"leader":r.leader,
                  "last_high":high,"rebound":rebound,"next3":check,
                  "confirmed_dead":not rebound,
                  "second_ret":float(np.mean(sr)),"leader_ret":lr,

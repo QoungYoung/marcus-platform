@@ -193,10 +193,12 @@ EXTRA_SEED: Dict[str, List[Dict[str, Any]]] = {
               "kw": ["硅料", "硅片", "电池片", "组件", "逆变器", "光伏"]}],
     "储能": [{"role": "seg1", "label": "储能·全链", "concepts": ["储能概念", "熔盐储能"],
               "kw": ["储能", "电化学储能", "储能系统", "PCS"]}],
-    "火电": [{"role": "seg1", "label": "火电", "concepts": ["火电"], "kw": ["火电", "燃煤发电", "火电机组"]}],
-    "水电": [{"role": "seg1", "label": "水电", "concepts": ["水电"], "kw": ["水电", "水力发电", "水电站"]}],
     "航空装备": [{"role": "seg1", "label": "航空装备", "concepts": ["航空装备Ⅱ", "航空装备Ⅲ", "航天航空"],
                 "kw": ["航空装备", "军机", "航空发动机", "航空零部件"]}],
+    "电力/公用": [
+        {"role": "seg_fire", "label": "火电", "concepts": ["火力发电"], "kw": ["火电", "燃煤发电", "火电机组"]},
+        {"role": "seg_hydro", "label": "水电", "concepts": ["水力发电"], "kw": ["水电", "水力发电", "水电站"]},
+    ],
 }
 
 
@@ -206,8 +208,10 @@ def load_seed() -> Dict[str, List[Dict[str, Any]]]:
         raise RuntimeError("cannot load %s" % SEED_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    seed = dict(mod.SEED)
-    seed.update(EXTRA_SEED)
+    seed = {k: list(v) for k, v in mod.SEED.items()}
+    for theme, segs in EXTRA_SEED.items():
+        seed.setdefault(theme, [])
+        seed[theme].extend(segs)
     return seed
 
 
