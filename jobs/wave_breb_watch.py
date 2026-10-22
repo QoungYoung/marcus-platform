@@ -42,7 +42,41 @@ WIN_START, WIN_END = "13:30", "15:00"
 COOL_MIN = 30           # 同一标的两次提示的最小间隔（分钟）
 
 
+def _tencent_bars(code):
+    """腾讯实时分钟（**盘中可用** ✓）→ 增量成交量 ✓
+
+    ★ 2026-10-22 生产实测：`stk_mins` 盘中返回 `minute_data_pending` ✗（分钟数据收盘后才有 ✗）
+    ⇒ 盘中必须用实时源 ✓；返回格式 "HHMM price cum_vol cum_amount" ⇒ 增量 = 后减前 ✓
+    """
+    import urllib.request
+    sym = ("sh" if code.endswith(".SH") else "sz") + code[:6]
+    u = "https://ifzq.gtimg.cn/appstock/app/minute/query?code=%s" % sym
+    raw = urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}),
+                                 timeout=20).read().decode("utf-8", "ignore")
+    node = (json.loads(raw).get("data") or {}).get(sym) or {}
+    arr = ((node.get("data") or {}).get("data")) or []
+    out, prev = [], 0.0
+    for line in arr:
+        f = str(line).split()
+        if len(f) < 3:
+            continue
+        t = f[0]
+        t = t[:2] + ":" + t[2:4] if len(t) == 4 else t
+        c, cum = float(f[1]), float(f[2])
+        out.append({"t": t, "c": c, "v": max(0.0, cum - prev)})
+        prev = cum
+    return out
+
+
 def minute_bars(code, day):
+    import datetime as _dt
+    if day == _dt.datetime.now().strftime("%Y%m%d"):
+        try:
+            bars = _tencent_bars(code)
+            if bars:
+                return bars
+        except Exception as e:
+            print("   腾讯分钟失败 %s ⇒ 回退 stk_mins" % str(e)[:60])
     m = relay_query("stk_mins", ts_code=code, trade_date=day, freq="1min")
     if m is None or not len(m):
         return []
