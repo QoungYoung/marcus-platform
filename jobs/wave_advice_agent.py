@@ -69,6 +69,54 @@ def load_policy():
         return POLICY_FALLBACK, {"version": "", "n": 0}
 
 
+def build_candidates(limit=12):
+    """**动态候选池**（2026-10-22 ✓ 取代写死的 CAND ✗）
+
+    为什么改：原 `CAND` 是手写的 10 只 ✗ ⇒ 建议每天只盯这 10 只 ✓
+    （用户问「为什么如此关注沪电」✗ —— 因为它在写死的列表里 ✓，不是系统选的 ✗）。
+    现在按系统自己的结论生成 ✓ 三级优先：
+      ① `core_p1/bellwether_state_latest.json` 的 `bellwether_code`（每个细分一只龙头 ✓）
+      ② `core_select/latest.json` 的 `picks`（当日选股 ✓）
+      ③ 回退：原 CAND（fail-open ✓ 宁可退保守也不空 ✗）
+    """
+    D = os.environ.get("DATA_DIR", "").strip() or "data"
+    out, seen = [], set()
+
+    def _add(code, name=None, grp=None):
+        code = str(code or "").strip().upper()
+        if not code or code in seen or len(out) >= limit:
+            return
+        if not (code.endswith(".SH") or code.endswith(".SZ") or code.endswith(".BJ")):
+            return
+        # ★ 只留**主板**（用户明确买不了科创板 688 / 创业板 30x / 北交所 8xx·4xx ✗）
+        if code.startswith(("688", "689", "300", "301", "8", "4", "92")):
+            return
+        seen.add(code)
+        out.append((code, name or code, grp or "-"))
+
+    try:
+        bw = json.load(open(os.path.join(D, "core_p1", "bellwether_state_latest.json"), encoding="utf-8"))
+        for x in (bw.get("items") or []):
+            if x.get("bellwether_code"):
+                _add(x["bellwether_code"], None, x.get("subtheme"))
+    except Exception:
+        pass
+    try:
+        sl = json.load(open(os.path.join(D, "core_select", "latest.json"), encoding="utf-8"))
+        for it in (sl.get("items") or []):
+            for pk in (it.get("picks") or []):
+                _add(pk.get("symbol") or pk.get("code"), pk.get("name"), it.get("subtheme"))
+    except Exception:
+        pass
+    if len(out) < 3:                      # 系统数据缺失 ⇒ 回退写死列表 ✓
+        for c, n, g in CAND:
+            _add(c, n, g)
+        print("[wave-advice] 系统候选不足 ⇒ 回退内置 CAND（%d 只）✗" % len(out))
+    else:
+        print("[wave-advice] 动态候选池 %d 只 ✓（风向标+选股）" % len(out))
+    return out
+
+
 def load(code, fn="index_daily", start="20260101"):
     """→ [{"d","o","h","l","c","amt"}] 升序 ✓（下游字段名不变 ✓ prompt 依赖它 ✗ 别改）
 
@@ -161,7 +209,8 @@ def open_gaps(rs, n=60):
 def facts():
     f = {"date": "", "indexes": {}, "candidates": [], "wave": None}
     # ★ 2026-10-22（P0-2）：一次批量拿**当日实时**量比 ✓（10 只候选 + 3 个指数 ✓ 一个请求 ✓）
-    rt = realtime_quotes([c for c, _n in INDEXES] + [c for c, _n, _g in CAND])
+    cands = build_candidates()          # ★ 动态池（风向标+选股 ✓ 已过滤非主板 ✓）
+    rt = realtime_quotes([c for c, _n in INDEXES] + [c for c, _n, _g in cands])
     sh = None
     for code, name in INDEXES:
         rs = load(code)
@@ -195,7 +244,7 @@ def facts():
             f["dividend_rel5"] = round(r5(hl) - r5(sh), 2)
     except Exception:
         pass
-    for code, name, grp in CAND:
+    for code, name, grp in cands:
         try:
             rs = load(code, "daily")
             # ★ 2026-10-22（P0-1）：rs 已是**前复权**价 ✓ ⇒ 下面 ma20/low5/hi5/距离 全部是复权口径 ✓
