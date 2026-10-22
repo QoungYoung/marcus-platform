@@ -53,6 +53,9 @@ def main():
         json.dump(out, open(PIPELINE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print(json.dumps({"ok": False, "steps": [{k: s.get(k) for k in ("step","returncode","seconds","error")} for s in steps]}, ensure_ascii=False))
         sys.exit(1)
+    # AI 接管：state 之后、context/PG 之前；失败则保留机械状态
+    ai_step = run("ai_state", [os.path.join(ROOT, "jobs/ai_bellwether_daily.py"), "--apply"], timeout=1800)
+    steps.append(ai_step)
     try:
         ctx = write_context()
         steps.append({k: ctx.get(k) for k in ("step", "n", "returncode")})

@@ -1607,7 +1607,7 @@ tasks:
   enabled: false
   schedule:
     type: cron
-    expr: '35 18 * * mon-fri'
+    expr: '40 18 * * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/build_bellwether_state.py
@@ -1756,7 +1756,7 @@ tasks:
   enabled: true
   schedule:
     type: cron
-    expr: '35 18 * * mon-fri'
+    expr: '40 18 * * mon-fri'
     timezone: Asia/Shanghai
   script:
     path: jobs/bellwether_change_alert.py
@@ -1776,9 +1776,9 @@ tasks:
     enabled: false
 
 - id: core_bellwether_ai
-  name: 'AI 风向标旁路（45子主题，只读）'
-  description: '18:40 在生产旁路跑 AI 结构化判断：只写 data/core_p1/ai_state_latest.json，不替换机械状态、不参与 select_core、不接 gate。'
-  enabled: true
+  name: 'AI 风向标旁路（已并入 core_bellwether_daily）'
+  description: '已并入统一流水线；保留为禁用的手工入口。'
+  enabled: false
   schedule:
     type: cron
     expr: '40 18 * * mon-fri'

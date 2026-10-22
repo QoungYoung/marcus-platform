@@ -101,7 +101,7 @@ def run_ai(date,items):
     return json.loads(txt)
 
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument("--dry",action="store_true"); a=ap.parse_args()
+    ap=argparse.ArgumentParser(); ap.add_argument("--dry",action="store_true"); ap.add_argument("--apply",action="store_true"); a=ap.parse_args()
     date,items=build_packet(); print(json.dumps({"date":date,"items":len(items)},ensure_ascii=False))
     if a.dry:
         json.dump({"date":date,"items":items},open(AI_OUT,"w",encoding="utf-8"),ensure_ascii=False,indent=1); return
