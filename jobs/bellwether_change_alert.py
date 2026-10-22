@@ -27,7 +27,8 @@ def changes():
         # 生产 history 可能为空：用 PG 上一交易日兜底
         try:
             import sys
-            sys.path.insert(0, os.path.join(ROOT, "backend"))
+            for _p in (os.path.join(ROOT, "backend"), ROOT, "/app"):
+                if _p not in sys.path: sys.path.insert(0, _p)
             from sqlalchemy import text
             from app.database import engine
             with engine.connect() as conn:
