@@ -4,7 +4,7 @@ from __future__ import annotations
 import json, os, sys
 import numpy as np, pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LAB = os.path.join(ROOT, "data/pit/chain_map/labels_weekly.csv")
+LAB = os.environ.get("PIT_LABELS") or os.path.join(ROOT, "data/pit/chain_map/labels_weekly.csv")
 OBS = os.path.join(ROOT, "data/pit/theme_members/observations.csv")
 BARS = os.path.join(ROOT, "data/bars_api.parquet")
 OUT = os.path.join(ROOT, "data/core_pit")
