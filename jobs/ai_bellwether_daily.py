@@ -105,27 +105,36 @@ def main():
     date,items=build_packet(); print(json.dumps({"date":date,"items":len(items)},ensure_ascii=False))
     if a.dry:
         json.dump({"date":date,"items":items},open(AI_OUT,"w",encoding="utf-8"),ensure_ascii=False,indent=1); return
-    ans=run_ai(date,items); by={x.get("subtheme"):x for x in (ans.get("items") or [])}
-    # 一次取上一交易日状态，避免 45 次连接
-    prev_map={}
     try:
-        if os.environ.get("AI_SKIP_DB"): raise RuntimeError("skip db")
-        from app.database import engine
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            row=conn.execute(text("SELECT max(trade_date) FROM bellwether_daily WHERE trade_date < :d"),{"d":date}).scalar()
-            if row:
-                for r in conn.execute(text("SELECT subtheme,state,bellwether_code FROM bellwether_daily WHERE trade_date=:d"),{"d":str(row)}).mappings():
-                    prev_map[str(r["subtheme"])]={"state":r["state"],"code":r["bellwether_code"]}
-    except Exception:
-        pass
+        ans=run_ai(date,items); by={x.get("subtheme"):x for x in (ans.get("items") or [])}; err=None
+    except Exception as e:
+        by={}; err=str(e)[:300]
+    # 一次取上一交易日状态，避免 45 次连接（build_packet 已用；这里保留兜底）
     out=[]
     for it in items:
         x=by.get(it["subtheme"]) or {}
         out.append({**it,"ai_state":x.get("state","unknown"),"ai_confidence":x.get("confidence"),
                     "ai_evidence":x.get("evidence") or [],"ai_actions":x.get("action_permissions") or {}})
-    doc={"date":date,"source":"dsh_ai_asof","usage":"shadow_only","items":out}
+    doc={"date":date,"source":"dsh_ai_asof","usage":"shadow_only","items":out,"error":err}
     json.dump(doc,open(AI_OUT,"w",encoding="utf-8"),ensure_ascii=False,indent=1)
-    print(json.dumps({"date":date,"n":len(out),"ai_states":pd.Series([x["ai_state"] for x in out]).value_counts().to_dict()},ensure_ascii=False))
+    if a.apply:
+        state=json.load(open(STATE,encoding="utf-8"))
+        by2={x["subtheme"]:x for x in out}
+        for it in state.get("items",[]):
+            a_it=by2.get(it.get("subtheme")) or {}
+            ai=a_it.get("ai_state")
+            it["mechanical_state"]=it.get("state")
+            it["ai_state"]=ai or it.get("state")
+            if ai in ("alive","warning","dead","rotated") and ai != "unknown":
+                it["state"]=ai
+                it["ai_confidence"]=a_it.get("ai_confidence")
+        state["source"]="ai_unified" + ("" if not err else "_fallback")
+        state["usage"]="production"
+        state["ai_error"]=err
+        json.dump(state,open(STATE,"w",encoding="utf-8"),ensure_ascii=False,indent=1)
+    print(json.dumps({"date":date,"n":len(out),"error":err,
+                      "ai_states":pd.Series([x["ai_state"] for x in out]).value_counts().to_dict(),
+                      "applied":a.apply},ensure_ascii=False))
+
 
 if __name__=="__main__": main()
