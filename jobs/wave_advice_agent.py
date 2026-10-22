@@ -324,6 +324,11 @@ def facts():
             f["wave"] = (json.loads(r.read().decode("utf-8")) or {}).get("state")
     except Exception as e:
         f["wave"] = {"_error": str(e)[:80]}
+    # ★ 重排键序（放在**末尾** ✓ 此时 layers/wave 都已生成 ✓）—— layers 必须靠前 ✓
+    #   实测踩坑：layers 曾排在 JSON 第 9352 字 ✗ 而 prompt 截断 7000 ✗ ⇒ 被切掉 ✗
+    #   ⇒ agent 报「layers 三项均为缺」✗（它没错 ✓ 是我们没送到 ✗）
+    f = {k: f.get(k) for k in ("date", "layers", "wave", "indexes", "candidates",
+                               "bank_rel5", "dividend_rel5", "wolf_recent") if k in f}
     return f
 
 
@@ -436,7 +441,7 @@ def llm_advice(f, policy_text=None):
         json.dumps(f.get("wolf_recent") or [], ensure_ascii=False)[:1800],
         "",
         "=== FACTS（工具取数，确定性 ✓ 缺失就写「缺」）===",
-        json.dumps(f, ensure_ascii=False)[:7000],
+        json.dumps(f, ensure_ascii=False)[:12000],
         "",
         "输出要求 —— 必须是**一张『今天做什么』决策卡片**（中文，纯文本，不要 markdown 表格）：",
         "『① 今天该不该动』：看 FACTS.layers.entry_timing（市场级入场 = 下跌段 ∧ 放量 ∧ 收阳 ✓）",
