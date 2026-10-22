@@ -505,6 +505,16 @@ def wave_bucket() -> Optional[str]:
             with open(p, encoding="utf-8") as f:
                 st = json.load(f)
             b = OP_BUCKET.get(str((st or {}).get("operation") or "").strip().lower())
+            # ★ 2026-10-22 用户要求：**B反 接进闸门** —— 他 2026-08 的做法是"B反 只做 T"✓
+            #   浪型 state 带 `down_tag=="B反"` 时，T 仓比例提到 **t_only/range 档（1/2）**
+            #   （defense/high 档是 1/3 ⇒ 更保守 ✗ 与他的 B反 打法不符 ✓）。
+            #   ⚠️ **只动 T 仓比例** ✓ 买类闸门（daily_decision.BUY_ALLOWED_OPS 不含 defense）
+            #   仍然**禁新建** ✗ —— 这与他"B反 不新建、只做 T"一致 ✓。
+            #   开关 `WOLF_BREB_T_RATIO=0` 可一键退回旧口径 ✓（fail-open 到原逻辑）。
+            if b and os.getenv("WOLF_BREB_T_RATIO", "1") != "0" \
+                    and str((st or {}).get("down_tag") or "").strip() == "B反" \
+                    and b == "high":
+                return "range"
             if b:
                 return b
         except Exception as _e_sil3:
