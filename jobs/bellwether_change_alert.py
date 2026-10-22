@@ -14,9 +14,12 @@ def changes():
     date = str(x.get("date"))
     items = x.get("items") or []
     prev = {}
-    if os.path.exists(HIST):
-        h = pd.read_csv(HIST, dtype={"date": str})
-        older = h[h.date < date]
+    if os.path.exists(HIST) and os.path.getsize(HIST) > 0:
+        try:
+            h = pd.read_csv(HIST, dtype={"date": str})
+        except Exception:
+            h = pd.DataFrame()
+        older = h[h.date < date] if len(h) else h
         if len(older):
             last_date = older.date.max()
             prev = {str(r.subtheme): str(r.state) for _, r in older[older.date == last_date].iterrows()}
