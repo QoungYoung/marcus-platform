@@ -122,6 +122,7 @@ def compute_history(df, high, amt, sub, bell, min_date="20260615"):
                          "bell_ret": None, "sub_ret": None})
             continue
         hi = float(high.at[d, bell]) if d in high.index and bell in high.columns and pd.notna(high.at[d, bell]) else np.nan
+        close_b = float(df.at[d, bell]) if d in df.index and bell in df.columns else np.nan
         br = wb_ret.loc[d] if pd.notna(wb_ret.loc[d]) else np.nan
         sr = float(sret.loc[d])
         breadth = _breadth(df, codes, str(d))
@@ -130,7 +131,9 @@ def compute_history(df, high, amt, sub, bell, min_date="20260615"):
         vol_ratio = amt_now / amt20 if pd.notna(amt_now) and pd.notna(amt20) and amt20 else np.nan
         prev_high = last["high"] if last else None
         prev_breadth = last["breadth"] if last else None
-        lower_high = bool(pd.notna(prev_high) and pd.notna(hi) and hi <= prev_high * 0.995) if prev_high else None
+        # 收盘确认：盘中创新高但收盘跌回，不算“高点抬高”
+        lower_high = bool(pd.notna(prev_high) and ((pd.notna(hi) and hi <= prev_high * 0.995) or
+                                                   (pd.notna(close_b) and close_b < prev_high * 0.995))) if prev_high else None
         vol_dist = bool(pd.notna(vol_ratio) and vol_ratio > 1.2 and (pd.isna(br) or br < sr))
         # 接力：非风向标里，5日相对最强且明显跑赢
         # 狼大口径：同链 leader/second + 相对强 + 创新高 + 换得快。
@@ -165,12 +168,13 @@ def compute_history(df, high, amt, sub, bell, min_date="20260615"):
             state = "dead"
         elif dead_candidate:
             state = "warning"
-        elif lower_high is False and follow and not vol_dist:
+        elif lower_high is False and follow and not vol_dist and pd.notna(br) and br > 0:
             state = "alive"
         else:
             state = "warning"
         rows.append({"date": str(d), "subtheme": sub, "state": state, "impulse": True,
-                     "bellwether_code": bell, "high": round(hi, 3) if pd.notna(hi) else None,
+                     "bellwether_code": bell, "close": round(close_b, 3) if pd.notna(close_b) else None,
+                     "high": round(hi, 3) if pd.notna(hi) else None,
                      "prev_impulse_high": round(prev_high, 3) if prev_high else None,
                      "lower_high": lower_high, "vol_dist": vol_dist,
                      "breadth": round(breadth, 3) if pd.notna(breadth) else None,
