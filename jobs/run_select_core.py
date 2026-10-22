@@ -31,9 +31,7 @@ def main():
                          "code": p.get("code"), "name": p.get("name"),
                          "stage": (r.get("stage") or {}).get("stage"),
                          "rule": p.get("rule"),
-                         "bellwether_state": p.get("bellwether_state"),
-                         "bellwether_code": p.get("bellwether_code"),
-                         "bellwether_context": p.get("bellwether_context")})
+                         })
     out = {"date": date8, "source": "select_core+bellwether_soft_overlay",
            "n_subthemes": len(items), "n_picks": len(flat), "items": items}
     json.dump(out, open(os.path.join(OUT, "latest.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
@@ -41,7 +39,7 @@ def main():
     pd.DataFrame(flat).to_csv(os.path.join(OUT, f"select_core_{date8}.csv"), index=False, encoding="utf-8-sig")
     print(json.dumps({"date": date8, "subthemes": len(items), "picks": len(flat)}, ensure_ascii=False))
     if flat:
-        print(pd.DataFrame(flat)[["subtheme","code","name","stage","bellwether_state","bellwether_context"]].head(20).to_string(index=False))
+        print(pd.DataFrame(flat)[["subtheme","code","name","stage"]].head(20).to_string(index=False))
     else:
         print("no picks (stage/role rules returned empty); this is not a task failure")
 

@@ -529,7 +529,6 @@ def select_core(theme: str, date8: str, top: int = 5, subtheme: str | None = Non
     except Exception:
         ctx = {"subtheme": subtheme or theme, "state": "unknown", "permissions": {}}
     r["bellwether"] = ctx
-    # 只标注，不参与选股/过滤/仓位
-    r["picks"] = annotate_bellwether(r.get("picks") or [], ctx)
+    # 只放在结果顶层做环境上下文，不挂到每只 pick，更不参与选股/过滤/仓位
     r["bellwether_usage"] = "advisory_only"
     return r

@@ -1722,3 +1722,28 @@ tasks:
   depends_on: []
   retry:
     enabled: true
+
+- id: bellwether_change_alert
+  name: '风向标状态变化提示（只读）'
+  description: '18:35 对比上一交易日，只在子主题状态变化时推 QQ；不选股、不改仓位、不给买卖建议。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '35 18 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/bellwether_change_alert.py
+    args: []
+  output:
+    log_file: logs/bellwether_change_alert_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_bellwether_daily
+  retry:
+    enabled: false
