@@ -82,6 +82,15 @@ def _pg_upsert(ws):
         return False
 
 
+def _is_pg_target(f):
+    """只有 `data/wave_state_history/*` 回写 PG ✓（live 由 `write_wave_state` 自己 upsert ✓）。
+
+    **`data/wave_state_<date>.json` 不回写** ✗ —— 那批里含 2016–2024 的旧 dated 档，
+    用户 2026-10-23 明确「不要这批老档进库」；PG 的口径就是 live + history（回填也是这么灌的 ✓）。
+    """
+    return os.path.basename(os.path.dirname(str(f).replace("\\", "/"))) == "wave_state_history"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -195,7 +204,9 @@ def main():
             #   `wave_state_pg_backfill` 灌进库的旧口径（短数据窗口算的 origin/wave1_top）
             #   在库里留了 90 天 ✗，而读侧 `wave_store` **PG 优先** ✓ ⇒ 线上一直读旧锚点，
             #   磁盘文件却早已重算正确 —— 两边永久不一致且不会自愈 ✗。故这里补双写 ✓。
-            if not args.no_pg:
+            #   范围只限 `data/wave_state_history/*` ✓（`--dated-days` 那批 2016–2024 老 dated
+            #   档**不进库** ✗，见 `_is_pg_target` 的口径）。
+            if not args.no_pg and _is_pg_target(f):
                 n_pg += 1 if _pg_upsert(ws) else 0
         except Exception as _e:
             n_err += 1
