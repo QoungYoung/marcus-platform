@@ -362,6 +362,15 @@ def read(day: str, cut: str = CUT) -> dict:
     up = sorted({round(h[i], 3) for i in piv if h[i] > c[j]})[:4]
     dn = sorted({round(l[i], 3) for i in piv if l[i] < c[j]}, reverse=True)[:3]
 
+    # 口径：盘中 14:50 / 盘后 / 回放 —— agent 必须据此决定用"今天"还是"明日"表述
+    if not intraday:
+        mode, mode_note = "replay", "历史回放：结论是复盘口径，不是当日决策"
+    elif cut_ok:
+        mode, mode_note = "intraday_1450", "14:50 盘中口径：可以给「今天做不做」"
+    else:
+        mode = "after_close"
+        mode_note = ("盘后口径：今天已收盘，不能写「今天可以建/今天做」；"
+                     "只能给「明日若 X → Y」的条件句。四行的目标/失效位照常给，它们是明天的参考位。")
     warn = ""
     if (not intraday) and day == datetime.now().strftime("%Y%m%d"):
         warn = "盘中实时数据未取到 ⇒ 本次用的是上一交易日日线，读数不代表今日"
@@ -375,7 +384,12 @@ def read(day: str, cut: str = CUT) -> dict:
                  pos_pct=round(pos * 100), vol_ratio=(round(vr, 2) if vr is not None else None),
                  yest=dict(vol_ratio=round(vr1, 2), pos_pct=round(pos1 * 100)),
                  broke_yest_low=bool(broke)),
+        mode=mode, mode_note=mode_note,
         market=dict(sh_amount_yi=round(amt),
+                    sh_vol_shou=(round(ib["vol"], 0) if ib else None),
+                    sh_pos_pct=(round((ib["close"] - ib["low"]) / max(1e-9, ib["high"] - ib["low"]) * 100)
+                                if ib else None),
+                    note_unit="sh_vol_shou=手；sh_pos_pct=上证收盘位置；ETF 的收位在 etf.pos_pct，勿混",
                     sh_ratio=(round(amt / a20, 2) if (cut_ok and a20 == a20) else None),
                     note=(None if cut_ok else "非 14:50 口径，仅报累计值，量比不计算")),
         bottom_structure=bottom,
