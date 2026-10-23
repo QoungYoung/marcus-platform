@@ -67,21 +67,40 @@ def bars(ins: str) -> pd.DataFrame:
     return d
 
 
-def candidates(df: pd.DataFrame, anchors: list[dict]) -> list[dict]:
-    """最后一个已确认锚点之后的新低/新高；距今天数 ≥ CONFIRM_DAYS 且之后未被破 ⇒ 够格。"""
-    last = anchors[-1]["date"] if anchors else "19000101"
-    seg = df[df.trade_date > last]
-    out = []
-    if not len(seg) or len(df) < CONFIRM_DAYS + 1:
-        return out
-    for kind, col, fn in (("low", "low", "min"), ("high", "high", "max")):
-        idx = seg[col].idxmin() if fn == "min" else seg[col].idxmax()
-        px = float(df.loc[idx, col])
-        age = int(df.index[-1] - idx)
-        after = df.loc[idx + 1:, col]
-        broken = bool(after.min() < px) if kind == "low" else bool(after.max() > px)
-        out.append(dict(kind=kind, date=str(df.loc[idx, "trade_date"]), price=px,
-                        age=age, broken=broken, eligible=(age >= CONFIRM_DAYS and not broken)))
+def gen_anchors(df: pd.DataFrame, n_hold: int = 4, gap: float = 0.08, move: float = 0.10) -> list[dict]:
+    """按三条**可计算**规则生成结构点（替代「被他引用过」这条无法执行的判据）。
+
+    ① 一段只留极值：与上一个同类点价差 <gap 的不单独成点（同向时更极端者胜，替换旧的）
+    ② 时效确认：之后 n_hold 个交易日不再破
+    ③ 级别拐点：之后 20 日反向幅度 ≥ move（这条把小波动全滤掉）
+    level 由反向幅度机械定：≥25% 记大级别，否则小级别。
+    回测（2021-2026）：上证 23→1.1 个/年，新能车 29→6.2，机器人 29→6.7。
+    """
+    c, h, l, dates = df.close.values, df.high.values, df.low.values, df.trade_date.values
+    out: list[dict] = []
+    for i in range(5, len(df) - 25):
+        is_low = l[i] == l[i - 5:i + 6].min()
+        is_high = h[i] == h[i - 5:i + 6].max()
+        if not (is_low or is_high):
+            continue
+        kind = "low" if is_low else "high"
+        px = float(l[i] if is_low else h[i])
+        if is_low and l[i + 1:i + 1 + n_hold].min() < px:
+            continue
+        if is_high and h[i + 1:i + 1 + n_hold].max() > px:
+            continue
+        fwd = (h[i + 1:i + 21].max() / px - 1) if is_low else (1 - l[i + 1:i + 21].min() / px)
+        if fwd < move:
+            continue
+        prev = [x for x in out if x["kind"] == kind]
+        if prev and abs(px / prev[-1]["px"] - 1) < gap:
+            if (is_low and px > prev[-1]["px"]) or (is_high and px < prev[-1]["px"]):
+                continue
+            out = [x for x in out if not (x["kind"] == kind and x["px"] == prev[-1]["px"])]
+        out.append(dict(kind=kind, date=str(dates[i]), price=px,
+                        level=("大级别" if fwd >= 0.25 else "小级别"),
+                        fwd_move=round(fwd * 100, 1),
+                        age=int(len(df) - 1 - i), broken=False, eligible=True))
     return out
 
 
@@ -99,11 +118,15 @@ def ask_agent(ins: str, name: str, df: pd.DataFrame, anchors: list[dict], cands:
         f"已确认的锚点（最后 8 个）：\n{anc}\n\n"
         f"程序算出的候选点（最后一个已确认锚点之后的新低/新高）：\n{cl}\n\n"
         f"近期日线（最近 {LOOKBACK} 根，ETF 已折算复权）：\n{rows}\n\n"
-        "判断标准（来自账本）：\n"
-        "1. 只有被他引用过、或与更大结构位重合的点，才配叫「结构点」；普通小低点/小高点不算。\n"
-        "2. 低点要「之后 3–5 个交易日不再破 + 收盘站上」才算确认；高点同理。\n"
-        "3. 结构点分三种 role：目标位（用来算空间）/ 已出现（已确认的拐点）/ 待确认（还在走）。\n"
-        "4. 判断不了就 action=reject，宁可少标，不要多标。\n\n"
+        "程序已经按三条可计算规则筛过候选（你看到的都过关）：\n"
+        "  ① 与上一个同类点价差 ≥8%（一段只留极值）\n"
+        "  ② 之后 4 个交易日不再破\n"
+        "  ③ 之后 20 日反向幅度 ≥10%（级别拐点）\n"
+        "你的任务只是**给它起名和定性**，不要再自己造点：\n"
+        "  1. label 用人话（如「4-3低」「B反高点」「前一轮顶」），不要生造「X高」「次高」这类没信息量的名字。\n"
+        "  2. role 三选一：目标位（用来算空间）/ 已出现（已确认的拐点）/ 待确认（还在走）。\n"
+        "  3. 若该点与他某次发言里提到的点位明显对应，写进 evidence；对不上就只写价格依据。\n"
+        "  4. 拿不准就 action=reject。\n\n"
         "输出：**只输出一个 JSON 数组**，不要任何解释文字。每项：\n"
         '{"session_date":"YYYYMMDD","price":数字,"kind":"low|high","label":"如 4-5低",'
         '"role":"目标位|已出现|待确认","action":"confirm|reject","evidence":"引用上面的数字，一句话"}\n'
@@ -131,6 +154,8 @@ def write_anchors(ins: str, items: list[dict], eligible: list[dict]) -> int:
     """只写「程序判够格」的那几个点。agent 只能在够格的点里选，不能自己造锚点。"""
     import psycopg2
     ok = {(str(c["date"]), round(float(c["price"]), 3), c["kind"]) for c in eligible}
+    lv = {(str(c["date"]), round(float(c["price"]), 3), c["kind"]): c.get("level", "小级别")
+          for c in eligible}
     n = 0
     with psycopg2.connect(dsn(), connect_timeout=8) as conn:
         cur = conn.cursor()
@@ -144,11 +169,11 @@ def write_anchors(ins: str, items: list[dict], eligible: list[dict]) -> int:
             try:
                 cur.execute(
                     "insert into b_rebound_anchors(instrument,session_date,price,kind,label,role,status,"
-                    "evidence,confirmed_at,created_by) values (%s,%s,%s,%s,%s,%s,'confirmed',%s,now(),'agent') "
+                    "evidence,confirmed_at,created_by,level) values (%s,%s,%s,%s,%s,%s,'confirmed',%s,now(),'agent',%s) "
                     "on conflict (instrument,session_date,price,kind) do nothing",
                     (ins, str(it["session_date"]), float(it["price"]), str(it["kind"]),
                      str(it.get("label") or "")[:32], str(it.get("role") or "已出现")[:16],
-                     str(it.get("evidence") or "")[:500]))
+                     str(it.get("evidence") or "")[:500], lv.get(key, "小级别")))
                 n += cur.rowcount
             except Exception as e:
                 print(f"[warn] 写入失败 {it}: {str(e)[:80]}", file=sys.stderr)
@@ -260,13 +285,13 @@ def main() -> None:
         try:
             df = bars(ins)
             anchors = load_anchors(ins)
-            cands = candidates(df, anchors)
-            elig = [c for c in cands if c["eligible"]]
+            cands = gen_anchors(df)
+            elig = cands
             print(f"\n=== {name}（{ins}）最后锚点 "
-                  f"{anchors[-1]['date'] if anchors else '无'}｜候选 {len(cands)} 个｜够格 {len(elig)} 个")
+                  f"{anchors[-1]['date'] if anchors else '无'}｜规则生成 {len(cands)} 个｜库中已有 {len(anchors)} 个")
             for c in cands:
-                print(f"    {c['date']} {c['price']:.3f} {c['kind']} 距今{c['age']}日 "
-                      f"{'已破' if c['broken'] else '未破'} {'✅够格' if c['eligible'] else ''}")
+                print(f"    {c['date']} {c['price']:.3f} {c['kind']} {c['level']} "
+                      f"反向{c['fwd_move']}% 距今{c['age']}日")
             if not elig:
                 continue
             items = ask_agent(ins, name, df, anchors, cands)

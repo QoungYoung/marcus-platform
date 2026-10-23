@@ -192,14 +192,14 @@ def wave_block(asof: str) -> dict | None:
             cur.execute("select as_of,level,completed,running,next_watch,rejudge_trigger,evidence "
                         "from b_rebound_wave_state where as_of<=%s order by as_of desc limit 1", (asof,))
             w = cur.fetchone()
-            cur.execute("select instrument,session_date,price,kind,label,role "
+            cur.execute("select instrument,session_date,price,kind,label,role,coalesce(level,'') "
                         "from b_rebound_anchors where status='confirmed' and confirmed_at::date<=%s "
                         "order by session_date", (iso,))
             rows = cur.fetchall()
         if w:
-            idx = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5])
+            idx = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5], level=r[6])
                    for r in rows if r[0] == "000001.SH"]
-            etf = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5])
+            etf = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5], level=r[6])
                    for r in rows if r[0] == ETF]
             stale = None
             try:
@@ -213,7 +213,9 @@ def wave_block(asof: str) -> dict | None:
                         level=w[1], completed=w[2], running=w[3],
                         next_watch=w[4], rejudge_trigger=w[5], evidence=w[6],
                         anchors_index=idx[-6:], anchors_etf=etf[-4:],
-                        note="段位/锚点均来自 PG；stale_days=段位距今天数，>3 时只作参考")
+                        note=("段位/锚点均来自 PG。level=机械判级（之后20日反向≥25% 记大级别，"
+                              "≥10% 记小级别）；**判断段位时只用与当前级别相同的锚点**，"
+                              "不同级别的锚点并存是正常的，不是冲突"))
     except Exception as e:
         print(f"[warn] 浪型 PG 读取失败，退回文件: {str(e)[:70]}", file=sys.stderr)
     p = os.path.join(ROOT, "config", "b_rebound_anchors.json")
@@ -238,7 +240,7 @@ def wave_block(asof: str) -> dict | None:
                 level=cur_.get("level"), completed=cur_.get("completed"),
                 running=cur_.get("running"), next_watch=cur_.get("next_watch"),
                 rejudge_trigger=cur_.get("rejudge_trigger"),
-                anchors_index=[x for x in (j.get("index") or [])
+                anchors_index=[dict(x, level=x.get("level", "")) for x in (j.get("index") or [])
                                if str(x.get("known_from", "")).replace("-", "") <= asof][-6:])
 
 
