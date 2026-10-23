@@ -262,6 +262,14 @@ def _display_patterns(code: str, bars: List[Dict[str, Any]]) -> List[Dict[str, A
         return []
 
 
+def _rung_name(W: Any, idx: Any) -> str:
+    """档位序号 → 档名（4浪调整/成功4-5/失败4-5/下跌1浪）。取不到 ⇒ ""（fail-open ✓）。"""
+    try:
+        return str((W.RUNGS or [])[int(idx)].get("name") or "")
+    except Exception:
+        return ""
+
+
 def _waves(code: str) -> List[Dict[str, Any]]:
     W = _ladder()
     if W is None:
@@ -278,12 +286,29 @@ def _waves(code: str) -> List[Dict[str, Any]]:
         out = []
         for ev in W.walk(rows):
             ws = W.to_wave_state(ev)
+            # ★ 2026-10-23：卡片要能"说清自己是谁判的"——
+            #   ① `day_stage/day_name` = **当日判据档**（不含单向锁）。锁着时 `name`（当前档）与它不同，
+            #      而 `reasons` 讲的是**当日判据** ⇒ 前端只显示 name 会和依据自相矛盾 ✗（实测：当前档
+            #      「下跌1浪」而依据写「仍在调整区间 4-4→4-5」✗）。
+            #   ② `degraded/reset_reason` 说明档位是怎么降下来/重定的。
+            #   ③ `ov_name/ov_expect` = 叠加档（W底/末段/主升 3-3）—— 它会改写 operation，
+            #      此时 `expect` 仍是 rung 的 ⇒ 必须让前端能显示叠加档的预期 ✓。
+            #   ④ `legs_stale/leg_cycle/generator_version` = 腿是否属本轮 + 产物版本（可追溯 ✓）。
             out.append({"date": ev["date"], "session_date": W.next_session_date(ev["date"]),
                         "rung": ev.get("rung_index"), "name": ev.get("name"),
+                        "day_stage": ev.get("day_stage"),
+                        "day_name": _rung_name(W, ev.get("day_stage")),
+                        "degraded": bool(ev.get("degraded")), "reset": bool(ev.get("reset")),
+                        "reset_reason": ev.get("reset_reason") or "",
                         "marks": (ev.get("features") or {}).get("marks"),   # 图上标注：W底/双头的端点+颈线 ✓
                         "level": ws.get("level"), "sub_level": ws.get("sub_level"),
                         "operation": ws.get("operation"), "mode": ws.get("mode") or "",
                         "expect": ev.get("expect"), "invest": ev.get("invest"),
+                        "ov_name": (ev.get("ov_spec") or {}).get("name") or "",
+                        "ov_expect": ev.get("ov_expect") or "",
+                        "legs_stale": bool((ws.get("features") or {}).get("legs_stale")),
+                        "leg_cycle": ws.get("leg_cycle") or "",
+                        "generator_version": ws.get("generator_version") or "",
                         "main_up": ev.get("main_up") or "", "reasons": ev.get("reasons") or ""})
         _CACHE[ck] = (time.time(), out)
         return out
@@ -295,9 +320,15 @@ def _waves(code: str) -> List[Dict[str, Any]]:
 @router.get("/index-history")
 def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000001.SH")):
     bars, src = _bars(code, days)
-    waves = _waves(code)
-    wmap = {w["date"]: w for w in waves}
+    waves_all = _waves(code)
     today = bars[-1]["date"] if bars else None
+    # ★ 2026-10-23：只回**窗口内**的浪型 ✓ —— 原来把全部 5245 天都塞进响应（实测 days=30 也发 1.8MB ✗），
+    #   而卡片只用到 bars 覆盖的那几天。`last` 仍取**全量最后一条**（= 最新判定，与窗口无关 ✓），
+    #   并显式给 `last_is_today` 让前端能说明「判定日 ≠ 最后一根 K 线」的情况。
+    lo = bars[0]["date"] if bars else ""
+    waves = [w for w in waves_all if (not lo or w["date"] >= lo)]
+    wmap = {w["date"]: w for w in waves}
+    last = wmap.get(today or "") or (waves_all[-1] if waves_all else None)
     note = ""
     if src.startswith("local_csv"):
         note = "本地 CSV 近月只有收盘 ⇒ 开高低为合成值（O=前收/H=L=收）⛔"
@@ -305,7 +336,9 @@ def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000
         note = (note + " ｜ " if note else "") + "浪型链不可用（" + (_LAST_ERR["waves"] or "缺指数数据") + "）⇒ 只画 K 线 ✓"
     disp = _display_patterns(code, bars)
     return {"code": code, "asof": today, "bars": bars, "waves": waves, "display_patterns": disp,
-            "last": wmap.get(today or "", None), "ohlc_source": src,
+            "last": last, "last_is_today": bool(last and today and last.get("date") == today),
+            "wave_count": len(waves), "wave_version": (last or {}).get("generator_version") or "",
+            "ohlc_source": src,
             "wave_source": "wave_ladder.walk" if waves else "none", "note": note}
 
 

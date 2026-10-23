@@ -18,7 +18,16 @@ interface Wave {
   date: string; session_date?: string; rung: number; name: string; level: string; sub_level: string;
   operation: string; mode: string; expect: string; invest: number; main_up: string; reasons: string;
   marks?: PatMark | null;
+  // ★ 2026-10-23：让卡片能"说清自己是谁判的" —— 当前档（单向锁后）与**当日判据档**是两件事：
+  //   实测 20261022 当前档=下跌1浪，而依据写「仍在调整区间 4-4→4-5」⇒ 只显示 name 会自相矛盾 ✗
+  day_stage?: number | null; day_name?: string; degraded?: boolean; reset?: boolean;
+  reset_reason?: string; ov_name?: string; ov_expect?: string;
+  legs_stale?: boolean; leg_cycle?: string; generator_version?: string;
 }
+// level 的内部枚举 → 人话（原来直接把 `down` 打在卡片上 ✗）
+const LEVEL_CN: Record<string, string> = {
+  d1: '一级', d2: '二级', d3: '三级', d4: '大4回调', d5: '末段', down: '下跌',
+};
 
 const UP_COLOR = '#e5484d';
 const DOWN_COLOR = '#27a06b';
@@ -63,6 +72,8 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
   const [waves, setWaves] = useState<Wave[]>([]);
   const [src, setSrc] = useState('');
   const [dispPats, setDispPats] = useState<any[]>([]);
+  const [apiLast, setApiLast] = useState<Wave | null>(null);
+  const [waveVer, setWaveVer] = useState('');
   const [note, setNote] = useState('');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
@@ -76,6 +87,8 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         const d = r.data || {};
         setBars(d.bars || []);
         setWaves(d.waves || []);
+        setApiLast((d.last as Wave) || null);    // ★ 2026-10-23：用后端给的"最新判定"（与 K 线窗口无关 ✓）
+        setWaveVer(d.wave_version || '');
         setDispPats(d.display_patterns || []);   // 显示专用形态（用长序列算，不改链的状态 ✓）
         setSrc(d.ohlc_source || '');
         setNote(d.note || '');
@@ -86,7 +99,11 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
     return () => { alive = false; };
   }, [days]);
 
-  const last = useMemo(() => (waves.length ? waves[waves.length - 1] : null), [waves]);
+  // `last` = 最新判定（后端 `last`）；取不到才退回窗口内最后一条 ✓
+  const last = useMemo(
+    () => apiLast || (waves.length ? waves[waves.length - 1] : null),
+    [apiLast, waves],
+  );
 
   useEffect(() => {
     if (!ref.current || !bars.length) return;
@@ -230,8 +247,19 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
           if (w) {
             const oc = OP_COLOR[w.operation] || MUTED;
             html += '<div style="margin-top:4px;border-top:1px dashed ' + GRID + ';padding-top:4px">';
-            html += '<div>浪型 <b>' + (w.name || '-') + '</b>　级别 <b>' + (w.level || '-') +
-                    (w.sub_level ? '/' + w.sub_level : '') + '</b>' + (w.main_up ? '　<span style="color:' + MAINUP_COLOR + '">主升3-3</span>' : '') + '</div>';
+            const subTxt = w.sub_level && w.sub_level !== w.name ? '/' + w.sub_level : '';
+            const lvTxt = LEVEL_CN[w.level] || w.level || '-';
+            html += '<div>浪型 <b>' + (w.name || '-') + '</b>　级别 <b>' + lvTxt + subTxt + '</b>' +
+                    (w.main_up ? '　<span style="color:' + MAINUP_COLOR + '">主升3-3</span>' : '') +
+                    (w.ov_name ? '　<span style="color:' + oc + '">形态 ' + w.ov_name + '</span>' : '') + '</div>';
+            // 当前档 ≠ 当日判据档 ⇒ 是单向锁在保鲜（不是矛盾），必须写出来 ✓
+            if (w.day_name && w.day_name !== w.name) {
+              html += '<div style="color:' + MUTED + '">当日判据档 <b>' + w.day_name + '</b>' +
+                      '（本档为单向锁保持：' + (w.degraded ? '曾降档' : '未重定浪') + '）</div>';
+            }
+            if (w.legs_stale) {
+              html += '<div style="color:#d64545">⛔ 腿陈旧（锚定顶之后已大幅上移 ⇒ 子浪编号仅供参考）</div>';
+            }
             html += '<div>操作 <b style="color:' + oc + '">' + (OP_CN[w.operation] || w.operation || '-') + '</b>' +
                     (w.invest != null ? '　投入系数 ' + Number(w.invest).toFixed(2) : '') +
                     (w.mode ? '　模式 <b>' + w.mode + '</b>' : '') + '</div>';
@@ -241,7 +269,8 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
               : w.operation === 't_only' ? '买类拦（仅 probe ≤3%）；卖出不拦'
               : '买类拦（禁新建）；卖出不拦';
             html += '<div style="color:' + MUTED + '">当日许可：' + perm + '</div>';
-            if (w.expect) html += '<div style="color:' + MUTED + '">预期：' + w.expect + '</div>';
+            const expectTxt = w.ov_expect || w.expect;
+            if (expectTxt) html += '<div style="color:' + MUTED + '">预期：' + expectTxt + '</div>';
             if (w.reasons) html += '<div style="color:' + MUTED + '">依据：' + w.reasons + '</div>';
             html += '</div>';
           } else {
@@ -303,13 +332,29 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         {last ? (
           <>
             <span style={{ fontWeight: 700, color: INK }}>{last.name}</span>
+            {last.ov_name ? (
+              <span style={{ color: lastColor, fontSize: 11 }}>形态 {last.ov_name}</span>
+            ) : null}
+            {last.day_name && last.day_name !== last.name ? (
+              <span
+                title="当前档为单向锁（只降不升）保持；当日判据档更低，需创 60 日新高 / 自低点反抽 ≥5% / W底确认才重定浪"
+                style={{ color: MUTED, fontSize: 11, border: '1px dashed ' + GRID, borderRadius: 4, padding: '0 4px' }}
+              >
+                当日判据 {last.day_name}
+              </span>
+            ) : null}
             <span style={{ color: MUTED, fontSize: 11 }}>
               判定 {fmt8(last.date)} → 服务 {fmt8(last.session_date || '')}
             </span>
             <span style={{ color: MUTED, fontSize: 11 }}>
-              级别 {last.level}{last.sub_level ? ' / ' + last.sub_level : ''}
+              级别 {LEVEL_CN[last.level] || last.level}
+              {last.sub_level && last.sub_level !== last.name ? ' / ' + last.sub_level : ''}
               {last.main_up ? ' · 主升3-3' : ''}
             </span>
+            {last.legs_stale ? (
+              <span title="锚定顶之后指数已大幅上移 ⇒ 子浪编号属上一轮，仅供参考"
+                    style={{ color: '#d64545', fontSize: 11 }}>腿陈旧</span>
+            ) : null}
             <span style={{ color: lastColor, fontWeight: 700, fontSize: 12 }}>
               {OP_CN[last.operation] || last.operation || '-'}
             </span>
@@ -333,7 +378,8 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 8, color: MUTED }}>
           {bars.length ? bars[0].date + ' ~ ' + bars[bars.length - 1].date + '（' + bars.length + ' 根）' : ''}
-          {' '}色带＝当日浪型档位；悬停看当日浪型与操作建议
+          {' '}色带＝当日档位的操作许可；悬停看判定依据
+          {waveVer ? '　判据版本 ' + waveVer : ''}
         </span>
         <span style={{ fontSize: 8, color: MUTED, textAlign: 'right' }}>
           {src}{note ? '　' + note : ''}
