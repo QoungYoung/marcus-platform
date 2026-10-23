@@ -364,12 +364,12 @@ def read(day: str, cut: str = CUT) -> dict:
 
     # 口径：盘中 14:50 / 盘后 / 回放 —— agent 必须据此决定用"今天"还是"明日"表述
     if not intraday:
-        mode, mode_note = "replay", "历史回放：结论是复盘口径，不是当日决策"
+        mode, mode_note = "回放", "历史回放：结论是复盘口径，不是当日决策"
     elif cut_ok:
-        mode, mode_note = "intraday_1450", "14:50 盘中口径：可以给「今天做不做」"
+        mode, mode_note = "盘中14:50", "盘中口径：可以给「今天做不做」"
     else:
-        mode = "after_close"
-        mode_note = ("盘后口径：今天已收盘，不能写「今天可以建/今天做」；"
+        mode = "盘后"
+        mode_note = ("盘后口径：今天已收盘，**不能写「今天可以建/今天做」**；"
                      "只能给「明日若 X → Y」的条件句。四行的目标/失效位照常给，它们是明天的参考位。")
     warn = ""
     if (not intraday) and day == datetime.now().strftime("%Y%m%d"):
