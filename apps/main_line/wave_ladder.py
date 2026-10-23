@@ -653,13 +653,22 @@ def sub_legs(rows: Sequence[Tuple[str, float, float, float]], asof: str,
     开启 **4-5**？」⇒ 编号口径一致 ✓（4-5 走完 = 调整末腿到位 ⇒ 他的「成功4-5」，即本模块 rung1 ✓）。"""
     st = st or structural_levels(rows, asof)
     pk, pk_d = st["prior_peak"], st["prior_peak_date"]
-    out: Dict[str, Any] = {"stage": "", "forming": "", "legs": [], "peak": pk, "peak_date": pk_d}
+    # ★ 2026-10-23：**按轮分组**（`cycle`）—— 每条腿盖一个 `cycle` = 它的锚点顶日期，
+    #   消费方按 `(cycle, label)` 分组统计即可**跨轮不混算** ✓（报告 §4-1：拿 sub_level 直接当特征的
+    #   回测全是噪声，根因之一就是不同轮的 4-1…4-5 被当成同一个东西）。`cycle_prev` 给出上一轮的键，
+    #   便于"这一轮 vs 上一轮"对照；`cycle_complete` = 5 段已走满（4-5 到位）。
+    out: Dict[str, Any] = {"stage": "", "forming": "", "legs": [], "peak": pk, "peak_date": pk_d,
+                           "cycle": pk_d, "cycle_start": pk_d, "cycle_legs": 0,
+                           "cycle_complete": False, "cycle_prev": st.get("prev_peak_date") or ""}
     if not pk:
         return out
     after = [p for p in pivots(rows, asof, PCT_FINE) if p[1] > pk_d][:len(SUB_LABELS)]
     for i, p in enumerate(after):
-        out["legs"].append({"label": SUB_LABELS[i], "kind": "down" if p[3] == "L" else "up",
+        out["legs"].append({"label": SUB_LABELS[i], "index": i + 1, "cycle": pk_d,
+                            "kind": "down" if p[3] == "L" else "up",
                             "date": p[1], "confirm": p[0], "value": p[2]})
+    out["cycle_legs"] = len(out["legs"])
+    out["cycle_complete"] = out["cycle_legs"] >= len(SUB_LABELS)
     if out["legs"]:
         last = out["legs"][-1]
         out["stage"] = last["label"]
@@ -783,12 +792,17 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "date": d, "close": close, "high": high, "prev_close": prev_close, "amount": amount,
         "wave1_top": w1, "wave1_top_date": st["wave1_top_date"], "wave1_top_minor": st["wave1_top_minor"],
         "prior_peak": st["prior_peak"], "prior_peak_date": st["prior_peak_date"],
-        "prev_peak": st["prev_peak"], "origin": st["origin"],
+        "prev_peak": st["prev_peak"], "prev_peak_date": st["prev_peak_date"], "origin": st["origin"],
         "origin_date": st["origin_date"], "pivots": st["pivots"],
         "sub_stage": sub["stage"], "sub_forming": sub["forming"], "sub_legs": sub["legs"],
         # ── 腿的归属/年龄（stale 判据；报告 §1B/§3-2）──
         "legs_anchor_value": st["prior_peak"], "legs_anchor_date": st["prior_peak_date"],
         "last_leg_date": _last_leg, "legs_age": _legs_age, "legs_stale": _stale,
+        # ── 按轮分组（报告 §4-1：4-1…4-5 必须能区分"哪一轮"）──
+        "leg_cycle": sub.get("cycle") or "", "leg_cycle_prev": sub.get("cycle_prev") or "",
+        "leg_cycle_legs": int(sub.get("cycle_legs") or 0),
+        "leg_cycle_complete": bool(sub.get("cycle_complete")),
+        "leg_cycle_state": "stale" if _stale else "fresh",
         "anchor_peak_gain": _anchor_gain,               # 确认顶之后最高点相对确认顶的涨幅
         "peak_since_anchor": st.get("peak_since_anchor"),
         "peak_since_anchor_date": st.get("peak_since_anchor_date") or "",
@@ -1004,7 +1018,8 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
             "sub_stage": ("%s%s" % (f.get("sub_stage") or "", ("→" + f["sub_forming"]) if f.get("sub_forming") else "")),
             "levels": {"wave1_top": f["wave1_top"], "wave1_top_date": f["wave1_top_date"],
                        "wave1_top_minor": f["wave1_top_minor"], "prior_peak": f["prior_peak"],
-                       "prev_peak": f["prev_peak"], "origin": f["origin"]}}
+                       "prev_peak": f["prev_peak"], "prev_peak_date": f["prev_peak_date"],
+                       "origin": f["origin"]}}
 
 
 def walk(rows: Sequence[Tuple[str, float, float, float]], start: Optional[str] = None,
@@ -1145,6 +1160,8 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         "overlay_level": overlay_sub,
         "leg_stage": leg_stage,
         "leg_transition": leg_transition,
+        "leg_cycle": fi.get("leg_cycle") or "",
+        "leg_cycle_state": fi.get("leg_cycle_state") or "",
         "phase_note": "" if _sub_ok(overlay_sub) else overlay_sub,
         "legs_stale": legs_stale,
         "generator_version": WAVE_LADDER_VERSION,

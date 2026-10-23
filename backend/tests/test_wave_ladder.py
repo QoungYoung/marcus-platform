@@ -551,3 +551,32 @@ def test_anchor_revision_logged(monkeypatch, tmp_path):
     rev = obj["revisions"][0]
     assert rev["from"]["origin"] == 2702.185 and rev["to"]["origin"] == 2704.09
     assert rev["detected_on"] == "20270101" and rev["reason"]
+
+
+def test_leg_cycle_groups_legs_across_cycles():
+    """★ 报告 §4-1：4-1…4-5 必须能区分「哪一轮」——每条腿带 `cycle`（= 锚点顶日期），
+    消费方按 `(cycle, label)` 分组统计即跨轮不混算 ✓。"""
+    import wave_ladder as W
+
+    # 涨到 130 → 回落 10% 确认顶 → 反弹/回落若干细级拐点
+    rows = mk([100.0] * 80 + [130.0] * 3 + [117.0] * 8 + [124.0, 119.0, 126.0, 121.0])
+    f = W.features(rows, last(rows))
+    assert f["leg_cycle"] and f["leg_cycle"] == f["prior_peak_date"], (f["leg_cycle"], f["prior_peak_date"])
+    legs = f["sub_legs"]
+    assert legs, "应有腿"
+    assert all(l["cycle"] == f["leg_cycle"] for l in legs)          # 同一轮 ⇒ 同一个键 ✓
+    assert [l["index"] for l in legs] == list(range(1, len(legs) + 1))
+    assert f["leg_cycle_legs"] == len(legs)
+    assert f["leg_cycle_complete"] == (len(legs) >= 5)
+    assert f["leg_cycle_prev"] == (f["prev_peak_date"] or "")     # 上一轮的键 = 再前一个确认顶 ✓
+    assert f["leg_cycle_prev"] != f["leg_cycle"]
+
+
+def test_leg_cycle_state_matches_stale_flag():
+    """`leg_cycle_state` 与 `legs_stale` 同源（fresh/stale 二值，供统计侧过滤 ✓）。"""
+    import wave_ladder as W
+
+    rows = mk(FLAT + [103.0, 104.0, 105.0])
+    f = W.features(rows, last(rows))
+    assert f["leg_cycle_state"] == ("stale" if f["legs_stale"] else "fresh")
+    assert f["leg_cycle_state"] in ("fresh", "stale")

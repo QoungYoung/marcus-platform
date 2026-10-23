@@ -51,19 +51,35 @@ def targets(roots):
     return out
 
 
-def root_files(include_archives=False):
+# ★ 2026-10-23：**2025 年以前的 dated 老档不参与重算** ✗ —— 那批是 LLM 时代手抄的快照
+#   （`wave_state_20161130.json` / `wave_state_2016-06-24.json` 等三种命名风格并存，operation
+#   是旧 agent 的 build/exit，现在的浪型链算不出来）⇒ 重算=原地改写历史快照 ✗，
+#   而 `daily_decision` 在回测下**优先读 dated** ⇒ 2016–2024 的回测会吃到混合产物 ✗。
+#   处置口径：`jobs/prune_legacy_wave_state.py` 把它们挪到 `data/_legacy_wave_state/`；
+#   这里再加一道闸（万一有人挪回来也不重算 ✓），`--include-legacy` 可放开。
+DATED_SINCE = (os.getenv("WOLF_WAVE_DATED_SINCE") or "20250102").strip()[:8]
+
+
+def _dated_day(f):
+    return os.path.basename(f).replace("wave_state_", "").replace(".json", "").replace("-", "")
+
+
+def root_files(include_archives=False, include_legacy=False):
     """★ **生产侧**目标（默认只动这些）：live + 带日期回填件 + wave_state_history/<sim8>.json。
 
     wave_state_history/ 是 wave_gate.py:101 按**模拟日 sim8** 读的那份历史（生产侧）；
     2026-10-15 首轮重建漏了它 ⇒ 这里补上（文件名 YYYYMMDD.json，day 直接取文件名 ✓）。
     _bt_* 下的 26.7 万归档副本只有显式 --include-archives（且需 --include-backtests）才动 ✓。
+    `data/wave_state_<date>.json` 里 **date < DATED_SINCE 的老档默认跳过** ✓（见上面注释）。
     """
     out = []
     live = os.path.join("data", "wave_state.json")
     if os.path.exists(live):
         out.append((live, None))
     for f in sorted(glob.glob(os.path.join("data", "wave_state_[0-9]*.json"))):
-        out.append((f, os.path.basename(f).replace("wave_state_", "").replace(".json", "").replace("-", "")))
+        if not include_legacy and _dated_day(f)[:8] < DATED_SINCE:
+            continue
+        out.append((f, _dated_day(f)))
     for f in sorted(glob.glob(os.path.join("data", "wave_state_history", "[0-9]*.json"))):
         out.append((f, os.path.basename(f).replace(".json", "").replace("-", "")))
     if include_archives:
@@ -101,6 +117,8 @@ def main():
                     help="连 _bt_*/<day>/wave_state_<日期>.json 归档副本（26.7 万份，需 --include-backtests）")
     ap.add_argument("--no-pg", action="store_true",
                     help="只写文件、**不回写** PostgreSQL（默认双写 ✓）。")
+    ap.add_argument("--include-legacy", action="store_true",
+                    help="连 **2025 年以前**的 dated 老档（LLM 时代手抄快照）一起重算 ✗（默认跳过 ✓）。")
     ap.add_argument("--dated-days", type=int, default=0,
                     help="★ 额外**生成**最近 N 个交易日的 data/wave_state_<YYYY-MM-DD>.json（带日期回填件 ✓）。"
                     " 2026-10-20 用户拍板：8-10 月的 dated 只有 17 天（稀疏 ✗），而 daily_decision 在回测下**优先读 dated** ⇒"
@@ -114,7 +132,7 @@ def main():
     roots = [x for x in args.roots.split(",") if x]
     if args.include_backtests and not roots:
         roots = sorted(glob.glob(os.path.join("data", "_bt_*")))
-    pairs = targets(roots) + root_files(args.include_archives)
+    pairs = targets(roots) + root_files(args.include_archives, args.include_legacy)
 
     rows = W.load_rows()
     if not rows:
