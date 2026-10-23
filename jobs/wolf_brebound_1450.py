@@ -305,6 +305,8 @@ def read(day: str, cut: str = CUT) -> dict:
     return dict(
         asof=day, cutoff=cut, intraday=bool(intraday), data_warning=warn,
         etf=dict(code=ETF, price=round(c[j], 3), pct_yest=round((c[j] / c[j - 1] - 1) * 100, 2),
+                 off_hi60_pct=round((c[j] / h[max(0, j - 59):j + 1].max() - 1) * 100, 1),
+                 is_brebound_position=bool(c[j] / h[max(0, j - 59):j + 1].max() - 1 <= -0.15),
                  pos_pct=round(pos * 100), vol_ratio=(round(vr, 2) if vr is not None else None),
                  yest=dict(vol_ratio=round(vr1, 2), pos_pct=round(pos1 * 100)),
                  broke_yest_low=bool(broke)),
