@@ -11,6 +11,11 @@
 口径：先跑一次 wave_ladder.walk() 得到**含单向锁/重定浪**的逐日档位，再按每个文件所在目录日
 取「≤ 该日的最新档」（无未来函数 ✓）。同一批只算一次、写 N 份，所以 5000+ 文件也很快。
 
+★ 2026-10-23：**文件与 PostgreSQL 必须同批同源** ✓ —— 每写一份文件就 `wave_pg.upsert()` 一次
+（`--no-pg` 可关 ✗）。事故经过：10-21 那次 `wave_state_pg_backfill` 把 90 份「短数据窗口」算出的
+旧口径（origin 2704.09 / wave1_top 3674.40）灌进了库 ✗，而本脚本只重算文件、不回写库 ✗ ⇒
+读侧 `wave_store`（PG 优先 ✓）一直读旧锚点，磁盘文件却早已正确 —— 90 天永久不一致且不自愈 ✗。
+
 安全：默认 **dry-run**（只打印计划）；加 --apply 才写盘，写前先把所有目标文件打成一个
 data/_waveagent_backup/wave_states_<ts>.tar.gz（可直接解包还原 ✓），并逐份原子替换（tmp + os.replace）。
 
@@ -67,6 +72,16 @@ def root_files(include_archives=False):
     return out
 
 
+def _pg_upsert(ws):
+    """regen → PG 双写（**fail-open** ✓：任何 DB 异常都只打印、绝不打断文件写入 ✓）。"""
+    try:
+        import wave_pg
+        return bool(wave_pg.upsert(ws))
+    except Exception as _e:
+        print("  [pg] 跳过（%s）" % str(_e)[:80])
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
@@ -75,6 +90,8 @@ def main():
                     help="★ 动 _bt_* 回测沙箱（**默认不动**：2026-10-15 教训 —— 用户要的是重跑生产，")
     ap.add_argument("--include-archives", action="store_true",
                     help="连 _bt_*/<day>/wave_state_<日期>.json 归档副本（26.7 万份，需 --include-backtests）")
+    ap.add_argument("--no-pg", action="store_true",
+                    help="只写文件、**不回写** PostgreSQL（默认双写 ✓）。")
     ap.add_argument("--dated-days", type=int, default=0,
                     help="★ 额外**生成**最近 N 个交易日的 data/wave_state_<YYYY-MM-DD>.json（带日期回填件 ✓）。"
                     " 2026-10-20 用户拍板：8-10 月的 dated 只有 17 天（稀疏 ✗），而 daily_decision 在回测下**优先读 dated** ⇒"
@@ -165,7 +182,7 @@ def main():
                 tf.add(f, arcname=os.path.relpath(f, ROOT))
     print("\n备份：%s（%d 份，%.1f MB）" % (tarp, len(plan), os.path.getsize(tarp) / 1e6))
 
-    n_ok, n_err = 0, 0
+    n_ok, n_err, n_pg = 0, 0, 0
     for f, ev, _ in plan:
         try:
             ws = W.to_wave_state(ev)
@@ -174,12 +191,19 @@ def main():
             json.dump(ws, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
             os.replace(tmp, f)
             n_ok += 1
+            # ★ 2026-10-23 事故修：regen 原先**只写文件、不回写 PG** ✗ ⇒ 10-21 那次
+            #   `wave_state_pg_backfill` 灌进库的旧口径（短数据窗口算的 origin/wave1_top）
+            #   在库里留了 90 天 ✗，而读侧 `wave_store` **PG 优先** ✓ ⇒ 线上一直读旧锚点，
+            #   磁盘文件却早已重算正确 —— 两边永久不一致且不会自愈 ✗。故这里补双写 ✓。
+            if not args.no_pg:
+                n_pg += 1 if _pg_upsert(ws) else 0
         except Exception as _e:
             n_err += 1
             if n_err <= 3:
                 print("  写失败 %s: %s" % (f, str(_e)[:80]))
     live = W.write_wave_state(ev=evs[-1])
-    print("写入完成：成功 %d / 失败 %d ｜ live → %s" % (n_ok, n_err, live))
+    print("写入完成：文件 成功 %d / 失败 %d ｜ PG 双写 %d 行 ｜ live → %s"
+          % (n_ok, n_err, n_pg, live))
     return 0 if n_err == 0 else 1
 
 
