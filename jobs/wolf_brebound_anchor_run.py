@@ -233,11 +233,26 @@ def write_wave_state(asof: str, obj: dict) -> int:
     return 1
 
 
+def push(text: str) -> bool:
+    try:
+        from core.qq_notifier import send_c2c_message
+        openid = (os.environ.get("QQ_BOT_RECIPIENT") or "").strip()
+        if not openid:
+            print("[warn] 未配置 QQ_BOT_RECIPIENT，跳过推送", file=sys.stderr)
+            return False
+        return bool(send_c2c_message(openid, text))
+    except Exception as e:
+        print(f"[warn] 推送异常: {str(e)[:100]}", file=sys.stderr)
+        return False
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="真正写库（默认 dry-run）")
     a = ap.parse_args()
     total = 0
+    added: list[str] = []
+    wave_change = ""
     for ins, name in INSTRUMENTS.items():
         try:
             df = bars(ins)
@@ -257,6 +272,12 @@ def main() -> None:
             if a.apply:
                 n = write_anchors(ins, items, elig)
                 total += n
+                for it in items:
+                    if str(it.get("action")) == "confirm" and \
+                       (str(it.get("session_date")), round(float(it.get("price", 0)), 3),
+                        str(it.get("kind"))) in {(str(c["date"]), round(float(c["price"]), 3), c["kind"]) for c in elig}:
+                        added.append(f"{name} {it['session_date']} {float(it['price']):.3f} "
+                                     f"{it.get('label') or it.get('kind')}")
                 print(f"    写入 {n} 条")
         except Exception as e:
             print(f"[error] {name}: {type(e).__name__} {str(e)[:160]}", file=sys.stderr)
@@ -273,13 +294,25 @@ def main() -> None:
             if a.apply:
                 write_wave_state(asof, obj); total += 1
                 print("    段位已写库")
+                if (prev or {}).get("level") != obj.get("level"):
+                    wave_change = f"段位改判：{(prev or {}).get('level') or '无'} → {obj.get('level')}"
     except Exception as e:
         print(f"[error] 段位: {type(e).__name__} {str(e)[:160]}", file=sys.stderr)
 
     if not a.apply:
         print("\n（dry-run；加 --apply 才写库）")
     else:
-        print(f"\n本次共写入 {total} 条锚点")
+        print(f"\n本次共写入 {total} 条（锚点 {len(added)} + 段位）")
+        if added or wave_change:
+            lines = ["【B反锚点】"]
+            for x in added[:4]:
+                lines.append(f"＋ {x}")
+            if wave_change:
+                lines.append(wave_change[:110])
+            push("\n".join(lines))
+            print("[QQ] 已推送")
+        else:
+            print("[QQ] 无变化，静默")
 
 
 if __name__ == "__main__":
