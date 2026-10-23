@@ -16,6 +16,7 @@ import type { PeriodReturn } from './portfolioMetrics';
 import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 import IndexWaveCard from '../components/IndexWaveCard';
+import LowPositionCard from '../components/LowPositionCard';
 
 // ── 资金流类型 ──
 interface MoneyflowRow {
@@ -856,8 +857,11 @@ export default function PortfolioPage() {
 
         {/* ══════════ 中列：收益图 + 指标行 + 三面板 ══════════ */}
         <main className="cp-main-view">
-          {/* 上证指数 · 浪型链：K线 + 历史浪型色带，悬停显示当日浪型与操作建议 */}
-          <IndexWaveCard days={750} height={340} />
+          {/* 上证指数 · 浪型链 + 低位超额反弹线 */}
+          <div className="cp-wave-row">
+            <IndexWaveCard days={750} height={340} />
+            <LowPositionCard />
+          </div>
 
           <div className="cp-battlefield">
             <div className="cp-battlefield-scanline" />

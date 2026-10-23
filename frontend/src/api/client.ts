@@ -40,6 +40,7 @@ export const tradesApi = {
 // Wave APIs（浪型链 · 指数K线 + 历史浪型/操作建议）
 export const waveApi = {
   getIndexHistory: (days = 250, code = '000001.SH') => api.get('/wave/index-history', { params: { days, code } }),
+  getLowPositionCard: () => api.get('/wave/low-position-card'),
 }
 
 // Market APIs
