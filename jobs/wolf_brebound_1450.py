@@ -330,6 +330,12 @@ def main() -> None:
         print(json.dumps({"ok": False, "error": str(e)[:300]}, ensure_ascii=False))
         raise
     print(json.dumps({"ok": True, **r}, ensure_ascii=False, indent=1))
+    # 今日实时数据没取到 ⇒ 不能用昨日数据冒充今日读数：**非零退出**，
+    # 让调度器推「❌失败」而不是让 Pi 分析一份过期的底稿（on_failure 已开）。
+    if a.asof == datetime.now().strftime("%Y%m%d") and not r.get("intraday"):
+        print("[FATAL] 今日实时行情未取到（腾讯/东财均失败），拒绝用昨日数据冒充；"
+              "本次不推送读数。", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

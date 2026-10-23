@@ -475,6 +475,7 @@ class SchedulerService:
             'auto_trade_afternoon', 'auto_trade_closing',
             'daily_review', 'weekly_reflect',
             'golden_pit_morning', 'golden_pit_dca',
+            'wolf_brebound_1450',   # B反风向标：只交易日推
         }
         if task_id in TRADE_DAY_ONLY_TASKS:
             try:
