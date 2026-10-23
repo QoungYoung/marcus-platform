@@ -15,6 +15,29 @@ settings:
       enabled: true
       recipient: BF1510663A6C14D6E00E42B46108F51E
 tasks:
+- id: wolf_brebound_1450
+  name: B反风向标（14:50 盘中读数）
+  description: '收盘前 14:50 用自有数据出「四维读数 + 底部结构」事实底稿（级别/结构/谁在买/够不够得着 +
+    W底颈线红三兵不破位黑K），交 Pi 按狼大 B反 框架 v2 判断后推送 QQ。只观察：不写策略链、不接交易、不接
+    gate（task_name 含「风向标」⇒ 跳过信号写入）。设计依据 docs/b-rebound-framework-v2.md 与 docs/b-rebound-case-journal.md'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '50 14 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_brebound_1450.py
+    args: []
+  output:
+    log_file: logs/wolf_brebound_1450_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_limit_ladder_scan
   name: 涨停梯队/连板结构（B4）
   description: 次日盘前拉涨跌停/炸板明细→按主题+行业聚合涨停梯队(家数/最高连板/1-2-3+分布/炸板)→写 wolf_limit_ladder.json（狼大 2025-04-21 复盘流程：判断板块强弱、推断次日方向）。★ 2026-10-09 从 18:40 改到 08:05：中继 promax limit_list_d 当晚不发布（10-08 晚 3 次尝试全 0 行 failed；10-09 早同一接口 88 行 ✓）⇒ 必须在次日盘前跑

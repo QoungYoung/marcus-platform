@@ -1066,7 +1066,33 @@ class SchedulerService:
         try:
             # 根据任务类型生成不同的分析指令
             prev_review_context = ""  # 默认为空，仅盘前分支使用
-            if '黄金坑' in task_name and 'DCA' in task_name:
+            if 'B反' in task_name:
+                # B反 风向标（14:50）：只观察，判断交给 Pi；不写策略链（task_name 含「风向标」）
+                report_guide = (
+                    "你是按「狼大 B反 框架 v2」做判断的助手。底稿是 14:50 的事实读数。\n"
+                    "\n"
+                    "【判断顺序，前一问答不上就别问下一问】\n"
+                    "Q1 级别：看 wave（来自生产 PG）。若 wave.legs_stale=true 或给了 wave_note，\n"                    "    则级别只作参考、不得当作结构依据，结构判断以 bottom_structure + 价格摆动为准；\n"                    "    再看 bottom_structure 说结构成没成，没成就是「未成立/磨底中」，直接说。\n"
+                    "Q2 结构：关键结构点（1浪顶/前高/双底低点/颈线）与现价的关系，逐条引用数字（谁破了、破多少点/多少%）。\n"
+                    "Q3 谁在买：放量的形状 = 量比 × 收盘位置 × 昨日承接今日有没有做上去。\n"
+                    "    分四类——割肉（放量收下半区）/ 承接（放量收上半区且今日不破昨低）/\n"
+                    "    惜售型上涨（缩量收上半区且不破昨低）/ 自救（承接次日就散）。\n"
+                    "Q4 够不够得着：上方最近结构点到现价的距离；失效位 = B 起点低点 ×(1−3~6%)。\n"
+                    "\n"
+                    "【硬约束】\n"
+                    "- 禁止打分、禁止阈值触发（不要写\"量比≥1.3 就买\"这类）、禁止输出胜率/概率。\n"
+                    "- 每个判断必须带可核对数字（日期 + 价位 / 量比 / 收位%）。\n"
+                    "- 允许「看不清 / 不做」——这是合法输出，不是失败。\n"
+                    "- 只观察：不给下单指令、不说买多少股、不动仓位。\n"
+                    "\n"
+                    "【输出格式，600 字内】\n"
+                    "【结论】做 / 试仓 / 不做（一句话 + 理由）\n"
+                    "【四行】级别 ｜ 长度 ｜ 目标（哪个结构点）｜ 失效（具体价位）\n"
+                    "【证据】3–5 条，每条引用底稿数字\n"
+                    "【预案 1/2/3】出现什么迹象做什么，必须含「都不出现就不做」\n"
+                    "【反证】什么情况出现说明这次判断错了\n"
+                )
+            elif '黄金坑' in task_name and 'DCA' in task_name:
                 report_guide = (
                     "报告结构：将以下 JSON 数据整理为专业的黄金坑 DCA 定投报告。\n"
                     "\n"
@@ -1163,18 +1189,27 @@ class SchedulerService:
                     "不涉及具体持仓操作（如'建议减仓XX'、'建议止盈XX'）\n"
                 )
 
-            prompt = (
-                f"以下是 {task_name} 定时任务的执行结果。\n"
-                f"请基于「右侧交易」框架对此数据进行分析，"
-                f"整合为简洁专业的任务报告。\n"
-                f"{report_guide}"
-                f"控制在 800 字以内。\n"
-                f"{prev_review_context}\n"
-                f"最后，用单独一行给出你的策略判断：\n"
-                f"SIGNAL: <green|yellow|red> POSITION:<0-100> REASON:<一句话理由>\n"
-                f"其中 green=激进 yellow=谨慎 red=观望。"
-                f"\n\n=== 任务输出 ===\n{output}"
-            )
+            if 'B反' in task_name:
+                # B反 风向标：不给 SIGNAL 行（不接 gate），只出判断 + 预案 + 反证
+                prompt = (
+                    f"以下是 {task_name}（14:50 收盘前）的事实底稿。\n"
+                    f"{report_guide}"
+                    f"{prev_review_context}\n"
+                    f"\n=== 事实底稿 ===\n{output}"
+                )
+            else:
+                prompt = (
+                    f"以下是 {task_name} 定时任务的执行结果。\n"
+                    f"请基于「右侧交易」框架对此数据进行分析，"
+                    f"整合为简洁专业的任务报告。\n"
+                    f"{report_guide}"
+                    f"控制在 800 字以内。\n"
+                    f"{prev_review_context}\n"
+                    f"最后，用单独一行给出你的策略判断：\n"
+                    f"SIGNAL: <green|yellow|red> POSITION:<0-100> REASON:<一句话理由>\n"
+                    f"其中 green=激进 yellow=谨慎 red=观望。"
+                    f"\n\n=== 任务输出 ===\n{output}"
+                )
             payload = _json.dumps({
                 "message": prompt,
                 "session_id": f"report_{task_id or task_name}_{datetime.now().strftime('%Y%m%d')}"
