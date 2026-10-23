@@ -170,9 +170,10 @@ def write_anchors(ins: str, items: list[dict], eligible: list[dict]) -> int:
                 cur.execute(
                     "insert into b_rebound_anchors(instrument,session_date,price,kind,label,role,status,"
                     "evidence,confirmed_at,created_by,level) values (%s,%s,%s,%s,%s,%s,'confirmed',%s,now(),'agent',%s) "
-                    "on conflict (instrument,session_date,price,kind) do nothing",
+                    "on conflict (instrument,session_date,kind) do nothing",
                     (ins, str(it["session_date"]), float(it["price"]), str(it["kind"]),
-                     str(it.get("label") or "")[:32], str(it.get("role") or "已出现")[:16],
+                     (str(it.get("label") or "").strip() or ("低点" if str(it.get("kind")) == "low" else "高点"))[:32],
+                     str(it.get("role") or "已出现")[:16],
                      str(it.get("evidence") or "")[:500], lv.get(key, "小级别")))
                 n += cur.rowcount
             except Exception as e:
@@ -304,8 +305,9 @@ def main() -> None:
                     if str(it.get("action")) == "confirm" and \
                        (str(it.get("session_date")), round(float(it.get("price", 0)), 3),
                         str(it.get("kind"))) in {(str(c["date"]), round(float(c["price"]), 3), c["kind"]) for c in elig}:
-                        added.append(f"{name} {it['session_date']} {float(it['price']):.3f} "
-                                     f"{it.get('label') or it.get('kind')}")
+                        _lab = (str(it.get("label") or "").strip()
+                                or ("低点" if str(it.get("kind")) == "low" else "高点"))
+                        added.append(f"{name} {it['session_date']} {float(it['price']):.3f} {_lab}")
                 print(f"    写入 {n} 条")
         except Exception as e:
             print(f"[error] {name}: {type(e).__name__} {str(e)[:160]}", file=sys.stderr)
