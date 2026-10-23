@@ -449,6 +449,70 @@ def _env_pin_w1() -> float:
         return 0.0
 
 
+# ── 输入数据指纹（2026-10-23「可审计重算」）──────────────────────────────────
+# 同一份代码、同一天，本地 regen dry-run 改 11/563、生产改 51/560（9.1%）✗ —— 差异全来自**行情输入**
+# （三指数 JSON 供 `sync3`→`main_up_up`、主指数 JSON/CSV 两源合并）⇒ 产物里必须有"这次是用哪份行情算的"。
+# 纪律：`walk` 要跑 5000+ 天、每天都会调 `features()` ⇒ 哈希**按 (path,mtime,size) 缓存** ✓，绝不每天重算 ✗。
+_SNAP_CACHE: Dict[Tuple[str, int, int], str] = {}
+
+
+def _file_digest(path: Optional[str]) -> str:
+    """文件内容摘要（12 位）——带 `(path, mtime_ns, size)` 缓存 ✓；读不到 ⇒ ""（fail-open ✓）。"""
+    if not path:
+        return ""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ""
+    key = (path, int(st.st_mtime_ns), int(st.st_size))
+    hit = _SNAP_CACHE.get(key)
+    if hit is not None:
+        return hit
+    import hashlib
+    h = hashlib.sha1()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    _SNAP_CACHE[key] = h.hexdigest()[:12]
+    return _SNAP_CACHE[key]
+
+
+def data_sources() -> List[Dict[str, Any]]:
+    """本次判定**实际用到的**行情文件 → [{code,name,mtime,digest,exists}] ✓（主指数 JSON + 三大指数 JSON + 主指数 CSV）。"""
+    codes = [index_code()] + [c for c in SYNC_CODES if c != index_code()]
+    out: List[Dict[str, Any]] = []
+    for code in codes:
+        p = _json_path(code)
+        mt = ""
+        if p:
+            try:
+                mt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(p)))
+            except OSError:
+                mt = ""
+        out.append({"code": code, "name": os.path.basename(p) if p else "index_daily_%s.json" % code.replace(".", "_"),
+                    "mtime": mt, "digest": _file_digest(p), "exists": bool(p)})
+    cp = _csv_path(index_code())
+    if cp:
+        try:
+            mtc = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(cp)))
+        except OSError:
+            mtc = ""
+        out.append({"code": index_code(), "name": os.path.basename(cp), "mtime": mtc,
+                    "digest": _file_digest(cp), "exists": True})
+    return out
+
+
+def data_snapshot() -> str:
+    """所有输入文件的**合并指纹**（12 位）⇒ 两份产物指纹不同 = 不是同一份行情算出来的 ✓。"""
+    import hashlib
+    srcs = data_sources()
+    payload = "|".join("%s:%s" % (x["name"], x["digest"]) for x in sorted(srcs, key=lambda y: y["name"]))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def _env_pin_origin() -> Tuple[float, str]:
     """`WOLF_WAVE_LADDER_ORIGIN`（`值@YYYYMMDD`，如 `2702.185@20240205`）⇒ 人工钉住「主升起点」。
 
@@ -811,6 +875,7 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "anchor_window_start": st.get("window_start") or "",
         "origin_near_window_edge": bool(st.get("origin_near_window_edge")),
         "data_window_start": hist[0][0] if hist else "", "data_bars": len(hist),
+        "data_snapshot": data_snapshot(),        # 输入行情指纹（可审计重算 ✓）
         # ── 主升叠加档的量价特征（3-3/3-2 判据）──
         "hi20_prev": max(r[1] for r in w), "streak_above_hi20": _streak_above(hist, RALLY_WIN),
         # ★ 不含当日的 20 日最高（"突破"类比较必须用它：hi20 含当日 ⇒ close > hi20 恒假 ✗ 实测踩过）
@@ -1165,6 +1230,9 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         "phase_note": "" if _sub_ok(overlay_sub) else overlay_sub,
         "legs_stale": legs_stale,
         "generator_version": WAVE_LADDER_VERSION,
+        "data_snapshot": fi.get("data_snapshot") or "",
+        # 紧凑形式（每份产物 +~180B）：文件名@摘要 ⇒ 可核对"用的是哪份行情"，但不塞整张表 ✓
+        "data_inputs": ["%s@%s" % (x["name"], x["digest"]) for x in data_sources()],
         "operation": mus.get("operation") or ev.get("operation"),
         "confidence": CONF_OF_RUNG.get(key, 0.5),
         "reasons": ("【浪型链 rung%d/%s】%s；预期：%s；操作：%s（invest %.2f）" % (

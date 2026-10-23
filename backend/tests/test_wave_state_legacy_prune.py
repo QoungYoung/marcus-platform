@@ -99,3 +99,67 @@ def test_regen_pg_scope_history_only():
     assert R._is_pg_target(os.path.join("data", "wave_state_20161130.json")) is False
     assert R._is_pg_target(os.path.join("data", "wave_state.json")) is False
     assert R._is_pg_target(os.path.join("data", "_bt_year", "2026-06-05", "wave_state.json")) is False
+
+
+# ───────────── 2026-10-23「可审计重算」─────────────
+def test_collect_changes_uses_product_op():
+    """★ 回归锁：变更清单必须比**产物 op**（`to_wave_state()` 的结果）。
+
+    踩过的坑：拿 `ev["operation"]`（rung 档）去比 ✗ —— 叠加档（W底/build、末段/exit、主升 3-3）
+    会改写 operation，文件里存的是改写后的值 ⇒ 虚报变更（实测把 4/556 虚报成 51/568 = 9.1% ✗）。
+    """
+    plan = [
+        # (file, ev, old_op, ws)：rung op=side，但产物被 main_up_spec 改写成 build ⇒ 不该报变更 ✓
+        ("data/wave_state_history/20250514.json",
+         {"date": "20250514", "operation": "side", "key": "w45_ok"},
+         "build", {"operation": "build"}),
+        # 真的变了才报 ✓
+        ("data/wave_state_history/20250107.json",
+         {"date": "20250107", "operation": "side", "key": "w4_adj"},
+         "defense", {"operation": "t_only"}),
+    ]
+    got = R.collect_changes(plan)
+    assert len(got) == 1, got
+    f, day, old, new = got[0]
+    assert os.path.basename(f) == "20250107.json" and (old, new) == ("defense", "t_only")
+
+
+def test_data_snapshot_stable_and_sensitive(tmp_path, monkeypatch):
+    """输入指纹：同内容 ⇒ 同指纹 ✓；任一输入文件变了 ⇒ 指纹变 ✓（12 位十六进制）。"""
+    import wave_ladder as W
+
+    for name, body in (("index_daily_000001_SH.json", "A"),
+                       ("index_daily_399001_SZ.json", "B"),
+                       ("index_daily_399006_SZ.json", "C")):
+        (tmp_path / name).write_text(body, encoding="utf-8")
+    monkeypatch.setattr(W, "DATA", str(tmp_path))
+    monkeypatch.setattr(W, "_SNAP_CACHE", {})
+
+    snap1 = W.data_snapshot()
+    assert len(snap1) == 12 and snap1.isalnum()
+    assert W.data_snapshot() == snap1                       # 稳定 ✓（且有缓存 ✓）
+    srcs = W.data_sources()
+    assert {s["code"] for s in srcs} >= {"000001.SH", "399001.SZ", "399006.SZ"}
+    assert all(len(s["digest"]) == 12 for s in srcs if s["exists"])
+
+    (tmp_path / "index_daily_399001_SZ.json").write_text("B-changed", encoding="utf-8")
+    monkeypatch.setattr(W, "_SNAP_CACHE", {})
+    assert W.data_snapshot() != snap1                        # 换了一份行情 ⇒ 指纹必变 ✓
+
+
+def test_artifact_carries_snapshot_and_inputs(tmp_path, monkeypatch):
+    """产物要能自证「用哪份行情算的」：`data_snapshot` + 紧凑 `data_inputs`（文件名@摘要 ✓）。"""
+    import wave_ladder as W
+
+    for name in ("index_daily_000001_SH.json", "index_daily_399001_SZ.json", "index_daily_399006_SZ.json"):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(W, "DATA", str(tmp_path))
+    monkeypatch.setattr(W, "_SNAP_CACHE", {})
+
+    rows = [("20250602", 100.0, 101.0, 1e12)]
+    ev = {"date": "20250602", "key": "w4_adj", "rung_index": 0, "operation": "t_only",
+          "features": {"data_snapshot": W.data_snapshot()}}
+    ws = W.to_wave_state(ev)
+    assert ws["data_snapshot"] == W.data_snapshot()
+    assert ws["data_inputs"] and all("@" in x for x in ws["data_inputs"])
+    assert ws["generator_version"] == W.WAVE_LADDER_VERSION

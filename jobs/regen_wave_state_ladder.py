@@ -88,6 +88,22 @@ def root_files(include_archives=False, include_legacy=False):
     return out
 
 
+def collect_changes(plan):
+    """→ [(file, day, old_op, new_op)]：**只读比较** ✓（审计用，不写盘）。
+
+    `plan` 每项 `(file, ev, old_op, ws)`，`ws` 是 `to_wave_state()` 的产物。
+    ★ 必须比**产物 op**（`ws["operation"]`）而不是 `ev["operation"]` ✗ —— 叠加档（W底/build、
+      末段/exit、主升 3-3）会改写 operation，文件里存的是改写后的值；拿 rung op 去比会虚报变更
+      （2026-10-23 实测：虚报 51/568=9.1%，真实只有 3/433 ✗）。
+    """
+    out = []
+    for f, ev, old, ws in plan:
+        new_op = (ws or {}).get("operation")
+        if old != new_op:
+            out.append((f, (ev or {}).get("date") or "", old, new_op))
+    return out
+
+
 def _pg_upsert(ws):
     """regen → PG 双写（**fail-open** ✓：任何 DB 异常都只打印、绝不打断文件写入 ✓）。"""
     try:
@@ -117,6 +133,11 @@ def main():
                     help="连 _bt_*/<day>/wave_state_<日期>.json 归档副本（26.7 万份，需 --include-backtests）")
     ap.add_argument("--no-pg", action="store_true",
                     help="只写文件、**不回写** PostgreSQL（默认双写 ✓）。")
+    ap.add_argument("--show-changes", type=int, default=20,
+                    help="打印会改变 operation 的文件清单（默认 20 条 ✓；动作只在 dry-run/apply 前打印，只读 ✓）。"
+                         " 2026-10-23 起每天 08:20 的日志因此自带审计线索：同一天换行情快照重算会立刻可见 ✓。")
+    ap.add_argument("--changes-json", default="",
+                    help="把完整变更清单写成 JSON（含 data_snapshot ✓，便于两次跑之间 diff ✓）。")
     ap.add_argument("--include-legacy", action="store_true",
                     help="连 **2025 年以前**的 dated 老档（LLM 时代手抄快照）一起重算 ✗（默认跳过 ✓）。")
     ap.add_argument("--dated-days", type=int, default=0,
@@ -185,15 +206,32 @@ def main():
             old = (json.load(open(f, encoding="utf-8")) or {}).get("operation") or "?"
         except Exception:
             old = "?"
-        dist[(old, ev["operation"])] += 1
-        plan.append((f, ev, old))
+        _ws = W.to_wave_state(ev)
+        dist[(old, (_ws or {}).get("operation"))] += 1
+        plan.append((f, ev, old, _ws))
 
     print("\n旧 op → 新 op 分布（前 12）：")
     for (a, b), n in dist.most_common(12):
         print("  %-8s → %-8s %5d 份%s" % (a, b, n, "" if a == b else "   ← 改变"))
-    changed = sum(n for (a, b), n in dist.items() if a != b)
+    chg = collect_changes(plan)
+    changed = len(chg)
     print("会改变 operation 的：%d/%d = %.1f%%" % (changed, len(plan), 100.0 * changed / max(len(plan), 1)))
-    print("新档位分布：", dict(collections.Counter(ev["key"] for _, ev, _ in plan)))
+    print("新档位分布：", dict(collections.Counter(ev["key"] for _, ev, _, _ in plan)))
+    if args.show_changes > 0 and chg:
+        print("变更清单（前 %d 条，共 %d 条）：" % (min(args.show_changes, changed), changed))
+        for f, day, old, new_op in chg[:args.show_changes]:
+            print("  %-50s day=%s  %-8s → %-8s" % (f, day, old, new_op))
+    if args.changes_json:
+        try:
+            snap = (evs[-1].get("features") or {}).get("data_snapshot") if evs else ""
+            json.dump({"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "data_snapshot": snap, "data_inputs": (evs[-1].get("features") or {}).get("data_inputs"),
+                       "count": changed,
+                       "changes": [{"file": f, "day": d, "old": o, "new": n} for f, d, o, n in chg]},
+                      open(args.changes_json, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            print("变更清单已落盘：%s" % args.changes_json)
+        except Exception as _e:
+            print("变更清单落盘失败（忽略 ✓）：%s" % str(_e)[:100])
 
     if not args.apply:
         print("\n（dry-run；加 --apply 才写盘）")
@@ -204,15 +242,14 @@ def main():
     os.makedirs(bdir, exist_ok=True)
     tarp = os.path.join(bdir, "wave_states_%s.tar.gz" % ts)
     with tarfile.open(tarp, "w:gz") as tf:
-        for f, _, _ in plan:
+        for f, _, _, _ in plan:
             if os.path.exists(f):
                 tf.add(f, arcname=os.path.relpath(f, ROOT))
     print("\n备份：%s（%d 份，%.1f MB）" % (tarp, len(plan), os.path.getsize(tarp) / 1e6))
 
     n_ok, n_err, n_pg = 0, 0, 0
-    for f, ev, _ in plan:
+    for f, ev, _, ws in plan:
         try:
-            ws = W.to_wave_state(ev)
             os.makedirs(os.path.dirname(f) or ".", exist_ok=True)
             tmp = f + ".tmp"
             json.dump(ws, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
