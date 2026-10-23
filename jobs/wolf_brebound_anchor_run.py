@@ -127,13 +127,19 @@ def ask_agent(ins: str, name: str, df: pd.DataFrame, anchors: list[dict], cands:
         return []
 
 
-def write_anchors(ins: str, items: list[dict]) -> int:
+def write_anchors(ins: str, items: list[dict], eligible: list[dict]) -> int:
+    """只写「程序判够格」的那几个点。agent 只能在够格的点里选，不能自己造锚点。"""
     import psycopg2
+    ok = {(str(c["date"]), round(float(c["price"]), 3), c["kind"]) for c in eligible}
     n = 0
     with psycopg2.connect(dsn(), connect_timeout=8) as conn:
         cur = conn.cursor()
         for it in items:
             if str(it.get("action")) != "confirm":
+                continue
+            key = (str(it.get("session_date")), round(float(it.get("price", 0)), 3), str(it.get("kind")))
+            if key not in ok:
+                print(f"[skip] {key} 未被程序判为够格（距今<{CONFIRM_DAYS}日或已被破）", file=sys.stderr)
                 continue
             try:
                 cur.execute(
@@ -172,7 +178,7 @@ def main() -> None:
             print(f"    agent 返回 {len(items)} 项：" +
                   json.dumps(items, ensure_ascii=False)[:400])
             if a.apply:
-                n = write_anchors(ins, items)
+                n = write_anchors(ins, items, elig)
                 total += n
                 print(f"    写入 {n} 条")
         except Exception as e:
