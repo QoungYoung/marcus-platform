@@ -93,10 +93,10 @@ def gen_anchors(df: pd.DataFrame, n_hold: int = 4, gap: float = 0.08, move: floa
         if fwd < move:
             continue
         prev = [x for x in out if x["kind"] == kind]
-        if prev and abs(px / prev[-1]["px"] - 1) < gap:
-            if (is_low and px > prev[-1]["px"]) or (is_high and px < prev[-1]["px"]):
+        if prev and abs(px / prev[-1]["price"] - 1) < gap:
+            if (is_low and px > prev[-1]["price"]) or (is_high and px < prev[-1]["price"]):
                 continue
-            out = [x for x in out if not (x["kind"] == kind and x["px"] == prev[-1]["px"])]
+            out = [x for x in out if not (x["kind"] == kind and x["price"] == prev[-1]["price"])]
         out.append(dict(kind=kind, date=str(dates[i]), price=px,
                         level=("大级别" if fwd >= 0.25 else "小级别"),
                         fwd_move=round(fwd * 100, 1),
