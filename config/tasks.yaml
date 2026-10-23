@@ -15,6 +15,28 @@ settings:
       enabled: true
       recipient: BF1510663A6C14D6E00E42B46108F51E
 tasks:
+- id: wolf_brebound_anchor_run
+  name: B反锚点标注（15:40）
+  description: '收盘后判断候选结构点算不算正式锚点，结果写 PG 的 b_rebound_anchors。分工：程序算候选点（最后锚点之后的新低/新高）与「够不够格」（之后 3–5 日不再破），agent 判「这是什么」（4-3低/4-5低/只是中继小低点）并给 label/role/evidence。只追加不覆盖，错了写 superseded 不删。供 14:50 的 B反风向标按 confirmed_at 做 as-of 读取。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '40 15 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_brebound_anchor_run.py
+    args:
+    - --apply
+  output:
+    log_file: logs/wolf_brebound_anchor_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_brebound_1450
   name: B反风向标（14:50 盘中读数）
   description: '收盘前 14:50 用自有数据出「四维读数 + 底部结构」事实底稿（级别/结构/谁在买/够不够得着 +

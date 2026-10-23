@@ -180,34 +180,58 @@ def wave_from_pg(asof: str) -> dict | None:
 
 
 def wave_block(asof: str) -> dict | None:
-    """浪型：**读人工锚文件**（config/b_rebound_anchors.json 的 current 块）。
-    账本 §4c：生产 wave_state 的锚点会漂（4月 3174 / 8月 3674），当参考可以、当输入不行。
-    缺了这一段，agent 只能猜段位（7/08 判错就是这个原因）。"""
+    """浪型：**从 PG 的 b_rebound_anchors 取 as-of 锚点**（status=confirmed 且 confirmed_at<=当日）。
+    PG 不可达才退回 config/b_rebound_anchors.json。账本 §4c：生产 wave_state 的锚点会漂，
+    当参考可以、当输入不行；这里用人工/锚点agent 确认过的点。"""
+    iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
+    try:
+        import psycopg2
+        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        with psycopg2.connect(dsn, connect_timeout=6) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "select instrument, session_date, price, kind, label, role "
+                "from b_rebound_anchors where status='confirmed' and confirmed_at::date <= %s "
+                "order by session_date", (iso,))
+            rows = cur.fetchall()
+        if rows:
+            idx = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5])
+                   for r in rows if r[0] == "000001.SH"]
+            etf = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5])
+                   for r in rows if r[0] == ETF]
+            if idx:
+                last = idx[-1]
+                return dict(source="pg", as_of=asof, fresh=True,
+                            completed=f"{idx[-3]['label']} {idx[-3]['price']:.2f}({idx[-3]['date']}) → "
+                                      f"{last['label']} {last['price']:.2f}({last['date']})",
+                            running=f"{last['label']} 之后的第 N 段（agent 判断）",
+                            anchors_index=idx[-6:], anchors_etf=etf[-4:],
+                            note="锚点来自 PG b_rebound_anchors（confirmed_at <= 当日）")
+    except Exception as e:
+        print(f"[warn] 锚点 PG 读取失败，退回文件: {str(e)[:70]}", file=sys.stderr)
     p = os.path.join(ROOT, "config", "b_rebound_anchors.json")
     if not os.path.exists(p):
         return None
     try:
         j = json.load(open(p, encoding="utf-8"))
-    except Exception as e:
-        print(f"[warn] 锚文件读取失败: {str(e)[:60]}", file=sys.stderr)
+    except Exception:
         return None
-    cur = j.get("current") or {}
-    if not cur:
+    cur_ = j.get("current") or {}
+    if not cur_:
         return None
-    stale_days = None
+    stale = None
     try:
         from datetime import date
-        a = str(cur.get("as_of", "")).replace("-", "")
-        stale_days = (date(int(asof[:4]), int(asof[4:6]), int(asof[6:])) -
-                      date(int(a[:4]), int(a[4:6]), int(a[6:]))).days
+        a8 = str(cur_.get("as_of", "")).replace("-", "")
+        stale = (date(int(asof[:4]), int(asof[4:6]), int(asof[6:])) -
+                 date(int(a8[:4]), int(a8[4:6]), int(a8[6:]))).days
     except Exception:
         pass
     idx = [x for x in (j.get("index") or []) if str(x.get("known_from", "")).replace("-", "") <= asof]
-    return dict(as_of=cur.get("as_of"), level=cur.get("level"), completed=cur.get("completed"),
-                running=cur.get("running"), next_watch=cur.get("next_watch"),
-                rejudge_trigger=cur.get("rejudge_trigger"),
-                stale_days=stale_days,
-                anchors_asof=idx[-4:])
+    return dict(source="file", as_of=cur_.get("as_of"), level=cur_.get("level"),
+                completed=cur_.get("completed"), running=cur_.get("running"),
+                next_watch=cur_.get("next_watch"), rejudge_trigger=cur_.get("rejudge_trigger"),
+                stale_days=stale, anchors_index=idx[-6:])
 
 
 # ────────────────────────── 底部结构 ──────────────────────────
