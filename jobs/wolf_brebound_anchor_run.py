@@ -178,7 +178,8 @@ def ask_wave_state(df: pd.DataFrame, anchors: list[dict], prev: dict | None) -> 
         "2. running 写「现在在走哪一段」，要能由最后一个锚点推出来。\n"
         "3. 只有出现明确依据才改 level，否则沿用上一版。\n"
         "4. 输出**只一个 JSON 对象**，不要解释：\n"
-        '{"level":"","completed":"","running":"","next_watch":"","rejudge_trigger":"","evidence":"一句话，引用数字"}'
+        '{"level_key":"稳定短标签，从这些里选一个 4-2反弹|4-3下跌|4-4反弹|4-5下跌|下跌1浪|B反中|看不清",'
+        '"level":"","completed":"","running":"","next_watch":"","rejudge_trigger":"","evidence":"一句话，引用数字"}'
     )
     payload = json.dumps({"message": prompt,
                           "session_id": f"wave_{datetime.now():%Y%m%d}"}).encode()
@@ -207,13 +208,13 @@ def load_wave_state(asof: str) -> dict | None:
     import psycopg2
     with psycopg2.connect(dsn(), connect_timeout=8) as conn:
         cur = conn.cursor()
-        cur.execute("select as_of,level,completed,running,next_watch,rejudge_trigger,evidence "
+        cur.execute("select as_of,level,completed,running,next_watch,rejudge_trigger,evidence,level_key "
                     "from b_rebound_wave_state where as_of<=%s order by as_of desc limit 1", (asof,))
         r = cur.fetchone()
     if not r:
         return None
     return dict(as_of=r[0], level=r[1], completed=r[2], running=r[3],
-                next_watch=r[4], rejudge_trigger=r[5], evidence=r[6])
+                next_watch=r[4], rejudge_trigger=r[5], evidence=r[6], level_key=r[7])
 
 
 def write_wave_state(asof: str, obj: dict) -> int:
@@ -222,13 +223,15 @@ def write_wave_state(asof: str, obj: dict) -> int:
         cur = conn.cursor()
         cur.execute(
             "insert into b_rebound_wave_state(as_of,level,completed,running,next_watch,"
-            "rejudge_trigger,evidence,source) values (%s,%s,%s,%s,%s,%s,%s,'agent') "
+            "rejudge_trigger,evidence,source,level_key) values (%s,%s,%s,%s,%s,%s,%s,'agent',%s) "
             "on conflict (as_of) do update set level=excluded.level, completed=excluded.completed, "
             "running=excluded.running, next_watch=excluded.next_watch, "
             "rejudge_trigger=excluded.rejudge_trigger, evidence=excluded.evidence, "
+            "level_key=excluded.level_key, "
             "source='agent', created_at=now()",
             (asof, obj.get("level", ""), obj.get("completed", ""), obj.get("running", ""),
-             obj.get("next_watch", ""), obj.get("rejudge_trigger", ""), obj.get("evidence", "")))
+             obj.get("next_watch", ""), obj.get("rejudge_trigger", ""), obj.get("evidence", ""),
+             str(obj.get("level_key", ""))[:24]))
         conn.commit()
     return 1
 
@@ -294,8 +297,9 @@ def main() -> None:
             if a.apply:
                 write_wave_state(asof, obj); total += 1
                 print("    段位已写库")
-                if (prev or {}).get("level") != obj.get("level"):
-                    wave_change = f"段位改判：{(prev or {}).get('level') or '无'} → {obj.get('level')}"
+                oldk, newk = (prev or {}).get("level_key"), obj.get("level_key")
+                if newk and oldk != newk:
+                    wave_change = f"段位改判：{oldk or '无'} → {newk}"
     except Exception as e:
         print(f"[error] 段位: {type(e).__name__} {str(e)[:160]}", file=sys.stderr)
 
