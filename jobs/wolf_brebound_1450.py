@@ -180,35 +180,42 @@ def wave_from_pg(asof: str) -> dict | None:
 
 
 def wave_block(asof: str) -> dict | None:
-    """浪型：**从 PG 的 b_rebound_anchors 取 as-of 锚点**（status=confirmed 且 confirmed_at<=当日）。
-    PG 不可达才退回 config/b_rebound_anchors.json。账本 §4c：生产 wave_state 的锚点会漂，
-    当参考可以、当输入不行；这里用人工/锚点agent 确认过的点。"""
+    """浪型：从 PG 读「段位」（b_rebound_wave_state，as_of<=当日取最近一版）+ 锚点
+    （b_rebound_anchors，status=confirmed 且 confirmed_at<=当日）。PG 不可达才退回 config 文件。
+    账本 §4c：生产 wave_state 的锚点会漂，当参考可以、当输入不行。"""
     iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
     try:
         import psycopg2
         dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
         with psycopg2.connect(dsn, connect_timeout=6) as conn:
             cur = conn.cursor()
-            cur.execute(
-                "select instrument, session_date, price, kind, label, role "
-                "from b_rebound_anchors where status='confirmed' and confirmed_at::date <= %s "
-                "order by session_date", (iso,))
+            cur.execute("select as_of,level,completed,running,next_watch,rejudge_trigger,evidence "
+                        "from b_rebound_wave_state where as_of<=%s order by as_of desc limit 1", (asof,))
+            w = cur.fetchone()
+            cur.execute("select instrument,session_date,price,kind,label,role "
+                        "from b_rebound_anchors where status='confirmed' and confirmed_at::date<=%s "
+                        "order by session_date", (iso,))
             rows = cur.fetchall()
-        if rows:
+        if w:
             idx = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5])
                    for r in rows if r[0] == "000001.SH"]
             etf = [dict(date=r[1], price=float(r[2]), kind=r[3], label=r[4], role=r[5])
                    for r in rows if r[0] == ETF]
-            if idx:
-                last = idx[-1]
-                return dict(source="pg", as_of=asof, fresh=True,
-                            completed=f"{idx[-3]['label']} {idx[-3]['price']:.2f}({idx[-3]['date']}) → "
-                                      f"{last['label']} {last['price']:.2f}({last['date']})",
-                            running=f"{last['label']} 之后的第 N 段（agent 判断）",
-                            anchors_index=idx[-6:], anchors_etf=etf[-4:],
-                            note="锚点来自 PG b_rebound_anchors（confirmed_at <= 当日）")
+            stale = None
+            try:
+                from datetime import date
+                a8 = str(w[0])
+                stale = (date(int(asof[:4]), int(asof[4:6]), int(asof[6:])) -
+                         date(int(a8[:4]), int(a8[4:6]), int(a8[6:]))).days
+            except Exception:
+                pass
+            return dict(source="pg", as_of=w[0], stale_days=stale,
+                        level=w[1], completed=w[2], running=w[3],
+                        next_watch=w[4], rejudge_trigger=w[5], evidence=w[6],
+                        anchors_index=idx[-6:], anchors_etf=etf[-4:],
+                        note="段位/锚点均来自 PG；stale_days=段位距今天数，>3 时只作参考")
     except Exception as e:
-        print(f"[warn] 锚点 PG 读取失败，退回文件: {str(e)[:70]}", file=sys.stderr)
+        print(f"[warn] 浪型 PG 读取失败，退回文件: {str(e)[:70]}", file=sys.stderr)
     p = os.path.join(ROOT, "config", "b_rebound_anchors.json")
     if not os.path.exists(p):
         return None
@@ -227,11 +234,12 @@ def wave_block(asof: str) -> dict | None:
                  date(int(a8[:4]), int(a8[4:6]), int(a8[6:]))).days
     except Exception:
         pass
-    idx = [x for x in (j.get("index") or []) if str(x.get("known_from", "")).replace("-", "") <= asof]
-    return dict(source="file", as_of=cur_.get("as_of"), level=cur_.get("level"),
-                completed=cur_.get("completed"), running=cur_.get("running"),
-                next_watch=cur_.get("next_watch"), rejudge_trigger=cur_.get("rejudge_trigger"),
-                stale_days=stale, anchors_index=idx[-6:])
+    return dict(source="file", as_of=cur_.get("as_of"), stale_days=stale,
+                level=cur_.get("level"), completed=cur_.get("completed"),
+                running=cur_.get("running"), next_watch=cur_.get("next_watch"),
+                rejudge_trigger=cur_.get("rejudge_trigger"),
+                anchors_index=[x for x in (j.get("index") or [])
+                               if str(x.get("known_from", "")).replace("-", "") <= asof][-6:])
 
 
 # ────────────────────────── 底部结构 ──────────────────────────
