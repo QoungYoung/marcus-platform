@@ -179,6 +179,37 @@ def wave_from_pg(asof: str) -> dict | None:
         return None
 
 
+def wave_block(asof: str) -> dict | None:
+    """浪型：**读人工锚文件**（config/b_rebound_anchors.json 的 current 块）。
+    账本 §4c：生产 wave_state 的锚点会漂（4月 3174 / 8月 3674），当参考可以、当输入不行。
+    缺了这一段，agent 只能猜段位（7/08 判错就是这个原因）。"""
+    p = os.path.join(ROOT, "config", "b_rebound_anchors.json")
+    if not os.path.exists(p):
+        return None
+    try:
+        j = json.load(open(p, encoding="utf-8"))
+    except Exception as e:
+        print(f"[warn] 锚文件读取失败: {str(e)[:60]}", file=sys.stderr)
+        return None
+    cur = j.get("current") or {}
+    if not cur:
+        return None
+    stale_days = None
+    try:
+        from datetime import date
+        a = str(cur.get("as_of", "")).replace("-", "")
+        stale_days = (date(int(asof[:4]), int(asof[4:6]), int(asof[6:])) -
+                      date(int(a[:4]), int(a[4:6]), int(a[6:]))).days
+    except Exception:
+        pass
+    idx = [x for x in (j.get("index") or []) if str(x.get("known_from", "")).replace("-", "") <= asof]
+    return dict(as_of=cur.get("as_of"), level=cur.get("level"), completed=cur.get("completed"),
+                running=cur.get("running"), next_watch=cur.get("next_watch"),
+                rejudge_trigger=cur.get("rejudge_trigger"),
+                stale_days=stale_days,
+                anchors_asof=idx[-4:])
+
+
 # ────────────────────────── 底部结构 ──────────────────────────
 def detect_bottom(h, l, c, o, v, j, tol=0.03, gap=(5, 60), reb=(0.03, 0.20), fresh=40):
     """W底/双底 + 颈线 + 红三兵 + 不破位黑K。参数按教科书定义固定，不优化。"""
@@ -314,7 +345,7 @@ def read(day: str, cut: str = CUT) -> dict:
                     sh_ratio=(round(amt / a20, 2) if (cut_ok and a20 == a20) else None),
                     note=(None if cut_ok else "非 14:50 口径，仅报累计值，量比不计算")),
         bottom_structure=bottom,
-        wave=wave_from_pg(day),
+        wave=wave_block(day),
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
         source_note="盘中量已按截至 %s 的累计量折算（÷%.3f）；历史日用日线" % (cut, PRE_CUT_SHARE) if intraday else "日线口径",
     )
