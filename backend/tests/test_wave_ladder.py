@@ -429,3 +429,125 @@ def test_write_wave_state_without_ev_uses_latched_walk(monkeypatch, tmp_path):
     assert p, "应写出文件"
     ws = json.load(open(p, encoding="utf-8"))
     assert int((ws.get("rung") or {}).get("index", -1)) == 3, ws.get("rung")
+
+
+# ───────────── 2026-10-23：报告 §1B/§1D/§1E + §3-1/§3-6 的回归锁 ─────────────
+def test_legs_stale_rule():
+    """腿陈旧判据：①距快照 > STALE_DAYS ②确认顶之后比确认顶高 ≥ LEGS_GAIN_STALE（任一命中 ✓）。"""
+    import wave_ladder as W
+
+    assert W._legs_stale(False, 999, 0.5) is False        # 没腿 ⇒ 不谈陈旧
+    assert W._legs_stale(True, W.STALE_DAYS, 0.0) is False
+    assert W._legs_stale(True, W.STALE_DAYS + 1, 0.0) is True
+    assert W._legs_stale(True, 5, W.LEGS_GAIN_STALE) is True
+    assert W._legs_stale(True, 5, W.LEGS_GAIN_STALE - 0.01) is False
+
+
+def test_sub_level_is_closed_enum():
+    """`sub_level` 枚举封闭：过渡串（4-2→4-3）**不进** sub_level，改走 leg_transition（报告 §1D）。
+    原值仍可从 `sub_level_raw` 取回，便于排查 ✓。"""
+    import wave_ladder as W
+
+    fi = {"sub_stage": "4-2", "sub_forming": "4-3", "sub_legs": [{"label": "4-1", "date": "20260101", "value": 100.0}],
+          "legs_stale": False}
+    ev = {"date": "20260720", "key": "w4_adj", "rung_index": 0, "features": fi, "operation": "t_only"}
+    ws = W.to_wave_state(ev)
+    assert ws["sub_level"] == "4-2", ws["sub_level"]
+    assert ws["leg_transition"] == "4-2→4-3", ws["leg_transition"]
+    assert ws["sub_level_raw"] == "4-2→4-3", ws["sub_level_raw"]
+    assert W._sub_ok(ws["sub_level"]) and not W._sub_ok(ws["sub_level_raw"])
+    # 单词形态/状态词仍在枚举内（消费方按等值/子串匹配，语义唯一 ✓）
+    assert all(W._sub_ok(x) for x in ("4-5", "失败5", "下跌1浪", "末段", "C杀", "W底"))
+
+
+def test_stale_legs_do_not_drive_sub_level():
+    """★ 报告 §1B 核心：腿陈旧时**不再**用腿的阶段当档位标签（腿数值原样保留 ✓ §3-5）。"""
+    import wave_ladder as W
+
+    legs = [{"label": "4-1", "date": "20241017", "value": 3169.38},
+            {"label": "4-5", "date": "20250113", "value": 3160.76}]
+    fi = {"sub_stage": "4-5", "sub_forming": "", "sub_legs": legs, "legs_stale": True}
+    ev = {"date": "20260615", "key": "w4_adj", "rung_index": 0, "features": fi, "operation": "t_only"}
+    ws = W.to_wave_state(ev)
+    assert ws["sub_level"] == "", ws["sub_level"]            # 陈旧腿 ⇒ 不外推标签
+    assert ws["leg_stage"] == "4-5" and ws["legs_stale"] is True
+    assert len(ws["sub_legs"]) == 2 and ws["sub_legs"][0]["value"] == 3169.38   # 腿数值不丢 ✓
+    # rung 自己的档（失败5/下跌1浪）不受腿陈旧影响 ✓
+    ev2 = dict(ev, key="w45_fail", rung_index=2)
+    assert W.to_wave_state(ev2)["sub_level"] == "失败5"
+
+
+def test_rung_and_overlay_are_separate_fields():
+    """★ 报告 §1E 根因：一个字段两个写者 ⇒ 拆成 rung_sub_level / overlay_level（日间翻转可归因 ✓）。"""
+    import wave_ladder as W
+
+    fi = {"sub_stage": "4-3", "sub_forming": "", "sub_legs": [], "legs_stale": False}
+    ev = {"date": "20250805", "key": "w4_adj", "rung_index": 0, "features": fi,
+          "operation": "t_only", "ov_spec": {"level": "d4", "sub_level": "4-3", "operation": "side"}}
+    ws = W.to_wave_state(ev)
+    assert ws["overlay_level"] == "4-3" and ws["rung_sub_level"] == ""
+    assert ws["sub_level"] == "4-3" and ws["operation"] == "side"
+
+
+def test_anchor_metadata_and_pin(monkeypatch):
+    """锚点自描述 + 人工钉住（报告 §3-1）：窗口/边界/确认顶之后最高点都要能看到，钉住后 anchor_source=pin。"""
+    import wave_ladder as W
+
+    rows = mk([100.0] * 80 + [130.0] * 3 + [112.0] * 12 + [125.0] * 5)   # 涨 → 回落确认顶 → 再拉起
+    st = W.structural_levels(rows, last(rows))
+    assert st["window_start"] == "" or st["window_start"] <= last(rows)
+    assert st["anchor_source"] == "auto"
+    assert st["peak_since_anchor"] is not None
+    assert st["anchor_peak_gain"] is None or isinstance(st["anchor_peak_gain"], float)
+    monkeypatch.setenv("WOLF_WAVE_LADDER_ORIGIN", "88.5@20250602")
+    st2 = W.structural_levels(rows, last(rows))
+    assert st2["anchor_source"] == "pin" and st2["origin"] == 88.5 and st2["origin_date"] == "20250602"
+
+
+def test_anchor_peak_gain_marks_legs_stale():
+    """★ 报告 §1B 的实测场景：确认顶被「单边一路上行」甩开（无 10% 回撤 ⇒ 确认滞后）⇒ 腿必须判 stale。"""
+    import wave_ladder as W
+
+    # 100×80 → 130（顶）→ 回落 10% 确认该顶 → 再单边上行到 145（比确认顶高 11.5%，中间不回撤 10%）
+    rows = mk([100.0] * 80 + [130.0] * 4 + [117.0] * 6 + [119.0 + 1.5 * i for i in range(18)])
+    f = W.features(rows, last(rows))
+    assert f["prior_peak"] is not None
+    assert (f["anchor_peak_gain"] or 0) >= W.LEGS_GAIN_STALE, f["anchor_peak_gain"]
+    assert f["legs_stale"] is True, (f["legs_stale"], f["legs_age"], f["anchor_peak_gain"])
+
+
+def test_generator_version_and_data_window_stamped():
+    """报告 §3-6：产物必须带版本戳 + 数据窗口（这次「混 vintage」就是没有它们才要靠 mtime 考古 ✗）。"""
+    import wave_ladder as W
+
+    rows = mk(FLAT + [103.0, 104.0, 105.0])
+    ev = W.evaluate(rows, last(rows))
+    ws = W.to_wave_state(ev)
+    assert ws["generator_version"] == W.WAVE_LADDER_VERSION
+    fi = ws["features"]
+    assert fi["data_window_start"] and fi["data_bars"] > 0
+    assert "anchor_window_start" in fi and "origin_near_window_edge" in fi
+
+
+def test_anchor_revision_logged(monkeypatch, tmp_path):
+    """报告 §3-1：锚点改写要留痕（旧值/生效日/原因），平时是空操作 ✓。"""
+    import wave_ladder as W
+
+    monkeypatch.setattr(W, "DATA", str(tmp_path))
+    ws1 = {"as_of": "20260101", "features": {"origin": 2702.185, "origin_date": "20240205",
+                                            "wave1_top": 3174.2658, "wave1_top_date": "20240520",
+                                            "anchor_source": "auto", "data_window_start": "20230131"}}
+    W._maybe_log_anchor_revision(ws1)
+    W._maybe_log_anchor_revision(ws1)                        # 同锚点 ⇒ 不追加
+    p = os.path.join(str(tmp_path), W.ANCHOR_FILE)
+    obj = json.load(open(p, encoding="utf-8"))
+    assert obj["current"]["origin"] == 2702.185 and obj["revisions"] == []
+    ws2 = {"as_of": "20270101", "features": {"origin": 2704.09, "origin_date": "20240913",
+                                            "wave1_top": 3674.4048, "wave1_top_date": "20241008",
+                                            "anchor_source": "auto", "data_window_start": "20240301"}}
+    W._maybe_log_anchor_revision(ws2)                        # 锚点变了 ⇒ 追加一条（含旧值/生效日/原因）
+    obj = json.load(open(p, encoding="utf-8"))
+    assert len(obj["revisions"]) == 1
+    rev = obj["revisions"][0]
+    assert rev["from"]["origin"] == 2702.185 and rev["to"]["origin"] == 2704.09
+    assert rev["detected_on"] == "20270101" and rev["reason"]

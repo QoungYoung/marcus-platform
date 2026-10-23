@@ -93,8 +93,23 @@ LOW_AGE = int(_envf("WOLF_WAVE_LADDER_LOW_AGE", 5))   # rung1 止跌确认：20 
 ZIGZAG_PCT = _envf("WOLF_WAVE_LADDER_ZIGZAG", 0.10)     # 主级 zigzag 阈值（10% ⇒ 上证一年几次拐点）
 PCT_FINE = _envf("WOLF_WAVE_LADDER_ZIGZAG_FINE", 0.05)  # 细级 zigzag（只出预警位，不触发降级）
 ORIGIN_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_BARS", 900))  # 主升起点回溯窗口（≈3.5 年）
+ORIGIN_EDGE_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_EDGE", 20))  # 锚点距窗口边界 ≤N 根 ⇒ 预警（快被顶替）
 LOW60_TRIGGER = os.getenv("WOLF_WAVE_LADDER_LOW60", "0").strip() in ("1", "true", "yes")
 # ↑ 2026-10-15 起**默认关**：60 日新低是早期拍的代理；换教材「铁律②」后它退为参考量，=1 可 A/B 回旧行为 ✓
+
+# ── 产物版本戳 + 「腿是否还属于本轮」（2026-10-23 补）────────────────────────────
+# 事故背景：10-20 生成的 90 份 history 用的是**短数据窗口**（主指数只有 ~500 根）⇒ origin/wave1_top
+# 与今天差一整套（2704.09/3674.40 vs 2702.18/3174.27），而产物里**没有任何版本/窗口字段** ✗
+# ⇒ 只能靠 mtime 考古才发现「同一目录混了两个 vintage」✗。故产物统一盖 `generator_version` +
+# `features.data_window_start/data_bars`（`to_wave_state` 落）✓。
+WAVE_LADDER_VERSION = "2026-10-23.1"
+# 腿陈旧判定（报告 §1B 的根因：`prior_peak` 是**最后一个已确认**主级 H，而 10% zigzag 要反向 ≥10%
+# 才确认 ⇒ 2024-10-08 的顶一直到 2026-07-17 才被 4258.86 取代 ⇒ 腿锚在旧顶、标签照旧外推 ~370 个交易日 ✗）。
+# 两条判据（任一命中即 stale；**都只用 ≤asof 的数据** ✓）：
+#   ① `legs_age`（最后一腿距快照）> STALE_DAYS 个自然日；
+#   ② 确认顶之后的最高点比确认顶高 ≥ LEGS_GAIN_STALE ⇒ 这一轮早已跑到旧顶之上，腿必属上一轮。
+STALE_DAYS = int(_envf("WOLF_WAVE_LADDER_STALE_DAYS", 120))
+LEGS_GAIN_STALE = _envf("WOLF_WAVE_LADDER_LEGS_GAIN", 0.10)
 
 RUNGS: List[Dict[str, str]] = [
     {"key": "w4_adj", "name": "4浪调整",
@@ -434,6 +449,59 @@ def _env_pin_w1() -> float:
         return 0.0
 
 
+def _env_pin_origin() -> Tuple[float, str]:
+    """`WOLF_WAVE_LADDER_ORIGIN`（`值@YYYYMMDD`，如 `2702.185@20240205`）⇒ 人工钉住「主升起点」。
+
+    为什么需要（报告 §3-1「锚点单调」）：`origin` 取的是 `ORIGIN_BARS` 滑动窗口内最低的主级 L ⇒
+    窗口一往前滚，老低点就滑出、锚点**自己换**（实测 900→640 根就换到 `2704.09(2024-09-13)`，
+    连带 `wave1_top` 从 3174.27 变 3674.40）。需要长期固定时钉住这里 ✓（留痕见 `anchor_revision`）。
+    """
+    raw = (os.getenv("WOLF_WAVE_LADDER_ORIGIN") or "").strip()
+    if "@" not in raw:
+        return 0.0, ""
+    v, d = raw.split("@", 1)
+    try:
+        return float(v), d.strip().replace("-", "")[:8]
+    except ValueError:
+        return 0.0, ""
+
+
+def _days_between(d8_from: str, d8_to: str) -> Optional[int]:
+    """两个 YYYYMMDD 相差的自然日（解析不了 ⇒ None ✓）。"""
+    import datetime as _dt
+    try:
+        a = _dt.date(int(d8_from[:4]), int(d8_from[4:6]), int(d8_from[6:8]))
+        b = _dt.date(int(d8_to[:4]), int(d8_to[4:6]), int(d8_to[6:8]))
+    except (TypeError, ValueError):
+        return None
+    return (b - a).days
+
+
+# `sub_level` 的**封闭枚举**：只允许①档位（形如 `4-1`/`3-3`）②**单个**档名/形态词（下表）。
+# 2026-10-23 前还写进了「过渡串」（`4-2→4-3`）✗ ⇒ 任何按 sub_level 分类/统计的消费方都会静默错分
+# （报告 §1D）；现在**复合串一律不进** sub_level，改放 `leg_transition`，原值留在 `sub_level_raw` ✓。
+# 注：`末段/C杀/W底/双头` 是**单词**（消费方按等值/子串匹配，语义唯一）⇒ 保留在枚举内 ✓，
+# 真正会「静默错分」的是 `→` 这类复合串 ✓。
+SUB_ENUM_WORDS = ("失败5", "下跌1浪", "C杀", "末段", "衰竭", "W底", "双头", "M顶", "ABC", "B反")
+
+
+def _legs_stale(has_legs: bool, legs_age: Optional[int], anchor_gain: Optional[float]) -> bool:
+    """腿是否已不属于本轮（报告 §1B/§3-2 的判据；两条任一命中 ✓）。"""
+    if not has_legs:
+        return False
+    if legs_age is not None and legs_age > STALE_DAYS:
+        return True
+    return anchor_gain is not None and anchor_gain >= LEGS_GAIN_STALE
+
+
+def _sub_ok(s: Any) -> bool:
+    """`sub_level` 是否合法枚举值（形如 `4-5`，或 SUB_ENUM_WORDS 里的档名）✓。"""
+    t = str(s or "")
+    if t in SUB_ENUM_WORDS:
+        return True
+    return len(t) == 3 and t[0].isdigit() and t[1] == "-" and t[2].isdigit()
+
+
 # ─────────────────────────── 数据层 ───────────────────────────
 def _json_path(code: str) -> Optional[str]:
     name = "index_daily_%s.json" % code.replace(".", "_")
@@ -614,7 +682,16 @@ def structural_levels(rows: Sequence[Tuple[str, float, float, float]], asof: str
     z = pivots(rows, asof)
     out: Dict[str, Any] = {"origin": None, "origin_date": "", "wave1_top": None, "wave1_top_date": "",
                            "wave1_top_minor": None, "wave1_top_minor_date": "", "prior_peak": None,
-                           "prior_peak_date": "", "prev_peak": None, "prev_peak_date": "", "pivots": len(z)}
+                           "prior_peak_date": "", "prev_peak": None, "prev_peak_date": "", "pivots": len(z),
+                           # ★ 2026-10-23：把「锚点是**哪个窗口**算出来的」暴露出来 ✓ ——
+                           #   本函数的 origin 是 `ORIGIN_BARS` 滑动窗口内最低的主级 L ⇒ 窗口一往前滚，
+                           #   老的那个低点就会滑出、锚点**自己换**（实测：窗口从 900 缩到 640 根，
+                           #   origin 立刻从 2702.18(2024-02-05) 变成 2704.09(2024-09-13)，
+                           #   wave1_top 从 3174.27 变 3674.40 —— 正是 10-20 那 90 份产物的样子）。
+                           #   暴露 window_start / near_window_edge 后，消费方可判断锚点是否濒临改写 ✓
+                           "window_start": "", "origin_near_window_edge": False,
+                           "peak_since_anchor": None, "peak_since_anchor_date": "",
+                           "anchor_peak_gain": None, "anchor_source": "auto"}
     hs = [p for p in z if p[3] == "H"]
     if hs:
         out["prior_peak"], out["prior_peak_date"] = hs[-1][2], hs[-1][1]
@@ -622,16 +699,35 @@ def structural_levels(rows: Sequence[Tuple[str, float, float, float]], asof: str
             out["prev_peak"], out["prev_peak_date"] = hs[-2][2], hs[-2][1]
     hist = [r for r in rows if r[0] <= str(asof)[:8]]
     lo_date = hist[-ORIGIN_BARS][0] if len(hist) > ORIGIN_BARS else ""
+    out["window_start"] = lo_date
     ls = [p for p in z if p[3] == "L" and (not lo_date or p[1] >= lo_date)]
+    o_val, o_date = None, ""
     if ls:
         o = min(ls, key=lambda p: p[2])
-        out["origin"], out["origin_date"] = o[2], o[1]
-        after = [p for p in z if p[3] == "H" and p[1] > o[1]]
+        o_val, o_date = o[2], o[1]
+    _pin_v, _pin_d = _env_pin_origin()
+    if _pin_v > 0 and _pin_d:                        # 人工钉住 ⇒ 覆盖自动锚点（锚点单调 ✓）
+        o_val, o_date = _pin_v, _pin_d
+        out["anchor_source"] = "pin"
+    elif o_val is not None and lo_date:              # 自动锚点：判断是否贴在窗口边界（快被顶替）
+        _bars = sum(1 for r in hist if lo_date <= r[0] <= o_date)
+        out["origin_near_window_edge"] = _bars <= ORIGIN_EDGE_BARS
+    if o_val is not None:
+        out["origin"], out["origin_date"] = o_val, o_date
+        after = [p for p in z if p[3] == "H" and p[1] > o_date]
         if after:
             out["wave1_top"], out["wave1_top_date"] = after[0][2], after[0][1]
-        afterf = [p for p in pivots(rows, asof, PCT_FINE) if p[3] == "H" and p[1] > o[1]]
+        afterf = [p for p in pivots(rows, asof, PCT_FINE) if p[3] == "H" and p[1] > o_date]
         if afterf:
             out["wave1_top_minor"], out["wave1_top_minor_date"] = afterf[0][2], afterf[0][1]
+    # 「确认顶之后的最高点」：判断腿是否还属于本轮的关键量 ✓（确认滞后最长可达一整个 10% 波段）
+    if out["prior_peak"] and out["prior_peak_date"]:
+        seg = [r for r in hist if r[0] >= out["prior_peak_date"]]
+        if seg:
+            _pk = max(seg, key=lambda r: r[2])
+            out["peak_since_anchor"], out["peak_since_anchor_date"] = _pk[2], _pk[0]
+            if out["prior_peak"]:
+                out["anchor_peak_gain"] = round(_pk[2] / out["prior_peak"] - 1, 4)
     return out
 
 
@@ -652,6 +748,17 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
     amt_prev = hist[-2][3]
     st = structural_levels(rows, asof)
     sub = sub_legs(rows, asof, st)
+    # ★ 2026-10-23：腿的「归属与年龄」显式化（报告 §1B / §3-2）——
+    #   腿锚在 `prior_peak`（最后一个**已确认**主级 H），而确认滞后可达一整个 10% 波段 ⇒
+    #   2024-10-08 的 3674.40 一直是「最新确认顶」，直到 2026-07-17 才换成 4258.86，
+    #   期间（~370 个交易日）腿始终是 2024-10~2025-01 那五段、而 sub_level 照旧外推 ✗。
+    #   现在把锚点/年龄/「确认顶之后最高点」都写进 features，并由 STALE_DAYS / LEGS_GAIN_STALE 判定 stale，
+    #   `to_wave_state` 据此**不再**用陈旧腿推导 sub_level ✓（腿的数值原样保留 ✓ 报告 §3-5）。
+    _legs = sub["legs"] or []
+    _last_leg = max((l["date"] for l in _legs), default="")
+    _legs_age = _days_between(_last_leg, d) if _last_leg else None
+    _anchor_gain = st.get("anchor_peak_gain")
+    _stale = _legs_stale(bool(_legs), _legs_age, _anchor_gain)
     global _SYNC3
     _SYNC3 = sync3(asof)          # None=数据不全 ⇒ 退回单指数口径（features 里可查 ✓）
     w1 = _env_pin_w1() or st["wave1_top"]
@@ -679,6 +786,17 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         "prev_peak": st["prev_peak"], "origin": st["origin"],
         "origin_date": st["origin_date"], "pivots": st["pivots"],
         "sub_stage": sub["stage"], "sub_forming": sub["forming"], "sub_legs": sub["legs"],
+        # ── 腿的归属/年龄（stale 判据；报告 §1B/§3-2）──
+        "legs_anchor_value": st["prior_peak"], "legs_anchor_date": st["prior_peak_date"],
+        "last_leg_date": _last_leg, "legs_age": _legs_age, "legs_stale": _stale,
+        "anchor_peak_gain": _anchor_gain,               # 确认顶之后最高点相对确认顶的涨幅
+        "peak_since_anchor": st.get("peak_since_anchor"),
+        "peak_since_anchor_date": st.get("peak_since_anchor_date") or "",
+        # ── 锚点窗口自描述（防「换个数据窗口就换锚点」再次无痕发生；报告 §3-1/§3-6）──
+        "anchor_source": st.get("anchor_source") or "auto",
+        "anchor_window_start": st.get("window_start") or "",
+        "origin_near_window_edge": bool(st.get("origin_near_window_edge")),
+        "data_window_start": hist[0][0] if hist else "", "data_bars": len(hist),
         # ── 主升叠加档的量价特征（3-3/3-2 判据）──
         "hi20_prev": max(r[1] for r in w), "streak_above_hi20": _streak_above(hist, RALLY_WIN),
         # ★ 不含当日的 20 日最高（"突破"类比较必须用它：hi20 含当日 ⇒ close > hi20 恒假 ✗ 实测踩过）
@@ -994,17 +1112,42 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
     key = ev.get("key") or ""
     fi = ev.get("features") or {}
     mus = ev.get("ov_spec") or ev.get("main_up_spec") or {}   # 档位改写：W底/4-3 优先，其次主升 3-3 ✓
-    sub = SUB_OF_RUNG.get(key, "")
+    # ★ 2026-10-23 字段拆分（报告 §1D/§1E）——
+    #   原来 `sub_level` 一个字段里塞了**三种语义**：rung 档（4-5/失败5/下跌1浪）、主升叠加档
+    #   （3-3/4-3/4-1/末段）、腿的阶段与过渡（4-2→4-3）✗ ⇒ ①枚举不封闭，按 sub_level 分类的
+    #   消费方静默错分；②两个写者轮流覆盖同一字段 ⇒ 日间来回翻（实测 62/433）。
+    #   现在：`sub_level` **只写合法档位**（`_sub_ok` 白名单 ✓），其余各归各位：
+    #     rung_sub_level（rung 档）/ overlay_level（叠加档）/ leg_stage + leg_transition（腿）/
+    #     phase_note（末段 这类状态词）；原值另存 `sub_level_raw` 便于排查 ✓。
+    rung_sub = SUB_OF_RUNG.get(key, "")
     if key == "down1" and fixture_sharp(fi):        # 放量急杀当日 ⇒ C杀 ✓（他的用法）
-        sub = "C杀"
-    if key == "w4_adj" and fi.get("sub_stage"):
-        sub = fi["sub_stage"] + (("→" + fi["sub_forming"]) if fi.get("sub_forming") else "")
+        rung_sub = "C杀"
+    overlay_sub = str((mus or {}).get("sub_level") or "")
+    leg_stage = str(fi.get("sub_stage") or "")
+    leg_transition = ("%s→%s" % (leg_stage, fi["sub_forming"])) if (leg_stage and fi.get("sub_forming")) else ""
+    legs_stale = bool(fi.get("legs_stale"))
+    # 腿的阶段只在**腿还有效**时才当档位用（陈旧腿不再外推标签 ✓ 报告 §3-2）；数值仍原样保留 ✓
+    if key == "w4_adj" and leg_stage and not overlay_sub:
+        sub = "" if legs_stale else leg_stage
+    else:
+        sub = overlay_sub or rung_sub
+    raw_sub = overlay_sub or rung_sub
+    if key == "w4_adj" and leg_stage:
+        raw_sub = leg_stage + (("→" + fi["sub_forming"]) if fi.get("sub_forming") else "")
     d = str(ev.get("date") or asof or "")[:8]
     return {
         "date": ("%s-%s-%s" % (d[:4], d[4:6], d[6:8])) if len(d) == 8 else str(ev.get("date") or ""),
         "as_of": d,
         "level": mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"),
-        "sub_level": (mus.get("sub_level") or sub) if mus else sub,
+        "sub_level": sub if _sub_ok(sub) else "",
+        "sub_level_raw": raw_sub,                    # 拆分前的原值（含「4-2→4-3」「末段」），仅供排查 ✓
+        "rung_sub_level": rung_sub,
+        "overlay_level": overlay_sub,
+        "leg_stage": leg_stage,
+        "leg_transition": leg_transition,
+        "phase_note": "" if _sub_ok(overlay_sub) else overlay_sub,
+        "legs_stale": legs_stale,
+        "generator_version": WAVE_LADDER_VERSION,
         "operation": mus.get("operation") or ev.get("operation"),
         "confidence": CONF_OF_RUNG.get(key, 0.5),
         "reasons": ("【浪型链 rung%d/%s】%s；预期：%s；操作：%s（invest %.2f）" % (
@@ -1018,10 +1161,11 @@ def to_wave_state(ev: Optional[Dict[str, Any]], asof: Optional[str] = None) -> O
         "features": fi,
         "mode": MODE_OF_RUNG.get(key, ""),
         "mode_note": MODE_NOTE.get(MODE_OF_RUNG.get(key, ""), ""),
-        "family": _family_of(mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"), sub, key),
-        "stage": _stage_of(mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"), sub, key, mus),
-        "status": _status_of(key, mus.get("operation") or ev.get("operation"), sub),
-        "label_note": _label_note_of(key, sub),
+        # family/stage/status/label 一律用 `sub_level_raw`（拆分前的原值）⇒ 这四个字段与拆分前**逐字一致** ✓
+        "family": _family_of(mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"), raw_sub, key),
+        "stage": _stage_of(mus.get("level") or LEVEL_OF_RUNG.get(key, "d4"), raw_sub, key, mus),
+        "status": _status_of(key, mus.get("operation") or ev.get("operation"), raw_sub),
+        "label_note": _label_note_of(key, raw_sub),
         # ★ 2026-10-20：所有产物（live/dated/history）都带 session_date ✓（= 这份判定服务哪个交易日）
         "session_date": next_session_date(str(ev.get("date") or "")[:8]),
         "source": "wave_ladder",
@@ -1066,6 +1210,46 @@ def next_session_date(d8: str) -> str:
         if d.weekday() < 5:
             return d.strftime("%Y%m%d")
     return ""
+
+
+ANCHOR_FILE = "wave_anchor.json"
+
+
+def _maybe_log_anchor_revision(ws: Optional[Dict[str, Any]]) -> None:
+    """锚点留痕（报告 §3-1「锚点单调 + 确需修订时留旧值/生效日/原因」✓）。
+
+    写 `data/wave_anchor.json`：`current` = 当前锚点；`revisions` = 最近 20 次变更（from/to/生效日/原因）。
+    只在锚点**真的变了**时追加一条 ⇒ 平时是空操作 ✓。异常一律静默（fail-open ✓，绝不挡住落盘）。
+    """
+    try:
+        ft = (ws or {}).get("features") or {}
+        keys = ("origin", "origin_date", "wave1_top", "wave1_top_date")
+        cur = {k: ft.get(k) for k in keys}
+        cur["anchor_source"] = ft.get("anchor_source") or "auto"
+        cur["data_window_start"] = ft.get("data_window_start")
+        cur["as_of"] = (ws or {}).get("as_of")
+        p = os.path.join(DATA, ANCHOR_FILE)
+        old: Dict[str, Any] = {}
+        if os.path.exists(p):
+            try:
+                old = json.load(open(p, encoding="utf-8")) or {}
+            except Exception:
+                old = {}
+        prev = old.get("current") or {}
+        revs = list(old.get("revisions") or [])
+        if prev and any(prev.get(k) != cur.get(k) for k in keys):
+            revs.append({"detected_on": cur["as_of"],
+                         "from": {k: prev.get(k) for k in keys},
+                         "to": {k: cur.get(k) for k in keys},
+                         "reason": "pin" if cur["anchor_source"] == "pin" else "auto（窗口滚动/新拐点确认）",
+                         "data_window_start": cur.get("data_window_start")})
+        os.makedirs(DATA, exist_ok=True)
+        tmp = p + ".tmp"
+        json.dump({"current": cur, "revisions": revs[-20:]},
+                  open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        os.replace(tmp, p)
+    except Exception as _e:
+        _silent_alert("wave_ladder.py:anchor_revision", _e)
 
 
 def write_wave_state(asof: Optional[str] = None, dated: bool = False,
@@ -1124,6 +1308,7 @@ def write_wave_state(asof: Optional[str] = None, dated: bool = False,
                 print("[wave_ladder] 写库未成功（忽略 ✓ 文件已写）", flush=True)
         except Exception as _e_pg:
             print("[wave_ladder] 写库异常（忽略 ✓ 文件已写）: %s" % str(_e_pg)[:120], flush=True)
+        _maybe_log_anchor_revision(ws)          # 锚点变更留痕（fail-open ✓）
         return p
     except Exception as _e:
         _silent_alert("wave_ladder.py:write_wave_state", _e)
