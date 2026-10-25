@@ -169,7 +169,6 @@ def _apply_schema_patches():
     # ── 2026-09-12: 回测用行情表（tushare 回填 mkt_bars_daily，供真实回测） ──
     _apply_mkt_bars_migration()
     _apply_wave_state_migration()
-    _apply_break_stop_migration()
     _apply_wolf_v3_migration()
 
     # ── 2026-09-12: 研报标题（catalyst 重建数据源；失败日期显式记账） ──
@@ -305,81 +304,6 @@ def _apply_wolf_v3_migration():
     except Exception as e:
         print(f"[DB] wolf_v3 migration warn: {e}")
 
-
-def _apply_break_stop_migration():
-    """P4 破位事件账本：break_events（append-only）+ break_actions（幂等动作）。"""
-    from sqlalchemy import text
-
-    try:
-        with engine.begin() as conn:
-            _lock_timeout(conn)
-            conn.execute(text(
-                """
-                CREATE TABLE IF NOT EXISTS break_events (
-                    id BIGSERIAL PRIMARY KEY,
-                    asof DATE NOT NULL,
-                    symbol VARCHAR(16) NOT NULL,
-                    domain VARCHAR(10) NOT NULL DEFAULT 'index',
-                    level_type VARCHAR(32) NOT NULL DEFAULT '',
-                    level_price NUMERIC(14,4),
-                    phase VARCHAR(10) NOT NULL DEFAULT 'close',
-                    status VARCHAR(20) NOT NULL DEFAULT 'none',
-                    close NUMERIC(14,4),
-                    high NUMERIC(14,4),
-                    low NUMERIC(14,4),
-                    vol_ratio NUMERIC(10,4),
-                    volume_branch VARCHAR(10),
-                    wave_op VARCHAR(10),
-                    position_pnl NUMERIC(10,4),
-                    action VARCHAR(20),
-                    target_pct NUMERIC(8,4),
-                    reason TEXT,
-                    mode VARCHAR(16) NOT NULL DEFAULT 'alert',
-                    data_warning TEXT,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    CONSTRAINT uq_break_events_semantic UNIQUE (asof, symbol, level_type, status)
-                )
-                """
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_break_events_asof_status ON break_events (asof, status)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_break_events_symbol ON break_events (symbol)"
-            ))
-            conn.execute(text(
-                """
-                CREATE TABLE IF NOT EXISTS break_actions (
-                    id BIGSERIAL PRIMARY KEY,
-                    asof DATE NOT NULL,
-                    symbol VARCHAR(16) NOT NULL,
-                    domain VARCHAR(10) NOT NULL DEFAULT 'index',
-                    severity VARCHAR(10) NOT NULL DEFAULT '',
-                    level_type VARCHAR(32),
-                    action VARCHAR(20) NOT NULL,
-                    target_pct NUMERIC(8,4),
-                    target_is_cap VARCHAR(1) NOT NULL DEFAULT '1',
-                    block_new_buy VARCHAR(1) NOT NULL DEFAULT '0',
-                    allow_zero VARCHAR(1) NOT NULL DEFAULT '0',
-                    reason TEXT,
-                    invalidation TEXT,
-                    status VARCHAR(16) NOT NULL DEFAULT 'pending',
-                    trigger_id BIGINT,
-                    executed_at TIMESTAMPTZ,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    CONSTRAINT uq_break_actions_semantic UNIQUE (asof, symbol, action)
-                )
-                """
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_break_actions_asof_status ON break_actions (asof, status)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_break_actions_symbol ON break_actions (symbol)"
-            ))
-        print("[DB] PATCH: break_events / break_actions 创建完成")
-    except Exception as e:
-        print(f"[DB] PATCH warn (break tables): {e}")
 
 
 def _apply_worker_control_migration():
