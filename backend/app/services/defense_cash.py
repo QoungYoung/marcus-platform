@@ -9,7 +9,8 @@
 ⚠️ 破位减仓是**防御的最高 urgency 执行腿**，不是与防御并列的策略：
   · G 级决定组合总仓上限；
   · 破位/止损决定 symbol override（单票可压到 0/50%）；
-  · 先执行 override，再算组合残余；v0 尚未接入 break_policy/wolf_stop_layer 的 override。
+  · 先执行 override，再算组合残余；v0.1 已接 `break_actions`（B1-B4 → G1-G3 + symbol_overrides），
+    执行端在 `t_monitor._check_defense_residual`。
 
 四档（2026-10-25 用户拍板）：
   G0 正常：build 75 / t_only·side 50

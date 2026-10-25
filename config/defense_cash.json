@@ -1,7 +1,7 @@
 {
   "version": "2026-10-25",
   "status": "live_v0",
-  "note": "防御/空仓唯一配置。defense_cash.py v0 已接线（p2_entry_gate / position_tier / wolf_discipline / calc_position / prompt）；14:40、15:05 定时任务尚未建。所有阈值需按 docs/defense-cash-strategy.md §7 判例回归校准。",
+  "note": "防御/空仓唯一配置。defense_cash.py v0.1 已接线（p2_entry_gate / position_tier / wolf_discipline / calc_position / prompt）+ t_monitor._check_defense_residual（组合残余 + 破位 override）。",
   "enabled": true,
   "mode": "shadow",
   "levels": {

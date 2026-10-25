@@ -422,11 +422,11 @@ append-only；`asof_ts` + `stable_key`；回测用 `where asof_ts <= 回测时�
 
 | 时间 | 任务 | 说明 |
 |---|---|---|
-| 14:40 | `defense_cash_1440` | 事实底稿 + agent 预览（盘中口径） |
-| 14:50 | 同一任务二次确认 | 尾盘代理；可当天执行减 T |
-| 15:05 | `defense_cash_eod` | 系统风险 + 收盘确认；写 PG；生成明日计划 |
-| 15:10 | 通知 | QQ 推“档位/仓位/减仓清单/反证” |
-| 09:25 | 早盘提醒 | 读隔夜状态；G2/G3 禁止新开 |
+| 每 30s（t_monitor） | `_check_defense_residual` | G2/G3 组合级残余 + 破位 override；09:35-10:30 / 14:30+ |
+| 14:50 | 尾盘复算（计划中） | `_check_defense_residual` 在 14:30+ 已可执行；14:50 复算尚未单独建 |
+| 15:05 | `systemic_risk_monitor`（已有） | 产出 `systemic_risk.json`，`defense_cash` 直接读；不重复采数 |
+| 15:10 | QQ 通知（计划中） | 推“档位/仓位/减仓清单/反证” |
+| 09:25 | 早盘提醒（计划中） | 读隔夜状态；G2/G3 禁止新开 |
 | 周五 14:30 | 周末避险 | 复用 `wolf_weekend_hedge` |
 
 > 现有 `systemic_risk_monitor` 15:05 保留，作为 `defense_cash_eod` 的输入之一，不重复采数。
