@@ -97,7 +97,6 @@ def init_db():
     import app.models.golden_pit_dca_log  # noqa: F401
     import app.models.golden_pit_sector_config  # noqa: F401
     import app.models.plan  # noqa: F401  # 计划库(plan_library)
-    import app.models.break_orm  # noqa: F401  # P4 破位事件账本
     Base.metadata.create_all(bind=engine)
     # ── Schema 补丁：给已存在的表加新列（避免 SQLAlchemy create_all 漏 ALTER） ──
     _apply_schema_patches()

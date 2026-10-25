@@ -1679,10 +1679,8 @@ def main() -> int:
     if not a.no_exit_legs:
         try:
             fanout_shims()   # **每日再广播一次** ✓（模块是随后才 import 的 ✗；幂等 ✓ 账本 §9.246）
-            mon.run_discipline_checks()   # **纪律家族统一入口** ✓（账本 §9.243；否则埋伏纪律等全不执行 ✗）
-            n1 = mon._roll_wolf_legs(day)
-            n2 = mon._arm_stock_exit_legs(day)
-            print("[prod] 持续腿结转=%s / 持仓离场腿=%s" % (n1, n2), file=sys.stderr)
+            # v3 纯净模式：旧纪律/持续腿/离场腿已删除，不再跑。
+            print("[prod] v3 纯净模式：跳过旧纪律/持续腿/离场腿", file=sys.stderr)
         except Exception as e:
             print("[prod] 结转/离场腿异常：%s" % str(e)[:160], file=sys.stderr)
     # 条件里可能带新的标的（如离场腿）→ 补进行情集合

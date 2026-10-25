@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -147,8 +148,8 @@ def evaluate(ctx: StopContext,
 
     # 1) down-wave：G3 15% cap（2026-10-25 拍板；不再写死 30）
     if down_wave:
-        _tgt = _tier_target("exit")
-        if _tgt is None:
+        _tgt = float(os.getenv("WOLF_DOWN_WAVE_TARGET", "0.15"))
+        if _tgt <= 0:
             _tgt = 0.15
         return StopDecision("reduce_to", action_type="breakdown_reduce", layer="index",
                             target_pct=_tgt, no_new=True, severity="B3", source="corpus",

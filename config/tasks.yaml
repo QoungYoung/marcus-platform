@@ -1188,30 +1188,6 @@ tasks:
     - qqbot
   depends_on: []
 
-- id: break_stop_1450
-  name: 破位止损卡（14:50）
-  description: 'P4 破位编排：上证日线/实时 quote → P1 levels → P2 确认状态机 → P3 动作；写 break_events/break_actions 并推 QQ。默认 alert，不下单；P5 回测通过后才考虑 execute_index。开关 WOLF_BREAK_STOP 默认 0；开启前请先看 docs/plan-breakdown-stop-loss.md'
-  enabled: false
-  schedule:
-    type: cron
-    expr: '50 14 * * mon-fri'
-    timezone: Asia/Shanghai
-  script:
-    path: jobs/break_stop_run.py
-    args:
-    - --mode
-    - alert
-    - --live
-  output:
-    log_file: logs/break_stop_{date}.log
-    append: true
-  notifications:
-    on_success: false
-    on_failure: true
-    pi_analysis: false
-    channels:
-    - qqbot
-  depends_on: []
 - id: daily_decision
   name: 每日决策对象 G1
   description: 盘后把 L1 方向/L2 档位/L3 仓位/L4 选票/L5 买点/L6 兑现 汇成 data/decision/<date>.json，

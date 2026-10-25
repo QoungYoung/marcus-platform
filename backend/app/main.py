@@ -40,7 +40,6 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
         sys.path.insert(0, str(skill_dir))
 
 from app.api import accounts
-from app.api import break_stop as break_stop_api
 from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy, main_wave, wave
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
@@ -203,7 +202,6 @@ app.include_router(t_account_router, prefix="/api/v1")
 app.include_router(discipline_router, prefix="/api/v1")
 app.include_router(t_backtest_router, prefix="/api/v1")
 app.include_router(main_wave.router, prefix="/api/v1")
-app.include_router(break_stop_api.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():

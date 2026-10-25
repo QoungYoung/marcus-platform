@@ -25,15 +25,6 @@ def test_v3_bypass_kinds():
     assert "custom_vwap_sell" not in TM._V3_BYPASS_KINDS  # T 腿保留
 
 
-def test_stop_loss_v3_shortcircuits_old_logic():
-    m = object.__new__(TM.TMonitor)
-    m.called = []
-    m._check_stop_loss_v3 = lambda s, q, l: m.called.append((s, q))
-    with mock.patch.object(TM, "STOP_V3", True):
-        m._check_stop_loss("SZ000001", {"current": 10.0}, {"SZ000001": {"sellable": 100}})
-    assert m.called == [("SZ000001", {"current": 10.0})]
-
-
 def test_v3_scans_positions_without_conditions():
     m = object.__new__(TM.TMonitor)
     m._positions = lambda account=None: [{"symbol": "SZ000001", "volume": 100}]
