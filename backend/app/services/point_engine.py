@@ -24,6 +24,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+# break_levels 是共享结构位计算器（不是旧 BreakStop 策略）；v3 point_engine 依赖，勿删
 from app.services import break_levels as BL
 
 TYPE_WEIGHT = {

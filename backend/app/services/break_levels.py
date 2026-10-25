@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-"""break_levels.py — 破位级别注册表（BreakStop v1 / P1）。
+"""break_levels.py — 结构位注册表（共享基础设施，2026-10-25 恢复）。
+
+⚠️ 这不是“旧止损策略”，是纯点位计算器：
+  · v3 `point_engine.compute_points()` 复用 `compute_levels()` / `_local_extrema()`；
+  · `wolf_stop_layer` 通过 `point_engine.key_levels()` 取当天关键位；
+  · 旧 `break_detector/break_policy/break_stop_service` 已删除，但本文件必须保留。
 
 纯函数模块：**只算事实，不做判断、不读库、不下单**。
-输入日线 bars（dict 或 tuple 均可）+ asof，输出类型化 level 列表，供 `break_detector` /
-`break_policy` / `break_stop_service` 消费。
+输入日线 bars（dict 或 tuple 均可）+ asof，输出类型化 level 列表。
 
 设计约束（来自 `docs/plan-breakdown-stop-loss.md` §3.3 与 `docs/ai-agent-lessons-from-b-rebound.md`）：
   · **PIT**：只用 `trade_date <= asof` 的 bar；asof 之后的数据一律不可见。
