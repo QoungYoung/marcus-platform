@@ -2172,6 +2172,13 @@ class TMonitor:
     def _check_defensive_t_reduce(self) -> None:
         """防御性减T(风险/结构驱动): wave只做T + (量能不足 或 滞涨) → 写 wolf_defensive_t_reduce 减T触发(08-27/09-01式)."""
         try:
+            # G2/G3 由 _check_defense_residual 统一做组合级减仓，避免同一票被两条腿各减一次
+            try:
+                from app.services import defense_cash as _dc_dt
+                if _dc_dt.current_level() >= 2:
+                    return
+            except Exception:
+                pass
             from app.services.wolf_t_rules import defensive_t_reduce_quote, defensive_t_reduce_sw
             conds = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
             active = {c.get('symbol') for c in conds if _is_wolf_t_condition(c)}
@@ -2912,6 +2919,11 @@ class TMonitor:
                     self._v3_log(_arec)
                     if not _ag.get("ok") or _ag.get("no_action"):
                         return
+                    # 2026-10-25：down-wave/关键位破位的 target 是**组合总仓**，
+                    # 不能按单票 plan_sell(15%)（那会把每票砍到 15%）。交给
+                    # _check_defense_residual 统一算组合残余；这里只记录/告警。
+                    if dec.action_type == "breakdown_reduce":
+                        return
                     _plan = _vp.plan_sell(symbol, quote, float(dec.target_pct or 0),
                                           account_id=T_MONITOR_ACCOUNT)
                     if not _plan.get("ok"):
@@ -2937,6 +2949,149 @@ class TMonitor:
                     print("[TMonitor][V3][LIVE] 异常(不卖) %s: %s" % (symbol, str(_e_live)[:160]), flush=True)
         except Exception as e:
             print("[TMonitor][V3] 异常(不卖) %s: %s" % (symbol, str(e)[:120]), flush=True)
+
+    def _check_defense_residual(self) -> None:
+        """G2/G3 组合级残余减仓 + 破位 symbol override（2026-10-25）。
+
+        关键口径：
+          · `defense_cash.target_pct` 是**组合总仓上限**，不是单票目标；
+          · 先执行 `symbol_overrides`（破位/清仓），再按 target/current 比例做残余；
+          · 用 `is_stop_loss=True` 绕过主升"不动"闸与底仓 floor（防御是止血动作）；
+          · 与 v3 / T 减仓共享 `_wolf_done`，同一票同一天不重复卖。
+        """
+        try:
+            if os.getenv("WOLF_DEFENSE_REDUCE", "1").strip() in ("0", "false", "no"):
+                return
+            from app.services import defense_cash as _dc
+            st = _dc.get_state()
+            lv = int(st.get("level_num") or 0)
+            if lv < 2:
+                return
+            now = datetime.now()
+            hm = now.strftime("%H%M")
+            # 只在早盘反抽窗口 / 尾盘窗口执行；13:00-14:30 另有 _stop_time_ok 兜底
+            if not ((str(os.getenv("WOLF_DEFENSE_AM_FROM", "0935")) <= hm <= str(os.getenv("WOLF_DEFENSE_AM_TO", "1030")))
+                    or hm >= str(os.getenv("WOLF_DEFENSE_PM_FROM", "1430"))):
+                return
+            ok, why = _stop_time_ok(now)
+            if not ok:
+                return
+            from app.services.t_gateway import get_sellable_ledger, gateway_execute
+            acct = POS_ACCOUNT
+            ledger = get_sellable_ledger(acct)
+            holds = [p for p in self._positions(acct) if float(p.get("volume") or 0) > 0]
+            if not holds:
+                return
+            pairs = [(p.get("symbol"), _normalize_symbol(p.get("symbol"))) for p in holds if p.get("symbol")]
+            quotes = self._fetch_quotes_concurrent([s for _, s in pairs])
+            vol_map = {p.get("symbol"): float(p.get("volume") or 0) for p in holds}
+            norm_to_raw = {sym: raw for raw, sym in pairs}
+            px = {}
+            exposure = 0.0
+            for raw, sym in pairs:
+                q = quotes.get(sym) or {}
+                cur = float(q.get("current") or 0)
+                vol = float(vol_map.get(raw) or 0)
+                if cur > 0 and vol > 0:
+                    px[raw] = cur
+                    exposure += cur * vol
+            if exposure <= 0:
+                return
+            try:
+                from sqlalchemy import text as _t_dc
+                from app.database import SessionLocal as _S_dc
+                with _S_dc() as _db_dc:
+                    cash = float(_db_dc.execute(_t_dc(
+                        "SELECT COALESCE(available_cash,0) FROM paper_account_info WHERE account_id=:a"),
+                        {"a": acct}).scalar() or 0)
+            except Exception as _e_cash:
+                # 现金取不到 ⇒ 权益不可信 ⇒ **不自动卖**（宁可不动，也不能把 15% 当成 15% 持仓）
+                print("[TMonitor][DEF] 现金取数失败，跳过本轮: %s" % str(_e_cash)[:100], flush=True)
+                return
+            equity = cash + exposure
+            target_pct = float(st.get("target_pct") or 0)
+            target_value = equity * target_pct / 100.0
+            if target_value <= 0 or exposure <= target_value * 1.01:
+                return
+
+            today = now.strftime("%Y%m%d")
+            # 只按本腿去重；v3 已卖的量会体现在 `_positions()` 的剩余持仓里，
+            # 不能再按 `_v3_done` 整票跳过（down-wave 的 breakdown_reduce 会先进 _v3_done）
+            done = lambda sym: (sym, "wolf_defense_reduce", today) in self._wolf_done
+            remaining = exposure
+            reason_base = "防御%s组合残余减仓：总仓%.1f%%→≤%.0f%%" % (
+                st.get("level"), exposure / equity * 100.0 if equity > 0 else 0.0, target_pct)
+            print("[TMonitor][DEF] %s｜当前%.0f/%.0f元｜override=%s" % (
+                reason_base, exposure, equity, st.get("symbol_overrides") or {}), flush=True)
+
+            # 1) 破位 override 先跑（单票按比例，0 = 清仓）
+            overrides = st.get("symbol_overrides") or {}
+            override_raws = set()
+            for k_sym, ratio in overrides.items():
+                raw = norm_to_raw.get(k_sym) or norm_to_raw.get(_normalize_symbol(k_sym))
+                if not raw or raw not in px:
+                    continue
+                override_raws.add(raw)
+                if done(raw):
+                    continue
+                sellable = int((ledger.get(raw) or ledger.get(_normalize_symbol(raw)) or {}).get("sellable") or 0)
+                if sellable < 100:
+                    continue
+                try:
+                    r = float(ratio)
+                except (TypeError, ValueError):
+                    r = 0.0
+                vol = sellable if r <= 0 else int(sellable * (1.0 - r)) // 100 * 100
+                if vol < 100:
+                    continue
+                _rs = "防御%s破位override→保留%.0f%%（%s）" % (
+                    st.get("level"), max(r, 0.0) * 100.0, reason_base)
+                gw = gateway_execute(raw, "sell", px[raw], vol, reason=_rs,
+                                     decision_source="rule", is_stop_loss=True, account_id=acct)
+                print("[TMonitor][DEF] override %s %d股@%.3f → %s" % (
+                    raw, vol, px[raw], gw.get("status")), flush=True)
+                if gw.get("status") == "success":
+                    self._wolf_done.add((raw, "wolf_defense_reduce", today))
+                    self._sold_this_round.add(raw)
+                    remaining -= vol * px[raw]
+                    try:
+                        self._after_sell(raw, acct, "defense_reduce", _rs)
+                    except Exception:
+                        pass
+            if remaining <= target_value * 1.01:
+                return
+
+            # 2) 残余：按 target/current 比例缩放每只票（等价于总仓压到 target）
+            scale = max(0.0, min(1.0, target_value / remaining))
+            for raw, sym in pairs:
+                if raw not in px or done(raw):
+                    continue
+                if raw in override_raws:
+                    continue
+                sellable = int((ledger.get(raw) or ledger.get(_normalize_symbol(raw)) or {}).get("sellable") or 0)
+                if sellable < 100:
+                    continue
+                keep = int(sellable * scale) // 100 * 100
+                vol = sellable - keep
+                if vol < 100:
+                    continue
+                _rs = "%s（单票保留%.0f%%）" % (reason_base, scale * 100.0)
+                gw = gateway_execute(raw, "sell", px[raw], vol, reason=_rs,
+                                     decision_source="rule", is_stop_loss=True, account_id=acct)
+                print("[TMonitor][DEF] 残余 %s %d股@%.3f → %s" % (
+                    raw, vol, px[raw], gw.get("status")), flush=True)
+                if gw.get("status") == "success":
+                    self._wolf_done.add((raw, "wolf_defense_reduce", today))
+                    self._sold_this_round.add(raw)
+                    remaining -= vol * px[raw]
+                    try:
+                        self._after_sell(raw, acct, "defense_reduce", _rs)
+                    except Exception:
+                        pass
+                if remaining <= target_value * 1.01:
+                    break
+        except Exception as e:
+            print("[TMonitor][DEF] 异常(不卖): %s" % str(e)[:160], flush=True)
 
     def _v3_precompute_positions(self) -> None:
         """14:50 预计算：只问一次，结果落盘，14:55 读缓存。"""
@@ -3307,6 +3462,12 @@ class TMonitor:
         try:
             if os.getenv("WOLF_POSITION_DISC", "1").strip() in ("0", "false", "no"):
                 return
+            try:
+                from app.services import defense_cash as _dc_pd
+                if _dc_pd.current_level() >= 2:
+                    return
+            except Exception:
+                pass
             _minp = int(os.getenv("WOLF_POSITION_DISC_MIN", "3"))
             pos_list = [p for p in self._positions() if float(p.get('volume') or 0) > 0]
             if len(pos_list) < _minp:
@@ -4826,6 +4987,8 @@ class TMonitor:
         regime_state = compute_regime()
         if STOP_V3:
             self._check_all_positions_v3()
+            # 2026-10-25：G2/G3 组合级残余减仓（破位 override 先跑，再按总仓目标减残余）
+            self._check_defense_residual()
 
         # 2) 当日有效条件（只读目标账户 + 只跑狼大做T表达式条件, 屏蔽其他做T）
         conditions = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
