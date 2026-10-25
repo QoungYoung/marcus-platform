@@ -26,15 +26,17 @@ def _patch(wave, systemic=0, flags=(), dd=None, segment=None):
         _wave=mock.Mock(return_value=wave),
         _systemic_level=mock.Mock(return_value=systemic),
         _macro_flags=mock.Mock(return_value=set(flags)),
+        _break_actions=mock.Mock(return_value=[]),
     ), dd, segment
 
 
 class DefenseCashTest(unittest.TestCase):
-    def _eval(self, wave, systemic=0, flags=(), dd=None, segment=None):
+    def _eval(self, wave, systemic=0, flags=(), dd=None, segment=None, break_actions=None):
         p, dd, segment = _patch(wave, systemic, flags, dd, segment)
         with p:
             DC._CACHE.update({"at": 0.0, "state": None})
-            return DC.evaluate(account_drawdown_pct=dd, segment=segment)
+            return DC.evaluate(account_drawdown_pct=dd, segment=segment,
+                               break_actions=(break_actions if break_actions is not None else []))
 
     def test_g3_systemic_2(self):
         st = self._eval({"operation": "defense", "level": "down"}, systemic=2)
@@ -70,6 +72,41 @@ class DefenseCashTest(unittest.TestCase):
         self.assertEqual(st["level"], "G0")
         self.assertEqual(st["target_pct"], 75.0)
         self.assertTrue(st["allow_add"])
+
+    def test_break_b33_is_g3_and_override_zero(self):
+        st = self._eval({"operation": "build", "level": "d3"},
+                        break_actions=[{"asof": "2026-10-25", "symbol": "SH600000",
+                                        "domain": "stock", "severity": "B3-3",
+                                        "action": "clear", "target_pct": 0.0,
+                                        "allow_zero": "1", "block_new_buy": "1",
+                                        "reason": "down-wave"}])
+        self.assertEqual(st["level"], "G3")
+        self.assertEqual(st["symbol_overrides"]["SH600000"], 0.0)
+        self.assertFalse(st["allow_new"])
+        self.assertTrue(any("破位B3-3" in r for r in st["reasons"]))
+
+    def test_break_b32_is_g2(self):
+        st = self._eval({"operation": "build", "level": "d3"},
+                        break_actions=[{"asof": "2026-10-25", "symbol": "000001.SH",
+                                        "domain": "index", "severity": "B3-2",
+                                        "action": "cap_30", "target_pct": 0.30,
+                                        "allow_zero": "0", "block_new_buy": "1",
+                                        "reason": "index deep break"}])
+        self.assertEqual(st["level"], "G2")
+        self.assertEqual(st["symbol_overrides"], {})
+
+    def test_break_b2_alert_vs_sell(self):
+        alert = self._eval({"operation": "build", "level": "d3"},
+                           break_actions=[{"symbol": "SH600000", "domain": "stock",
+                                           "severity": "B2", "action": "alert",
+                                           "target_pct": None}])
+        self.assertEqual(alert["level"], "G1")
+        sell = self._eval({"operation": "build", "level": "d3"},
+                          break_actions=[{"symbol": "SH600000", "domain": "stock",
+                                          "severity": "B2", "action": "reduce_half",
+                                          "target_pct": 0.50}])
+        self.assertEqual(sell["level"], "G2")
+        self.assertEqual(sell["symbol_overrides"]["SH600000"], 0.50)
 
     def test_drawdown_ladder(self):
         self.assertEqual(self._eval({"operation": "build"}, dd=5.1)["level"], "G1")
