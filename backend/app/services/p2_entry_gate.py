@@ -103,6 +103,18 @@ def p2_gate_check(symbol=None, ts_code=None):
     """返回 {hard_block, multiplier, reasons, wave, macro, systemic}。"""
     hard=_mode()
     out={"hard_block":False,"multiplier":1.0,"reasons":[],"wave":None,"macro":None,"systemic":None}
+    # 2026-10-25：G0-G3 统一仲裁（wave/systemic/macro 的最严组合）
+    try:
+        from app.services import defense_cash as _dc
+        _g=_dc.gate_for_entry()
+        if _g.get("hard_block"):
+            out["hard_block"]=True
+            out["reasons"].append("防御档%s: %s" % (_g.get("level"), "；".join((_g.get("reasons") or [])[:3])))
+        elif float(_g.get("multiplier") or 1.0) < 1.0:
+            out["multiplier"]=min(out["multiplier"], float(_g["multiplier"]))
+            out["reasons"].append("防御档%s: 降级×%.1f" % (_g.get("level"), float(_g["multiplier"])))
+    except Exception:
+        pass
     w=_wave_decision()
     out["wave"]=w
     if w and w["gate"] in ("defense","exit"):

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -17,6 +18,15 @@ def _cfg():
 
 class ThreeTierGateTest(unittest.TestCase):
     def setUp(self):
+        # 隔离 defense_cash：本文件测的是 P3 静态档位，不读生产 data/systemic_risk.json
+        _env = mock.patch.dict(os.environ, {"DEFENSE_CASH": "0"})
+        _env.start()
+        self.addCleanup(_env.stop)
+        try:
+            from app.services import defense_cash as _dc
+            _dc._CACHE.update({"at": 0.0, "state": None})
+        except Exception:
+            pass
         self.cfg = _cfg()
 
     def _call(self, op, intent, has_base=False, t_universe=False, rel_low=False, mainline=False):

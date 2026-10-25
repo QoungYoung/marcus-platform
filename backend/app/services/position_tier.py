@@ -167,6 +167,17 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
     cap = _cap_by_needs(rule.get("cap_pct"), needs, ctx) if rule.get("allow") else 0.0
     allowed = bool(rule.get("allow") and (not needs or cap > 0))
 
+    # 2026-10-25：G0-G3 覆盖（取最严）。G2 禁 new/add；G3 连 refill_base 也禁，只留 t_refill。
+    try:
+        from app.services import defense_cash as _dc
+        _def_lv = int(_dc.current_level() or 0)
+    except Exception:
+        _def_lv = 0
+    if _def_lv >= 3 and intent in ("new_base", "add_base", "refill_base"):
+        allowed, cap = False, 0.0
+    elif _def_lv >= 2 and intent in ("new_base", "add_base"):
+        allowed, cap = False, 0.0
+
     # 显示名：狼大的词是"底仓/T仓/现金"; 这里的档名(new_base/add_base/refill/t_refill/probe)
     # 是系统自造标识(语料 0 命中, 2026-09-11 复核), 故对外展示统一用中文业务名,
     # 并在 probe 上显式标注"自设档"以免被误当成狼大规则。
@@ -174,6 +185,10 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
                 "refill_base": "T资格回补", "t_refill": "T仓日内低吸",
                 "probe": "试探底仓(自设档,狼大无语料)"}
     reasons = []
+    if _def_lv >= 3 and intent in ("new_base", "add_base", "refill_base"):
+        reasons.append("G3 空仓/极低：禁新开/加仓/底仓回补（只留 T ≤5%%）")
+    elif _def_lv >= 2 and intent in ("new_base", "add_base"):
+        reasons.append("G2 防御：禁新开/加仓（人工例外不走 P3）")
     if allowed:
         reasons.append("P3档位%s: %s允许%s cap≤%s%%" % (op, op_cfg.get("base_mode"), intent, cap))
     else:
@@ -186,6 +201,10 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
         c2 = _cap_by_needs(r.get("cap_pct"), r.get("needs") or [], ctx) if r.get("allow") else 0.0
         if r.get("allow") and (not r.get("needs") or c2 > 0):
             allowed_actions.append(it)
+    if _def_lv >= 3:
+        allowed_actions = [x for x in allowed_actions if x == "t_refill"]
+    elif _def_lv >= 2:
+        allowed_actions = [x for x in allowed_actions if x not in ("new_base", "add_base")]
 
     return {
         "ts_code": ts_code or "",

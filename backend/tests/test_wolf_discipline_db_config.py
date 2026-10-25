@@ -24,7 +24,13 @@ from app.services import wolf_discipline as WD  # noqa: E402
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("WOLF_DISCIPLINE_CFG_DB", "0")      # 单测不打真库
+    monkeypatch.setenv("DEFENSE_CASH", "0")                # 隔离生产 data/systemic_risk.json
     monkeypatch.delenv("WOLF_DISCIPLINE_CFG_TTL", raising=False)
+    try:
+        from app.services import defense_cash as _dc
+        _dc._CACHE.update({"at": 0.0, "state": None})
+    except Exception:
+        pass
     WD._CFG_CACHE.update({"at": 0.0, "cfg": None, "src": ""})
     WD._CFG_DB_BREAK.update({"until": 0.0, "fails": 0, "warned": False})
     yield

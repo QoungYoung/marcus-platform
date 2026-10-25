@@ -250,7 +250,7 @@ defense_state:
 
 ### P1：影子仲裁（2 周）
 
-- 新增 `defense_cash.py`，只读现有信号，计算 `defense_state`。
+- ~~新增 `defense_cash.py`，只读现有信号，计算 `defense_state`。~~ **2026-10-25 已完成 v0 并直接接线（用户要求跳过影子）。**
 - **不改执行**：现有模块照旧，`defense_state` 只写库/推送。
 - 每天对比：`defense_state` vs 实际动作，记录分歧。
 - 目标：找出所有“状态说 G2、执行却在加仓”的链路。

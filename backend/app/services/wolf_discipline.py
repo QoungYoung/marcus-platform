@@ -403,6 +403,14 @@ def tier_target_pct(operation=None, cfg=None):
     c = (cfg or _cfg()).get("position_cap", {}) or {}
     if not c.get("tier_enabled", True):
         return None
+    # 2026-10-25：G0-G3 唯一仲裁优先；G1/G2/G3 直接覆盖 operation 分档
+    try:
+        from app.services import defense_cash as _dc
+        _t = _dc.current_target_pct()
+        if _t is not None:
+            return float(_t)
+    except Exception:
+        pass
     op = (operation or os.getenv("WOLF_POSITION_TIER_OP") or current_operation() or "").strip().lower()
     if not op:
         return None
@@ -418,6 +426,13 @@ def tier_floor_pct(operation=None, cfg=None):
     c = (cfg or _cfg()).get("position_cap", {}) or {}
     if not c.get("tier_enabled", True):
         return None
+    # 防御档（G1+）撤掉 build 的 55% 下限，避免“G2 目标30% 却提示仓位偏低”
+    try:
+        from app.services import defense_cash as _dc
+        if _dc.current_level() >= 1:
+            return 0.0
+    except Exception:
+        pass
     op = (operation or os.getenv("WOLF_POSITION_TIER_OP") or current_operation() or "").strip().lower()
     if not op:
         return None
@@ -538,6 +553,14 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
     pt = profit_take(portfolio, now, quotes=quotes)
     pc = position_cap(portfolio)
     parts = []
+    # 2026-10-25：防御档位 G0-G3 唯一仲裁（G0 时不输出，不打扰）
+    try:
+        from app.services import defense_cash as _dc
+        _dd = _dc.directive()
+        if _dd:
+            parts.append(_dd)
+    except Exception:
+        pass
     # A4 黄白线（2026-09-11）：日内强弱总开关 —— 他的用法是"看着黄白线决定今天做T的力度"
     try:
         from app.services.wolf_index_breadth import directive as _hb_dir

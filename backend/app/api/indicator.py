@@ -1310,6 +1310,13 @@ def _get_defense_cap():
     取不到 operation 时返回 None（不改变旧行为），避免在数据缺失时误压仓位。
     """
     try:
+        from app.services import defense_cash as _dc
+        _t = _dc.current_target_pct()
+        if _t is not None:
+            return float(_t)
+    except Exception:
+        pass
+    try:
         from app.services.wolf_discipline import current_operation
         op = str(current_operation() or "").strip().lower()
         return {"build": None, "t_only": 50.0, "side": 50.0,

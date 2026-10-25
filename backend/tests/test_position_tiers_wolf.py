@@ -40,6 +40,12 @@ def _clean_env(tmp_path, monkeypatch):
     # 配置已落库 + 有 TTL 缓存：单测必须①关掉 DB 读（本机无 PG，否则每例卡连接超时）
     # ②每次清缓存，否则上一个用例的配置会串到下一个（曾导致 3 个用例假失败）
     monkeypatch.setenv("WOLF_DISCIPLINE_CFG_DB", "0")
+    monkeypatch.setenv("DEFENSE_CASH", "0")   # 隔离生产 data/systemic_risk.json
+    try:
+        from app.services import defense_cash as _dc
+        _dc._CACHE.update({"at": 0.0, "state": None})
+    except Exception:
+        pass
     for k in ("WOLF_POSITION_TIER_OP", "P3_USE_TIER_TARGETS"):
         monkeypatch.delenv(k, raising=False)
     WD._CFG_CACHE.update({"at": 0.0, "cfg": None, "src": ""})

@@ -351,7 +351,7 @@ data_warnings: [...]
 | `backend/app/services/defense_facts.py` | 事实底稿：指数/板块/龙头/两融/账户/事件，统一 PIT 与单位 |
 | `jobs/defense_cash_1440.py` | 14:40 生成事实底稿 + 调 agent + 写预览 |
 | `jobs/defense_cash_eod.py` | 15:05 收盘确认 + 生成次日计划 |
-| `config/defense_cash.json` | 阈值/档位/开关（带语料出处；draft，不接线） |
+| `config/defense_cash.json` | 阈值/档位/开关（带语料出处；**v0 已接线**） |
 | `backend/tests/test_defense_cash.py` | 判例回归 + 纯函数单测 |
 
 > 不新建一堆平行规则；`defense_cash` 是**仲裁层（conductor）**，调用现有 `systemic_risk`、`wolf_top_signals`、`t_derisk`、`wolf_weekend_hedge`、`position_tier`、`wolf_discipline`，输出一个统一的 `defense_state`。
@@ -503,7 +503,7 @@ append-only；`asof_ts` + `stable_key`；回测用 `where asof_ts <= 回测时�
 
 | 阶段 | 内容 | 产物 | 回滚 |
 |---|---|---|---|
-| P0（1-2 天） | 纯函数 + 配置 + 判例单测；不接线 | `defense_cash.py` + tests | 无副作用 |
+| P0（已完成） | 纯函数 + 配置 + 判例单测 + **直接接线**（用户 2026-10-25 要求跳过影子） | `defense_cash.py` + tests | `DEFENSE_CASH=0` |
 | P1（2 周） | dry-run：14:40/15:05 写 PG + QQ 预览，不执行 | `defense_state` 只读报表 | `DEFENSE_MODE=0` |
 | P2（1 周） | 只拦新开：G2/G3 禁买，不减仓 | gate 生效 | env 关 |
 | P3（2 周） | 半自动减 T：生成计划，人工确认后执行 | `defense_orders` | 关执行开关 |
@@ -584,7 +584,7 @@ append-only；`asof_ts` + `stable_key`；回测用 `where asof_ts <= 回测时�
 ## 9. 一页执行清单
 
 - [ ] 修 `exit` 档 50% → 15-20%，`cash_floor` 跟随
-- [ ] 写 `defense_cash.py` 纯函数（四档 + 硬触发 + 桶级 + 减仓计划 + 校验）
+- [x] 写 `defense_cash.py` 纯函数（四档 + 硬触发 + 桶级 + 减仓计划 + 校验）v0
 - [ ] 写 `defense_facts.py` 事实底稿（PIT/单位/缺失标记）
 - [ ] 写判例单测（2022-04、2026-03、2026-09/10、8/3、8/12、2025-04-08）
 - [ ] 14:40 dry-run 任务 + QQ 预览（2 周）
