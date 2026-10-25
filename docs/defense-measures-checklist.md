@@ -24,8 +24,8 @@
 | **G3 空仓** | **0%（空仓）**；禁新开/加仓/底仓回补/T 回补 | 同上 | **当前生产档位** |
 | 取最严 | wave / systemic / macro / break / 回撤 取 max | `defense_cash.evaluate` | 生效 |
 | 段位闸门 | 4-3 筑底 + 无 G3 硬触发 → 封顶 G1 | 同上 | 生效 |
-| 破位映射 | B1/B4→G1、B2 alert→G1 / sell→G2、B3-1→G1、B3-2→G2、B3-3→G3 | `_break_level` | 生效（依赖 break_actions） |
-| 单票 override | 破位动作输出 `symbol_overrides` | `_break_override_target` | 生效（今日为空） |
+| ~~破位映射~~ | B1-B4 输入 defense_cash | `_break_level` | **已删；破位由 v3 处理** |
+| ~~单票 override~~ | — | `_break_override_target` | **已删** |
 
 ---
 
@@ -86,7 +86,7 @@
 | **板上减半** | 触及涨停 + 浮盈≥3% | 减半锁定 | `_check_board_half` | 生效（止盈，不是防御） |
 | **小赚兑现** | 浮盈≥3% | 减 T 半仓 | `_check_profit_take` | 生效（止盈） |
 | **结构/时间离场** | BOLL 中轨/上轨、被动止损、逻辑时间止损、破 VWAP 半仓、盘中 T 止损、埋伏纪律、斐波目标 | 对应减/清 | `t_monitor` 多条腿 | 生效（部分默认关） |
-| **break_stop 破位卡** | 上证/板块/个股破位 | 写 `break_events/break_actions` + QQ；**alert 不下单** | `break_stop_service` / `break_stop_1450` | 任务 **默认 disabled** |
+| ~~break_stop 破位卡~~ | — | — | `break_stop_service` | **已删；v3 现场算** |
 | ~~t_derisk 暴跌应对~~ | — | — | — | **已删除** |
 | **t_chop_guard 阴跌中段** | 指数未破位但阴跌 | 加仓闸/仓位区间 | `t_chop_guard` | 默认关（`WOLF_CHOP_GUARD=0`） |
 
@@ -162,7 +162,6 @@
 {
   "level": "G3",
   "target_pct": 15.0,
-  "symbol_overrides": {},
   "allow_new": false,
   "reasons": [
     "systemic_risk level=2（大光破位/彻底止盈）",
@@ -174,15 +173,13 @@
 
 - `stock` 账户：持仓 2,376 元 / 现金 249,093 元 / 总资产 251,469 元 → **仓位 0.97%**；G3=0%，空仓目标，但**没有残余执行腿**（已删）。
 - `check-entry-filters`：`hard_block=True`，新开/加仓/底仓回补全部拦。
-- `break_actions` 今日无个股动作 → `symbol_overrides={}`。
+- `break_actions`/`symbol_overrides` 已从 defense_cash 删除，破位由 v3 处理。
 - 周末 65% 规则**未开启**（默认 0）；50% 的简单周末降仓仍在 prompt/trade_graph 生效。
 
 ---
 
 ## 10. 已知缺口（下一步）
 
-1. **break_stop_1450 未启用**：`break_actions` 没有每日数据，`symbol_overrides` 长期为空。建议先以 alert 模式启用。
-3. **指数破位未直接进 defense_cash**：靠 wave/systemic 间接覆盖；`break_policy` 的 B3-1/B3-2 已有，但需要写进 break_actions。
 4. **黄金坑账户不覆盖**：防御残余只作用于 `stock`；`golden_pit` 是独立 DCA，不在链路。
 6. **risk_manager 仓位缩放已删除**：只保留模型重训 emergency_check。
 7. **v3 测试陈旧**：`test_stop_*` / `test_t_monitor_v3` 仍引用已删除的 `break_levels`/`wolf_boll_levels`。

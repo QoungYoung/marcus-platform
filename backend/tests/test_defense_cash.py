@@ -4,7 +4,6 @@
 口径：
   · G3 = 0%（下跌趋势不做）；G2 = 30%；G1 = 50%；G0 不设总仓上限
   · 4-3 筑底 + 无 G3 → 封顶 G1
-  · 破位 B1-B4 → G1-G3 + symbol_overrides
   · 账户回撤/15% 折中已删除，不再测试
 """
 import os
@@ -25,17 +24,15 @@ def _patch(wave, systemic=0, flags=()):
         _wave=mock.Mock(return_value=wave),
         _systemic_level=mock.Mock(return_value=systemic),
         _macro_flags=mock.Mock(return_value=set(flags)),
-        _break_actions=mock.Mock(return_value=[]),
     )
 
 
 class DefenseCashTest(unittest.TestCase):
-    def _eval(self, wave, systemic=0, flags=(), segment=None, break_actions=None):
+    def _eval(self, wave, systemic=0, flags=(), segment=None):
         p = _patch(wave, systemic, flags)
         with p:
             DC._CACHE.update({"at": 0.0, "state": None})
-            return DC.evaluate(segment=segment,
-                               break_actions=(break_actions if break_actions is not None else []))
+            return DC.evaluate(segment=segment)
 
     def test_g3_systemic_2(self):
         st = self._eval({"operation": "defense", "level": "down"}, systemic=2)
@@ -71,42 +68,6 @@ class DefenseCashTest(unittest.TestCase):
         self.assertEqual(st["level"], "G0")
         self.assertIsNone(st["target_pct"])
         self.assertTrue(st["allow_add"])
-
-    def test_break_b33_is_g3_and_override_zero(self):
-        st = self._eval({"operation": "build", "level": "d3"},
-                        break_actions=[{"asof": "2026-10-25", "symbol": "SH600000",
-                                        "domain": "stock", "severity": "B3-3",
-                                        "action": "clear", "target_pct": 0.0,
-                                        "allow_zero": "1", "block_new_buy": "1",
-                                        "reason": "down-wave"}])
-        self.assertEqual(st["level"], "G3")
-        self.assertEqual(st["symbol_overrides"]["SH600000"], 0.0)
-        self.assertFalse(st["allow_new"])
-        self.assertTrue(any("破位B3-3" in r for r in st["reasons"]))
-
-    def test_break_b32_is_g2(self):
-        st = self._eval({"operation": "build", "level": "d3"},
-                        break_actions=[{"asof": "2026-10-25", "symbol": "000001.SH",
-                                        "domain": "index", "severity": "B3-2",
-                                        "action": "cap_30", "target_pct": 0.30,
-                                        "allow_zero": "0", "block_new_buy": "1",
-                                        "reason": "index deep break"}])
-        self.assertEqual(st["level"], "G2")
-        self.assertEqual(st["symbol_overrides"], {})
-
-    def test_break_b2_alert_vs_sell(self):
-        alert = self._eval({"operation": "build", "level": "d3"},
-                           break_actions=[{"symbol": "SH600000", "domain": "stock",
-                                           "severity": "B2", "action": "alert",
-                                           "target_pct": None}])
-        self.assertEqual(alert["level"], "G1")
-        sell = self._eval({"operation": "build", "level": "d3"},
-                          break_actions=[{"symbol": "SH600000", "domain": "stock",
-                                          "severity": "B2", "action": "reduce_half",
-                                          "target_pct": 0.50}])
-        self.assertEqual(sell["level"], "G2")
-        self.assertEqual(sell["symbol_overrides"]["SH600000"], 0.50)
-
 
 class GateIntegrationTest(unittest.TestCase):
     def test_p3_g3_blocks_all_intents(self):
