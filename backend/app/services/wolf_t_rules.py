@@ -1,0 +1,235 @@
+# -*- coding: utf-8 -*-
+"""wolf_t_rules.py — 做T规则向狼大看齐(2026-09-03)
+① 正T买点(**代码实际口径**, 见 `zheng_t_buy_quote` / `zheng_t_buy`):
+     (日内回撤≥2.5% **或** 触前低) **∧** 温和缩量 **∧** 振幅≥3.0% → 低吸T仓
+   语料依据(逐条): 触前低 = 2025-03-06「挂前一天的低点 能买进去就做正T 买不进去证明涨了 不用动」;
+     缩量 = 2025-04-07「放量的 等一下 我要等个分时缩量才能抄」、2026-01-12「低开 缩量 急跳水 拉回平盘附近
+     …这种就是可以打进去了」; 振幅≥3.0% 是**自设代理**(替他口述的"急杀/急跳水")。
+   ⚠️ **口径订正(2026-09-21 语料复核)**: **"站回黄线"不是他的买点条件**, 本文件旧 docstring 属误标。
+     他的"黄线"原话只有两处用法: ①「黄线上穿白线」= 指数层做T成功率(2025-04-09/04-29「缩量 黄线上穿白线
+     成功率打大」); ②「跌破黄线直接走」= **持有/卖出**判据(2026-08-04「就是日均线那条黄线, 一旦突发跌破直接走」)。
+     且我们已离线验过把"站回均价"加到低吸买点上: 触发数不变、当日 +1.62%→+0.93%、次日 +1.28%→+0.57%
+     (PROJECT_MEMORY.md「已证伪的附加过滤」条) ⇒ **买点不设此条件**。
+   纪律: 只做T、保留底仓、目标 3-5 点(`roundtrip_sell` 默认 3%=语料下沿)、无底仓无T资格(`wolf_t_base_gate`)。
+② 倒T卖点: 高位(近5日累计涨幅≥10%或接近前高) + 放量滞涨(冲高回落/缩量滞涨) → 先卖后买
+返回 signals + 纪律块, 供 TMonitor/交易agent 使用。
+"""
+import os, json
+
+def _sort(bars): return sorted(bars, key=lambda x: str(x.get('time') or x.get('trade_time')))
+
+def day_stats(bars):
+    bs=_sort(bars)
+    if not bs: return None
+    return {'high': max(float(b['high']) for b in bs), 'low': min(float(b['low']) for b in bs),
+            'close': float(bs[-1]['close']), 'vol': sum(float(b.get('vol') or 0) for b in bs),
+            'cum_vwap': (sum(float(b.get('amount') or 0) for b in bs)/sum(float(b.get('vol') or 0) for b in bs)) if sum(float(b.get('vol') or 0) for b in bs)>0 else 0,
+            'last': str(bs[-1].get('time') or '')}
+
+def zheng_t_buy(bars, prev_days, cfg=None):
+    """正T低吸(实际口径): (日内回撤≥2.5% 或 触前低) ∧ 温和缩量(vol≤前5日均量×0.9) ∧ 振幅≥3.0%。
+    注: 本函数**不判**"站回黄线" —— 详见模块头 2026-09-21 口径订正。"""
+    st=day_stats(bars)
+    if not st: return False, 'no_bars'
+    if len(prev_days)<1: return False, 'no_prev'
+    dd=(st['low']/st['high']-1)*100 if st['high']>0 else 0
+    prev_low=min(day_stats(p)['low'] for p in prev_days[:5]) if prev_days else 0
+    hit_dd = dd <= -2.5
+    hit_prev_low = bool(prev_low and st['low'] <= prev_low*1.005)
+    # 缩量: 当日量 vs 前5日均量
+    prev_vols=[day_stats(p)['vol'] for p in prev_days[:5]] if prev_days else []
+    avg_vol=sum(prev_vols)/len(prev_vols) if prev_vols else 0
+    shrink = avg_vol>0 and st['vol'] <= avg_vol*0.9   # 狼大"温和缩量"(非固定0.7)
+    prev_closes=[day_stats(p)['close'] for p in prev_days[:5]]
+    # 狼大正T=日内/标的-2.5%或触前低 + 温和缩量 → 低吸(买在低点, 不要求收盘回补/不破位)
+    amp=(st['high']/st['low']-1)*100 if st['low']>0 else 0
+    ok = (hit_dd or hit_prev_low) and shrink and amp>=3.0
+    reason='日内回撤%.1f%%%s 缩量vr=%.2f 振幅%.1f%%' % (dd, ('/触前低' if hit_prev_low else ''), (st['vol']/avg_vol if avg_vol else 0), amp)
+    return bool(ok), reason
+
+def dao_t_sell(bars, prev_days, cfg=None):
+    """倒T卖点(高位缩转放先卖后买): 近5日累计涨幅≥10% 且 当日放量滞涨(冲高回落/收<前高)。"""
+    st=day_stats(bars)
+    if not st or len(prev_days)<5: return False, 'no_bars'
+    pcls=[day_stats(p)['close'] for p in prev_days[:5]]
+    start=pcls[0]
+    gain=(st['close']/start-1)*100 if start else 0
+    prev_high=max(day_stats(p)['high'] for p in prev_days[:5])
+    high_pos = gain>=10.0 or st['close']>=prev_high*0.97
+    # 放量滞涨: 当日放量(>前5日均量*1.3) 且 收盘<日内最高(冲高回落)
+    pvols=[day_stats(p)['vol'] for p in prev_days[:5]]
+    avg_vol=sum(pvols)/len(pvols) if pvols else 0
+    vol_up = avg_vol>0 and st['vol']>=avg_vol*1.3
+    fade = st['close'] < st['high']*0.995
+    ok = high_pos and vol_up and fade
+    reason='近5日gain=%.1f%% 接近前高=%s 放量=%s 冲高回落=%s' % (gain, st['close']>=prev_high*0.97, vol_up, fade)
+    return bool(ok), reason
+
+def zheng_t_buy_quote(quote, prev_days):
+    """基于实时 quote(当日 high/low/current/vol) + 前5日日线 做正T:
+    日内回撤>=3% 或 触前低 + 温和缩量(vol<=前5日均量*0.9) -> 低吸候选。"""
+    try:
+        current=float(quote.get('current') or 0); high=float(quote.get('high') or 0)
+        low=float(quote.get('low') or 0); vol=float(quote.get('vol') or 0)*100.0   # 腾讯qt vol=手 → 股(与recent_sync单位一致)
+    except Exception:
+        return False, 'no_quote'
+    if high<=0 or current<=0: return False, 'no_quote'
+    dd=(low/high-1)*100
+    prev_low=min([p.get('low') for p in prev_days if p.get('low')], default=0)
+    hit_dd = dd <= -2.5
+    hit_prev = bool(prev_low and low <= prev_low*1.005)
+    pvols=[p.get('vol') for p in prev_days if p.get('vol')]
+    avg_vol=sum(pvols)/len(pvols) if pvols else 0
+    # ★ 2026-10-15 ✓（用户「改」）：**量比分母做"同时段伸缩"** ✓ —— 照搬系统自己卖出侧的口径 ✓
+    #   病灶 ✗（实测 t68 全窗）：`shrink` 拿**当日累计量**比**前5日全天均量** ⇒ 早盘（09:45-10:00 ✓）
+    #     恒成立 ✓，而午后允许时段（14:00-14:30 ✓）**恒不成立** ✗；偏偏"日内回撤≥2.5%/触前低"又
+    #     几乎只在午后成立 ✓ ⇒ 两个允许时段**不可能同时满足** ⇒ **正T买腿（T回）永远发不出来** ✓
+    #     （实测：t68 全窗 `wolf_zheng_t_buy` **0 条** ✗，而 603986 于 0115 被确认制T出卖了 100 股 ✓）
+    #   卖出侧同一 bug 早已修 ✓：`defensive_t_reduce_quote` 注释 §9.862「旧口径把当日累计量直接比前5日
+    #     全天均量 ✗ ⇒ 开盘时必然'量能不足'（恒真✓）⇒ **量比先做时段伸缩**」✓ —— 买入侧一直没修 ✗。
+    #   口径 ✓：`avg_vol_eff = 前5日全天均量 × (已开盘分钟数 / 240)` ✓（用本模块现成的
+    #     `_session_open_minutes()` ✓，与卖出侧同一函数 ✓）。
+    #   开关 `WOLF_T_BUY_VOL_SCALE`（**库内默认 0 ⇒ 逐字不变** ✓）
+    _vol_scale = 1.0
+    try:
+        if os.getenv("WOLF_T_BUY_VOL_SCALE", "0").strip().lower() in ("1", "true", "yes", "on"):
+            _open_min = float(_session_open_minutes() or 0)
+            if _open_min > 0:
+                _vol_scale = max(1.0 / 240.0, min(1.0, _open_min / 240.0))
+    except Exception:
+        _vol_scale = 1.0
+    _avg_vol_eff = avg_vol * _vol_scale
+    shrink = _avg_vol_eff>0 and vol <= _avg_vol_eff*0.9
+    amp=(high/low-1)*100 if low>0 else 0
+    ok=(hit_dd or hit_prev) and shrink and amp>=3.0
+    return bool(ok), '日内回撤%.1f%%%s 量比%.2f 振幅%.1f%%' % (dd, ('/触前低' if hit_prev else ''), (vol/avg_vol if avg_vol else 0), amp)
+
+
+def _session_open_minutes(now=None):
+    """当日**已开盘的连续交易分钟**（240 分钟制 ✓，与 `t_monitor.calc_volume_ratio_at` 同口径 ✓）。"""
+    try:
+        import datetime as _d
+        n = now or _d.datetime.now()
+        hm = n.hour * 100 + n.minute
+        if 930 <= hm <= 1130:
+            return (n.hour - 9) * 60 + n.minute - 30
+        if 1300 <= hm <= 1500:
+            return 120 + (n.hour - 13) * 60 + n.minute
+    except Exception:
+        return 0
+    return 0
+
+
+def defensive_t_reduce_quote(quote, prev_days, wave_op='t_only'):
+    """防御性减T(风险/结构驱动, 狼大08-27/09-01): wave∈只做T/末段 且 高位(接近前高/近5日大涨)
+    且 (量能不足 或 滞涨(冲高回落)) → 减已持T仓.
+    v16加"高位看量价"位置门(狼大09-01高低位): 仅位置高位才判缩量滞涨为顶部→减T;
+    中段缩量滞涨=洗盘不触发, 避免过度防御(药明非高位被误减T)."""
+    if wave_op not in ('t_only','side','defense','exit'):
+        return False, 'wave allow build'
+    try:
+        current=float(quote.get('current') or 0); high=float(quote.get('high') or 0)
+        vol=float(quote.get('vol') or 0)*100.0
+    except Exception:
+        return False, 'no_quote'
+    pvols=[p.get('vol') for p in prev_days if p.get('vol')]
+    avg=sum(pvols)/len(pvols) if pvols else 0
+    # ★ §9.862 ✓（2026-10-14 用户「买入卖出过于频繁…排查原因」✓）：量比**先做时段伸缩** ✗
+    #   旧口径把**当日累计量**直接比**前 5 日全天均量** ✗ ⇒ 开盘时必然"量能不足" ✗（恒真 ✓）
+    #   实测 ✓：05-13 09:35 东材这条触发 —— 规则自认 `vr=0.07`（缩量 ✗），而**同一条触发**的
+    #     snapshot 里引擎口径量比 = **3.408**（放量 ✗）；AI 的卖出理由也写"放量破位" ✓
+    #     ⇒ 同一时刻两个口径互相矛盾 ✓，以**引擎同口径**为准 ✓（换手 × 240/已开盘分钟 ÷ 基准 ✓）
+    vol_eff = vol * (240.0 / _session_open_minutes()) if _session_open_minutes() else vol
+    vol_low = avg>0 and vol_eff <= avg*0.8
+    fade = high>0 and current < high*0.99
+    # 高位门(狼大"接近前高/创高/大涨后短时顶"), 与 dao_t_sell 同口径
+    pcloses=[p.get('close') for p in prev_days if p.get('close')]
+    prev_high=max([p.get('high') for p in prev_days if p.get('high')], default=0)
+    start=pcloses[0] if pcloses else 0
+    gain=(current/start-1)*100 if start else 0
+    high_pos = gain>=10.0 or (prev_high and high>=prev_high*0.97)
+    ok = high_pos and vol_low and fade
+    return bool(ok), '高位(近5日gain=%.1f%% 接近前高=%s) 量能不足(vr=%.2f 时段伸缩 ✓；原始累计口径=%.2f) 滞涨(收/高=%.2f)' % (
+        gain, (prev_high and high>=prev_high*0.97), (vol_eff/avg if avg else 0),
+        (vol/avg if avg else 0), (current/high if high else 0))
+
+
+def dao_t_sell_quote(quote, prev_days):
+    """基于实时 quote 做倒T: 高位(近5日涨幅>=10% 或 接近前高) + 放量滞涨(current<high*0.995)。"""
+    try:
+        current=float(quote.get('current') or 0); high=float(quote.get('high') or 0)
+        vol=float(quote.get('vol') or 0)*100.0   # 手→股
+    except Exception:
+        return False, 'no_quote'
+    if high<=0 or current<=0: return False, 'no_quote'
+    pcloses=[p.get('close') for p in prev_days if p.get('close')]
+    prev_high=max([p.get('high') for p in prev_days if p.get('high')], default=0)
+    gain=(current/prev_days[-1]['close']-1)*100 if prev_days and prev_days[-1].get('close') else 0
+    high_pos = gain>=10.0 or (prev_high and current>=prev_high*0.97)
+    pvols=[p.get('vol') for p in prev_days if p.get('vol')]
+    avg_vol=sum(pvols)/len(pvols) if pvols else 0
+    vol_up = avg_vol>0 and vol>=avg_vol*1.3
+    fade = current < high*0.995
+    ok = high_pos and vol_up and fade
+    return bool(ok), '近5日gain=%.1f%% 接近前高=%s 放量=%s 冲高回落=%s' % (gain, (prev_high and current>=prev_high*0.97), vol_up, fade)
+
+
+def t_sell_confirmed(bars, buy_idx, look=5, vol_dry=0.8, up=1.005):
+    """确认制分时T出(只用已知bar, 与外推未来无关): 买后高点 -> 停量(后look均量<高前0.8)
+    -> 二次拉升(已知bar)不过前高(<=前高*1.005) -> 在确认bar卖(接受从高点回撤)."""
+    if buy_idx is None or buy_idx+look+2 >= len(bars): return None
+    closes=[float(b['close']) for b in bars]; vols=[float(b.get('vol') or 0) for b in bars]
+    buy=closes[buy_idx]
+    if buy<=0: return None
+    hi=closes[buy_idx+1]; hi_idx=buy_idx+1
+    for j in range(buy_idx+2, len(bars)):
+        if closes[j]>hi: hi=closes[j]; hi_idx=j
+        if j>=hi_idx+2:
+            va=sum(vols[j-look:j+1])/look if j>=look else 0
+            vb=sum(vols[hi_idx-look:hi_idx])/look if hi_idx>=look else 0
+            dry = vb>0 and va < vb*vol_dry
+            not_break = closes[j] < hi*up
+            above_buy = closes[j] > buy*1.005
+            second_tried = any(closes[k]>=hi*0.98 for k in range(hi_idx+1, j+1))
+            if dry and not_break and above_buy and second_tried:
+                return {'sell':round(closes[j],3),'sell_time':str(bars[j].get('time') or '')[:16],
+                        'hi':round(hi,3),'pnl':round((closes[j]/buy-1)*100,2)}
+    return None
+
+
+def t_cycle_pnl(bars, thr=2.5):
+    """做T闭环收益(执行版, 与狼大一致): 正T买@触-{thr}%低吸点 -> 确认制分时T出(停量+二次不过前高, 仅用已知bar).
+    未确认→按收盘离场兜底; 返回 {buy, buy_time, sell, sell_time, pnl(确认或收盘), pnl_dayhigh(参考), confirm}."""
+    bs=_sort(bars)
+    if len(bs)<6: return None
+    hi=max(float(b['high']) for b in bs)
+    run_low=10**18; buy=None; buy_idx=None
+    for i,b in enumerate(bs):
+        run_low=min(run_low, float(b['low']))
+        if hi>0 and (run_low/hi-1)*100 <= -thr:
+            buy=float(b['low']); buy_idx=i; break
+    if buy is None or buy<=0: return None
+    res=t_sell_confirmed(bs, buy_idx)
+    if res:
+        return {'buy':round(buy,3),'buy_time':str(bs[buy_idx].get('time') or '')[:16],
+                'sell':res['sell'],'sell_time':res['sell_time'],'pnl':res['pnl'],
+                'pnl_dayhigh':round((hi/buy-1)*100,2),'confirm':True}
+    return {'buy':round(buy,3),'buy_time':str(bs[buy_idx].get('time') or '')[:16],
+            'sell':None,'sell_time':None,'pnl':None,
+            'pnl_dayhigh':round((hi/buy-1)*100,2),'confirm':False,'note':'未确认→黄线/持有至次日/周五减T仓(非强制日结)'}
+
+
+def discipline_context():
+    """正T/倒T 纪律块. """
+    return ("## 做T纪律(向狼大看齐)\n"
+            "- 正T买点=标的/板块日内回撤≥2.5% 或 触前低 + 缩量 + 站回黄线(VWAP/前日MA5) → 低吸T仓\n"
+            "- 只做T、不追主升；T仓与底仓分离，底仓不卖；无底仓无T资格\n"
+            "- T出目标 3-5 点；分时T出(放量→高点→停量→二次不过前高) / 黄线跌破离场\n"
+            "- 倒T=高位(近5日涨幅≥10%或接近前高)+放量滞涨(冲高回落)→先卖后买\n")
+# ── P2-7(2026-09-10): 以下原为错拼在本文件内的第二/三份模块, 已拆到 wolf_index_context.py。
+# 此处**保留同名再导出**以兼容既有 import 路径(如 t_monitor / smoke_sw_defensive 等);
+# 定义只有一处, 不要在别处复制实现。
+from app.services.wolf_index_context import (  # noqa: F401,E402
+    benchmark_index, _dh_get, _index_members, resolve_stock_index,
+    defensive_t_reduce_index, resolve_sw_sector, _sw_daily_high, defensive_t_reduce_sw,
+)

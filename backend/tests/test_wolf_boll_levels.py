@@ -171,7 +171,7 @@ class TestWiring:
                   "app.services.wolf_theme_resilience", "app.services.wolf_index_futures",
                   "app.services.wolf_profit_cushion"):
             monkeypatch.setattr(importlib.import_module(m), "directive", lambda *a, **k: "")
-        for n in ("weekend_de_risk", "board_half", "profit_take", "position_cap"):
+        for n in ("board_half", "profit_take", "position_cap"):
             monkeypatch.setattr(WD, n, lambda *a, **k: {"active": False, "enabled": False,
                                                         "directive": "", "active_sells": []})
         import json
