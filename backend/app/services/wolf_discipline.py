@@ -167,8 +167,6 @@ def _cfg():
     DB 不可用 → 用缓存/文件（fail-open，不抛、不改变配置语义）。
     """
     default = {
-        "weekend_de_risk": {"enabled": True, "th_ratio": 0.5, "reduce_to": 0.5,
-                            "windows": ["late_morning", "afternoon", "closing"]},
         "board_half": {"enabled": True, "min_float_pct": 3.0,
                        "board_threshold_pct": 9.5, "board_threshold_20": 19.5},
         # ③ 小赚兑现(2026-09-10 P0-3): 浮盈>=min_float_pct → 减 reduce_ratio 锁定。
@@ -190,11 +188,11 @@ def _cfg():
         #   不是上限规则**, 且与"主升趋势就75%以上…盘中满仓滚动"直接冲突 → 置 0=不再额外限制, 由分档取代。
         # 系统自设项(单票/集中度/底仓T仓结构上限)默认一律 0=不启用, 不冒充狼大规则。
         "position_cap": {"enabled": True, "tier_enabled": True,
-                         "tier_targets": {"build": 75.0, "t_only": 50.0, "side": 50.0,
-                                          "defense": 30.0, "exit": 15.0},
+                         "tier_targets": {"t_only": 50.0, "side": 50.0,
+                                          "defense": 30.0, "exit": 0.0},
                          # 下限**只挂 build 档**：原话带"这个位置"限定且他当时明确看多；
                          # 若也挂 t_only/side 会与"调整就50%"的目标(50%)数学互斥(55>50) → 自相矛盾。
-                         "tier_floor": {"build": 55.0, "t_only": 0.0, "side": 0.0,
+                         "tier_floor": {"t_only": 0.0, "side": 0.0,
                                         "defense": 0.0, "exit": 0.0},
                          "total_max_pct": 0.0,
                          "single_max_pct": 0.0, "top3_max_pct": 0.0,
@@ -228,32 +226,6 @@ def _portfolio(portfolio):
         except Exception:
             return None
     return portfolio
-
-def weekend_de_risk(portfolio, now, window=None, cfg=None):
-    """周五 + 指定窗口 + 仓位占比>=th_ratio → active。
-    返回 {active, ratio, threshold, reduce_to, reason, directive}。"""
-    cfg = cfg or _cfg(); w = cfg.get("weekend_de_risk", {})
-    if not w.get("enabled"):
-        return {"active": False, "reason": "rule_disabled"}
-    if now.weekday() != 4:
-        return {"active": False, "reason": "not_friday"}
-    if window and window not in (w.get("windows") or []):
-        return {"active": False, "reason": "window_not_match"}
-    pos = _portfolio(portfolio)
-    if not pos:
-        return {"active": False, "reason": "no_portfolio"}
-    cash = float(pos.get("cash") or 0)
-    total = float(pos.get("total_asset_market") or pos.get("total_asset") or 0)
-    if total <= 0:
-        return {"active": False, "reason": "no_asset"}
-    ratio = (total - cash) / total
-    th = float(w.get("th_ratio") or 0.5)
-    active = ratio >= th
-    return {"active": active, "ratio": round(ratio, 3), "threshold": th,
-            "reduce_to": w.get("reduce_to", 0.5),
-            "reason": "周五+仓位%.1f%%>=%.1f%%" % (ratio * 100, th * 100) if active else "仓位未达阈值",
-            "directive": ("⚠️ 周末降仓：今日周五，仓位%.1f%%≥阈值%.1f%%。请于尾盘前将 T 仓(持仓-100的T部分)降低约一半，"
-                          "保留底仓不卖，目标总仓位≤%.0f%%。不得新开仓/加仓。" % (ratio * 100, th * 100, w.get("reduce_to", 0.5) * 100)) if active else ""}
 
 def board_half(portfolio, now, cfg=None, quotes=None):
     """板上减半: 对每个持仓判断是否接近涨停且浮盈达标。
@@ -461,7 +433,7 @@ def position_cap(portfolio, cfg=None, operation=None):
     **狼大无原话、属系统自设**（默认 0 = 不启用）：`single_max_pct` / `top3_max_pct` / `base_max_pct` / `t_max_pct`
       （2026-04-14「50%的底仓 30%左右做日内…剩下20%」是他**本人的持仓结构描述**, 不是规则 → 默认关）。
 
-    口径与 weekend_de_risk 一致: 持仓占比 = (总资产 − 现金) / 总资产。
+    口径: 持仓占比 = (总资产 − 现金) / 总资产。
     本函数只**判定并给出建议**, 不直接下单、不做硬拦（是否拦截由调用方决定）；
     硬拦侧的同源口径在 `position_tier`（P3 现金底线 = 100 − 本表目标）。
     """
@@ -500,7 +472,8 @@ def position_cap(portfolio, cfg=None, operation=None):
     except Exception as _ce:
         print(f"[wolf_discipline] 利润垫判定异常(忽略): {str(_ce)[:70]}")
     reasons = []
-    if tot_max > 0 and ratio > tot_max:
+    # G3 目标=0 也要拦；G0 无分档目标(_tgt=None)且 total_max=0 才是“不设上限”
+    if (_tgt is not None or tot_max > 0) and ratio > tot_max:
         reasons.append("总仓位%.1f%% > %s目标%.0f%%" % (ratio, _src, tot_max))
 
     # 系统自设项: 仅当配置 >0 才计算(默认不启用, 避免冒充狼大规则)
@@ -546,9 +519,8 @@ def position_cap(portfolio, cfg=None, operation=None):
 
 
 def discipline_context(portfolio=None, now=None, window=None, quotes=None):
-    """返回注入 prompt 的纪律规则上下文块(周末降仓 + 板上减半 + 小赚兑现 + 仓位纪律 + 黄白线)。"""
+    """返回注入 prompt 的纪律规则上下文块(板上减半 + 小赚兑现 + 仓位纪律 + 黄白线)。"""
     now = now or __import__("datetime").datetime.now()
-    wd = weekend_de_risk(portfolio, now, window=window)
     bh = board_half(portfolio, now, quotes=quotes)
     pt = profit_take(portfolio, now, quotes=quotes)
     pc = position_cap(portfolio)
@@ -696,8 +668,7 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
         except Exception:
             print("[silent:wolf_discipline.py:598] %s: %s" % (type(_e_sil14).__name__, str(_e_sil14)[:110]), flush=True)
     # G9 周末/长假前避险（2026-09-12）：他 2026-08-21 14:20「2点半 如果还是缩量 还是不拉升
-    # 我会先把这两天T进去的仓位出来一半…65%仓位过周末」——注意与既有 weekend_de_risk 的区别：
-    # 后者只看"周五+仓位阈值"，本模块补上他原话里的**缩量 ∧ 未拉升**两个前提
+    # 我会先把这两天T进去的仓位出来一半…65%仓位过周末」——本模块补上他原话里的**缩量 ∧ 未拉升**两个前提
     try:
         from app.services.wolf_weekend_hedge import directive as _wh_dir
         _dwh = _wh_dir()
@@ -711,16 +682,6 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             print("[silent:wolf_discipline.py:608] %s: %s" % (type(_e_sil15).__name__, str(_e_sil15)[:110]), flush=True)
     if pc.get("directive"):
         parts.append(pc["directive"])
-    # 2026-10-25 拍板：周末避险 65% 是唯一目标；只有“缩量+不拉升”条件成立时才走 G9 的 65%，
-    # 未成立时 weekend_de_risk 的 50% 只作保守回退，不能和 65% 同时注入。
-    _wh_active = False
-    try:
-        from app.services import wolf_weekend_hedge as _wh
-        _wh_active = bool((_wh.load() or {}).get("active"))
-    except Exception:
-        _wh_active = False
-    if wd.get("active") and not _wh_active:
-        parts.append(wd["directive"])
     if bh.get("enabled") and bh.get("directive"):
         parts.append(bh["directive"])
     if pt.get("enabled") and pt.get("directive"):

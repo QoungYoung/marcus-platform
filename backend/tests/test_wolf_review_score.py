@@ -195,7 +195,7 @@ class TestWiredIntoContext:
         for m in ("app.services.wolf_index_breadth", "app.services.wolf_trade_window",
                   "app.services.wolf_limit_ladder", "app.services.wolf_gap_open", "app.services.wolf_refill"):
             monkeypatch.setattr(importlib.import_module(m), "directive", lambda *a, **k: "")
-        for n in ("weekend_de_risk", "board_half", "profit_take", "position_cap"):
+        for n in ("board_half", "profit_take", "position_cap"):
             monkeypatch.setattr(WD, n, lambda *a, **k: {"active": False, "enabled": False,
                                                         "directive": "", "active_sells": []})
         assert "复盘打分" in WD.discipline_context()

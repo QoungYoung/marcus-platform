@@ -1306,7 +1306,7 @@ def _get_defense_cap():
     """按 defense 的 G0-G3 给总仓上限（2026-10-25 拍板）。
 
     Pi stance 已退役为兼容别名；真正的防守档位来自 wave operation：
-      build→G0(不额外压) / t_only·side→G1(50) / defense→G2(30) / exit·down→G3(15)。
+      build→G0(不设上限) / t_only·side→G1(50) / defense→G2(30) / exit·down→G3(0)。
     取不到 operation 时返回 None（不改变旧行为），避免在数据缺失时误压仓位。
     """
     try:
@@ -1320,7 +1320,7 @@ def _get_defense_cap():
         from app.services.wolf_discipline import current_operation
         op = str(current_operation() or "").strip().lower()
         return {"build": None, "t_only": 50.0, "side": 50.0,
-                "defense": 30.0, "exit": 15.0}.get(op)
+                "defense": 30.0, "exit": 0.0}.get(op)
     except Exception:
         return None
 

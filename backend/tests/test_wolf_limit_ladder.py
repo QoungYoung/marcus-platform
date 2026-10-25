@@ -230,7 +230,6 @@ class TestWiredIntoContext:
         import app.services.wolf_discipline as WD
         LL.scan_and_save("20260910", rows=[
             _row("600001.SH", "甲", "电力", "U", 1), _row("600002.SH", "乙", "电力", "U", 2)])
-        monkeypatch.setattr(WD, "weekend_de_risk", lambda *a, **k: {"active": False, "directive": ""})
         monkeypatch.setattr(WD, "board_half", lambda *a, **k: {"enabled": False, "active_sells": []})
         monkeypatch.setattr(WD, "profit_take", lambda *a, **k: {"enabled": False, "active_sells": []})
         monkeypatch.setattr(WD, "position_cap", lambda *a, **k: {})

@@ -4,7 +4,7 @@
 只做编排，不 import 旧规则模块：
   · point_engine     → 计算点位（不硬编码）
   · key level        → 当天 1-3 个关键位
-  · down-wave        → G3 15% cap（2026-01-17 / 2026-08-27；2026-10-25 拍板 15）
+  · down-wave        → G3 0%（下跌趋势不做；2026-10-25 纯删除 15% 折中）
   · computed break   → 目标 = tier_target_pct(operation)（2026-01-17 分档）
   · individual       → alert only（用户 2026-10-23 拍板）
   · guard            → 收盘确认 / 盘中不算 / 缩量不算 / 时点门
@@ -16,8 +16,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
-
-from app.services import point_engine as PE
 
 ACTION_TYPES = frozenset({
     "breakdown_reduce", "reclaim_failure", "rebound_exit",
@@ -126,6 +124,12 @@ def _key_break(prev_bars: List[Dict[str, Any]], today: Dict[str, Any],
                ctx: StopContext) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     if len(prev_bars) < 20:
         return None, []
+    try:
+        from app.services import point_engine as PE
+    except Exception:
+        # 旧 break_levels 已删除时，point_engine 可能不可用；关键位分支降级为“无信号”，
+        # down-wave / 时点门 / 个股 alert 仍可用。
+        return None, []
     pe = PE.compute_points(prev_bars, asof=prev_bars[-1].get("trade_date") or prev_bars[-1].get("date"),
                            domain="index", symbol=ctx.symbol, anchors=ctx.anchors)
     keys = PE.key_levels(pe, n=3)
@@ -146,14 +150,14 @@ def evaluate(ctx: StopContext,
     level = str(ctx.wave.get("level") or "").strip().lower()
     down_wave = (level == "down") or (op == "exit")
 
-    # 1) down-wave：G3 15% cap（2026-10-25 拍板；不再写死 30）
+    # 1) down-wave：G3 0%（下跌趋势不做；2026-10-25 纯删除 15% 折中）
     if down_wave:
-        _tgt = float(os.getenv("WOLF_DOWN_WAVE_TARGET", "0.15"))
-        if _tgt <= 0:
-            _tgt = 0.15
+        _tgt = float(os.getenv("WOLF_DOWN_WAVE_TARGET", "0"))
+        if _tgt < 0:
+            _tgt = 0.0
         return StopDecision("reduce_to", action_type="breakdown_reduce", layer="index",
                             target_pct=_tgt, no_new=True, severity="B3", source="corpus",
-                            reason="wave.level=down / operation=exit → G3 %.0f%% cap（2026-01-17 / 2026-10-25 拍板 15%%）" % (_tgt * 100),
+                            reason="wave.level=down / operation=exit → G3 %.0f%%（下跌趋势不做，2026-01-17 / 2026-10-25 拍板 0%%）" % (_tgt * 100),
                             evidence=["level=%s operation=%s target=%.0f%%" % (level, op, _tgt * 100)],
                             invalidation="收盘站回关键位/趋势线")
 

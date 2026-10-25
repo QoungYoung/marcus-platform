@@ -103,26 +103,8 @@ def p2_gate_check(symbol=None, ts_code=None):
     """返回 {hard_block, multiplier, reasons, wave, macro, systemic}。"""
     hard=_mode()
     out={"hard_block":False,"multiplier":1.0,"reasons":[],"wave":None,"macro":None,"systemic":None}
-    # 2026-10-25：G0-G3 统一仲裁（wave/systemic/macro 的最严组合）
-    try:
-        from app.services import defense_cash as _dc
-        _g=_dc.gate_for_entry()
-        if _g.get("hard_block"):
-            out["hard_block"]=True
-            out["reasons"].append("防御档%s: %s" % (_g.get("level"), "；".join((_g.get("reasons") or [])[:3])))
-        elif float(_g.get("multiplier") or 1.0) < 1.0:
-            out["multiplier"]=min(out["multiplier"], float(_g["multiplier"]))
-            out["reasons"].append("防御档%s: 降级×%.1f" % (_g.get("level"), float(_g["multiplier"])))
-    except Exception:
-        pass
     w=_wave_decision()
     out["wave"]=w
-    if w and w["gate"] in ("defense","exit"):
-        msg="P2浪型=%s/%s op=%s: defense/exit 禁新开仓"%(w["level"],w["sub_level"],w["operation"])
-        if hard:
-            out["hard_block"]=True; out["reasons"].append(msg)
-        else:
-            out["multiplier"]=min(out["multiplier"],0.0); out["reasons"].append(msg+"(dry-run)")
     sr=_load("systemic_risk.json")
     if sr:
         out["systemic"]={"level":sr.get("level",0),"advice":sr.get("advice","")}
@@ -138,11 +120,9 @@ def p2_gate_check(symbol=None, ts_code=None):
         flags=(ms.get("macro_switches") or {}).get("flags") or []
         out["macro"]={"date":ms.get("date"),"flags":flags}
         if "margin_burst" in flags:
-            msg="P2宏观margin_burst(杀杠杆/两融净卖): 不接飞刀, 禁新开仓"
-            if hard:
-                out["hard_block"]=True; out["reasons"].append(msg)
-            else:
-                out["multiplier"]=min(out["multiplier"],0.3); out["reasons"].append(msg+"(dry-run降0.3)")
+            # 2026-10-25 纯删除：G2 不再硬拦 T 回补；只降级，不硬 block
+            msg="P2宏观margin_burst(杀杠杆/两融净卖): 降级0.5, 不接飞刀"
+            out["multiplier"]=min(out["multiplier"],0.5); out["reasons"].append(msg)
         if "lhb_foreign_sell" in flags:
             dirs=_candidate_dirs(ts_code)
             if any(d in dirs for d in ("foreign_chain","red_core")):

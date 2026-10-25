@@ -48,7 +48,7 @@ class TestReadOrder:
         monkeypatch.setattr(WD, "_cfg_file", lambda: {})
         WD._CFG_CACHE.update({"at": 0.0, "cfg": None, "src": ""})
         assert WD.config_source() == "default"
-        assert WD.tier_target_pct("build") == 75.0
+        assert WD.tier_target_pct("build") is None   # G0 不设总仓上限
 
     def test_file_overrides_defaults(self, tmp_path):
         write_file(tmp_path, {"position_cap": {"tier_targets": {"build": 88}}})

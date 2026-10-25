@@ -8,7 +8,7 @@
     "G0": {
       "name": "正常",
       "target_pct": null,
-      "note": "按浪型分档：build 75 / t_only·side 50"
+      "note": "不设总仓上限（狼大「主升趋势75%以上、盘中满仓滚动」）；按浪型/单笔 cap 管理"
     },
     "G1": {
       "name": "警戒",
@@ -38,17 +38,17 @@
       "note": "有风险档；禁止新开/加仓/补仓/杠杆/题材"
     },
     "G3": {
-      "name": "空仓/极低",
-      "target_pct": 15,
+      "name": "空仓",
+      "target_pct": 0,
       "buckets": {
-        "base": 10,
-        "t": 5,
-        "cash": 85
+        "base": 0,
+        "t": 0,
+        "cash": 100
       },
       "allow_new": false,
       "allow_add": false,
       "allow_t": "reduce_only",
-      "note": "下跌趋势不做；只留核心 ETF/底仓 ≤10，T ≤5，反抽继续减"
+      "note": "下跌趋势就不做：空仓"
     }
   },
   "segment_gate": {
@@ -74,7 +74,6 @@
         "days": 2
       },
       "event_window_days": 2,
-      "account_drawdown_pct": 5,
       "top_signals": 2
     },
     "G2": {
@@ -94,8 +93,7 @@
         "us10y_bp_3d": 15,
         "sox_pct_3d": -5
       },
-      "top_signals": 3,
-      "account_drawdown_pct": 8
+      "top_signals": 3
     },
     "G3": {
       "systemic_level": 2,
@@ -113,8 +111,7 @@
         "net_1d_yi": -500,
         "index_pct": -3.0,
         "limit_down_gt": 100
-      },
-      "account_drawdown_pct": 12
+      }
     }
   },
   "weekend_hedge": {
@@ -148,10 +145,6 @@
       "core_base"
     ],
     "g3_keep_only": "core_etf_or_mainline_base"
-  },
-  "retired": {
-    "pi_stance_table": "green/yellow/red 仅保留兼容别名：green→G0、yellow→G1、red→G2；仓位以 defense_state 为准",
-    "risk_manager_position_scale": "不再参与防御/仓位；仅保留 model_update_scheduler 的 emergency_check"
   },
   "sources": {
     "four_tier": "2026-01-17「主升趋势就75%以上…调整就50% 有风险就30% 下跌趋势就不做」",

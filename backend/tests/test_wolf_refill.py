@@ -166,7 +166,7 @@ class TestWiredIntoContext:
         monkeypatch.setattr(R, "pm_window", lambda: ("1400", "1430"))
         monkeypatch.setattr(R, "open_surge", lambda date8=None: {"kind": "low_open", "win_pct": 0.9,
                                                                  "thr": 0.5, "surge": True})
-        for n in ("weekend_de_risk", "board_half", "profit_take", "position_cap"):
+        for n in ("board_half", "profit_take", "position_cap"):
             monkeypatch.setattr(WD, n, lambda *a, **k: {"active": False, "enabled": False,
                                                         "directive": "", "active_sells": []})
         for m in ("app.services.wolf_index_breadth.directive", "app.services.wolf_trade_window.directive",

@@ -883,11 +883,6 @@ class TMonitor:
                     self._v3_log(_arec)
                     if not _ag.get("ok") or _ag.get("no_action"):
                         return
-                    # 2026-10-25：down-wave/关键位破位的 target 是**组合总仓**，
-                    # 不能按单票 plan_sell(15%)（那会把每票砍到 15%）。交给
-                    # _check_defense_residual 统一算组合残余；这里只记录/告警。
-                    if dec.action_type == "breakdown_reduce":
-                        return
                     _plan = _vp.plan_sell(symbol, quote, float(dec.target_pct or 0),
                                           account_id=T_MONITOR_ACCOUNT)
                     if not _plan.get("ok"):

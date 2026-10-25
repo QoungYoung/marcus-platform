@@ -17,7 +17,7 @@
   · 2026-09-03 14:14「**仓位不会低于65%收盘，日内做T仓位20%**」        ← 底仓下限 vs 周末 65% 目标
   · 2026-09-03 13:51「黄金股要舍得卖 **明天我开始轮动减液冷**」          ← 节前/周末前的减仓是"轮动减"
 
-**与既有 `wolf_discipline.weekend_de_risk` 的区别（这是 G9 存在的理由）**
+**为什么保留 G9**
   既有实现只判「周五 + 指定时间窗 + 仓位≥阈值」→ **不看量能、不看是否拉升**；
   他的原话是**条件式**的：只有「**还是缩量 ∧ 还是不拉升**」才减。本模块补上这两个前提，
   并补上他明确给出的目标（**65% 过周末**）与后续动作（**周一确认安全再拿回**）。
@@ -103,8 +103,8 @@ def exec_plan(res: Dict[str, Any], bought_today: Optional[Dict[str, int]] = None
 
 
 def enabled() -> bool:
-    """`WOLF_WEEKEND_HEDGE` 默认 **0（关）**。"""
-    return os.getenv("WOLF_WEEKEND_HEDGE", "0").strip().lower() not in ("0", "false", "no", "")
+    """`WOLF_WEEKEND_HEDGE` 默认 **1（开）**：50% 回退已删除，65% 是唯一周末目标。"""
+    return os.getenv("WOLF_WEEKEND_HEDGE", "1").strip().lower() not in ("0", "false", "no")
 
 
 def _path() -> str:

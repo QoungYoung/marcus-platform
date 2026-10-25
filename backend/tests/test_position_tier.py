@@ -37,7 +37,7 @@ class ThreeTierGateTest(unittest.TestCase):
     def test_build_allows_new_and_refill(self):
         d = self._call("build", "new_base")
         self.assertTrue(d["intent_allowed"]); self.assertEqual(d["cap_pct"], 10.0)
-        self.assertEqual(d["base_mode"], "new"); self.assertEqual(d["cash_floor_pct"], 25.0)
+        self.assertEqual(d["base_mode"], "new"); self.assertEqual(d["cash_floor_pct"], 0.0)
         d2 = self._call("build", "refill_base", t_universe=True)
         self.assertTrue(d2["intent_allowed"]); self.assertEqual(d2["cap_pct"], 8.0)
 
@@ -72,13 +72,12 @@ class ThreeTierGateTest(unittest.TestCase):
         self.assertFalse(d3["intent_allowed"])
         self.assertEqual(d1["cash_floor_pct"], 70.0)
 
-    def test_exit_only_t_on_existing_base(self):
-        for intent in ("new_base", "add_base", "refill_base"):
+    def test_exit_blocks_all_including_t(self):
+        for intent in ("new_base", "add_base", "refill_base", "t_refill"):
             d = self._call("exit", intent, has_base=True, t_universe=True, mainline=True)
             self.assertFalse(d["intent_allowed"], intent)
         d = self._call("exit", "t_refill", has_base=True)
-        self.assertTrue(d["intent_allowed"]); self.assertEqual(d["cap_pct"], 5.0)
-        self.assertEqual(d["cash_floor_pct"], 85.0)
+        self.assertEqual(d["cash_floor_pct"], 100.0)
 
     def test_unknown_op_falls_back_side_conservative(self):
         d = pt.three_tier_gate(wave_state={"operation": "unknown"}, intent="new_base", cfg=self.cfg)

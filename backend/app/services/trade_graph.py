@@ -869,7 +869,7 @@ def _read_stock_confirm_context() -> str:
                 block += ("## 主线候选权重分配(wave调档, 2026-09-07 回测落地)" + chr(10)
                           + f"- 当前wave={a['operation']} → TOP3权重 {int(100*w[0])}/{int(100*w[1])}/{int(100*w[2])}，仓位投入 {int(100*invest)}%"
                           + f"；TOP3=" + (chr(44).join(f"{k}({s})" for k, s in zip(a['top3'], a['scores'])) or "无") + chr(10)
-                          + "- 决策：build→分散吃轮动；t_only→主第1(70%)+2/3试仓；side→主第1(60%)；defense→总仓≤30%，禁新开/禁加仓(T仓只减不加)；exit→总仓≤15%(底仓10+T5)，只减不加。"
+                          + "- 决策：build→分散吃轮动；t_only→主第1(70%)+2/3试仓；side→主第1(60%)；defense→总仓≤30%，禁新开/禁加仓(T仓只减不加)；exit→空仓（下跌趋势不做），只减不加。"
                           + chr(10) + chr(10))
         except Exception as _e_sil11:
             print("[silent:trade_graph.py:852] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
@@ -1588,19 +1588,6 @@ def node_check_regime_compliance(state: TradeState) -> dict:
     eid = state['execution_id']
     regime = state.get('market_regime', 'trend')
     reply = state.get('pi_raw_reply', '')
-
-    # 狼大纪律: 周末降仓(周五, 不限 regime) —— 仓位占比达到阈值时只允许降T仓, 禁止买入/加仓/追
-    try:
-        import re as _re, datetime as _dt
-        from app.services.wolf_discipline import weekend_de_risk
-        _wd = weekend_de_risk(state.get('portfolio_json', '{}'), _dt.datetime.now(), window=state.get('window'))
-        if _wd.get('active'):
-            _rep = state.get('pi_raw_reply', '') or ''
-            if _re.search(r'买入|加仓|建仓|追|进场', _rep):
-                return {"regime_violation": True,
-                        "regime_violation_reason": _wd['directive'] + "（周末降仓日：只允许降T仓、禁止买入/加仓/追）"}
-    except Exception as _e_sil18:
-        print("[silent:trade_graph.py:1571] %s: %s" % (type(_e_sil18).__name__, str(_e_sil18)[:110]), flush=True)
 
     # 狼大口径(2026-09-03 审计): 去掉平台自研"震荡市仓位≤50%/单票≤8%/必须60分/禁产业链建仓"硬约束。
     if regime == 'oscillation':

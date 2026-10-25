@@ -30,13 +30,13 @@ except Exception:  # pragma: no cover
         return ws
 
 
-# ⚠️ 本模块当前仅测试引用、未接生产；仓位数字对齐 defense_state（2026-10-25：t_only 50 / exit 15）。
+# ⚠️ 本模块当前仅测试引用、未接生产；仓位数字对齐 defense_state（2026-10-25：t_only 50 / exit 0）。
 _OP_PLAN = {
     "build": {"new_entry_allowed": True, "max_total_position": 75, "t_only": False},
     "t_only": {"new_entry_allowed": False, "max_total_position": 50, "t_only": True},
     "side": {"new_entry_allowed": True, "max_total_position": 50, "t_only": False},
     "defense": {"new_entry_allowed": False, "max_total_position": 30, "t_only": True},
-    "exit": {"new_entry_allowed": False, "max_total_position": 15, "t_only": False},
+    "exit": {"new_entry_allowed": False, "max_total_position": 0, "t_only": False},
 }
 
 

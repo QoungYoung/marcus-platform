@@ -9,14 +9,14 @@
 ⚠️ 破位减仓是**防御的最高 urgency 执行腿**，不是与防御并列的策略：
   · G 级决定组合总仓上限；
   · 破位/止损决定 symbol override（单票可压到 0/50%）；
-  · 先执行 override，再算组合残余；v0.1 已接 `break_actions`（B1-B4 → G1-G3 + symbol_overrides），
-    执行端在 `t_monitor._check_defense_residual`。
+  · 破位（B1-B4）作为状态输入参与 G 级与 symbol_overrides；
+    执行端是 v3 `t_monitor._check_stop_loss_v3`（本轮已删除组合残余减仓）。
 
 四档（2026-10-25 用户拍板）：
   G0 正常：build 75 / t_only·side 50
   G1 警戒：50%
   G2 防御：30%，禁新开/禁加仓
-  G3 空仓/极低：15%（底仓 10 + T 5），现金 85%
+  G3 空仓：0%（既然“下跌趋势就不做”，就不留 T/底仓仓位）
 
 关键闸门：
   · 段位 4-3 筑底 + 无 G3 硬触发 → 封顶 G1（价格弱不等于 G2）；
@@ -162,19 +162,16 @@ def _break_override_target(row: dict):
 
 def _target_buckets(level: int, op: str):
     if level == 3:
-        return 15.0, {"base": 10, "t": 5, "cash": 85}
+        return 0.0, {"base": 0, "t": 0, "cash": 100}
     if level == 2:
         return 30.0, {"base": 25, "t": 5, "cash": 70}
     if level == 1:
         return 50.0, {"base": 40, "t": 10, "cash": 50}
-    # G0：按浪型
-    if op == "build":
-        return 75.0, {"base": 50, "t": 25, "cash": 25}
-    return 50.0, {"base": 40, "t": 10, "cash": 50}
+    # G0：不设总仓上限（狼大「主升趋势75%以上、盘中满仓滚动」）
+    return None, None
 
 
-def evaluate(account_drawdown_pct: Optional[float] = None,
-             segment: Optional[str] = None,
+def evaluate(segment: Optional[str] = None,
              break_actions: Optional[list] = None) -> Dict[str, Any]:
     """返回防御状态。纯函数（除读文件/wave_store 外无副作用）。"""
     if not enabled():
@@ -234,19 +231,6 @@ def evaluate(account_drawdown_pct: Optional[float] = None,
         if ov is not None:
             overrides[str(row.get("symbol"))] = ov
 
-    # 账户回撤阶梯
-    try:
-        dd = float(account_drawdown_pct) if account_drawdown_pct is not None else None
-    except (TypeError, ValueError):
-        dd = None
-    if dd is not None:
-        if dd >= 12:
-            level = max(level, 3); reasons.append("账户回撤 %.1f%% ≥12%%" % dd)
-        elif dd >= 8:
-            level = max(level, 2); reasons.append("账户回撤 %.1f%% ≥8%%" % dd)
-        elif dd >= 5:
-            level = max(level, 1); reasons.append("账户回撤 %.1f%% ≥5%%" % dd)
-
     # 段位闸门：4-3 筑底 + 无 G3 硬触发 → 封顶 G1
     seg = str(segment or w.get("sub_level") or "").strip()
     if seg.startswith("4-3") and level < 3:
@@ -293,7 +277,7 @@ def current_level() -> int:
 
 
 def current_target_pct() -> Optional[float]:
-    """G1/G2/G3 的总仓上限；G0 返回 None（按浪型原逻辑）。"""
+    """G1/G2/G3 的总仓上限；G0 返回 None（不设总仓上限）。"""
     try:
         st = get_state()
         if int(st.get("level_num") or 0) <= 0:
@@ -301,20 +285,6 @@ def current_target_pct() -> Optional[float]:
         return float(st.get("target_pct"))
     except Exception:
         return None
-
-
-def gate_for_entry() -> Dict[str, Any]:
-    """给 p2_entry_gate/check_entry_filters 的统一入口。"""
-    st = get_state()
-    lv = int(st.get("level_num") or 0)
-    return {
-        "hard_block": lv >= 2,
-        "multiplier": 0.5 if lv == 1 else 1.0,
-        "level": st.get("level"),
-        "target_pct": st.get("target_pct"),
-        "symbol_overrides": st.get("symbol_overrides") or {},
-        "reasons": st.get("reasons") or [],
-    }
 
 
 def directive() -> str:

@@ -9,7 +9,7 @@
   "wave": {
     "build": {
       "base_mode": "new",
-      "cash_floor_pct": 25,
+      "cash_floor_pct": 0,
       "intents": {
         "new_base": {
           "allow": true,
@@ -142,7 +142,7 @@
     },
     "exit": {
       "base_mode": "reduce_only",
-      "cash_floor_pct": 85,
+      "cash_floor_pct": 100,
       "intents": {
         "new_base": {
           "allow": false,
@@ -160,11 +160,9 @@
           "needs": []
         },
         "t_refill": {
-          "allow": true,
-          "cap_pct": 5,
-          "needs": [
-            "has_base"
-          ]
+          "allow": false,
+          "cap_pct": 0,
+          "needs": []
         }
       }
     }

@@ -30,8 +30,8 @@ from app.services import position_tier as PT  # noqa: E402
 from app.services import wolf_discipline as WD  # noqa: E402
 
 OPS = ("build", "t_only", "side", "defense", "exit")
-EXPECT_TARGET = {"build": 75.0, "t_only": 50.0, "side": 50.0, "defense": 30.0, "exit": 15.0}
-EXPECT_FLOOR = {"build": 55.0}
+EXPECT_TARGET = {"t_only": 50.0, "side": 50.0, "defense": 30.0, "exit": 0.0}
+EXPECT_FLOOR = {}
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +68,7 @@ class TestTierTable:
         for op, v in EXPECT_TARGET.items():
             assert WD.tier_target_pct(op) == v, op
 
-    def test_floor_only_on_build(self):
+    def test_no_floor_left(self):
         for op in OPS:
             assert WD.tier_floor_pct(op) == EXPECT_FLOOR.get(op), op
 
@@ -106,19 +106,19 @@ class TestPositionCapTier:
         assert WD.position_cap(pf(50), operation="defense")["allowed"] is False
         assert WD.position_cap(pf(25), operation="defense")["allowed"] is True
 
-    def test_build_allows_up_to_75(self):
-        """主升档允许到 75% —— 这正是原来 70% 死上限会压制的地方。"""
-        assert WD.position_cap(pf(72), operation="build")["allowed"] is True
-        assert WD.position_cap(pf(80), operation="build")["allowed"] is False
+    def test_build_has_no_total_cap(self):
+        """G0 不设总仓上限：75% 以上/盘中满仓滚动。"""
+        assert WD.position_cap(pf(80), operation="build")["allowed"] is True
+        assert WD.position_cap(pf(95), operation="build")["allowed"] is True
 
-    def test_exit_tier_is_g3_15(self):
-        """2026-10-25 拍板：G3 = 底仓10 + T5 = 15%，不再保留 50%。"""
-        assert WD.tier_target_pct("exit") == 15.0
+    def test_exit_tier_is_zero(self):
+        """2026-10-25 纯删除：下跌趋势不做，G3=0%。"""
+        assert WD.tier_target_pct("exit") == 0.0
+        assert WD.position_cap(pf(10), operation="exit")["allowed"] is False
 
-    def test_below_floor_is_advice_not_block(self):
+    def test_below_floor_removed(self):
         r = WD.position_cap(pf(30), operation="build")
-        assert r["allowed"] is True and r["below_floor"] is True
-        assert "2025-08-11" in r["directive"] and "过度减仓" in r["directive"]
+        assert r["allowed"] is True and r["below_floor"] is False
 
     def test_floor_not_applied_to_adjustment_tier(self):
         """55% 下限只挂 build 档：调整档 50% 目标下，40% 持仓不该被判"偏低"。"""
@@ -153,11 +153,13 @@ class TestP3SharesTierSource:
     def test_cash_floor_derived_from_tier(self):
         for op in OPS:
             t = WD.tier_target_pct(op)
+            if t is None:
+                continue
             assert PT._tier_cash_floor(op, 999) == round(100.0 - t, 1), op
 
     def test_rollback_switch_uses_config_value(self, monkeypatch):
         monkeypatch.setenv("P3_USE_TIER_TARGETS", "0")
-        assert PT._tier_cash_floor("build", 25) == 25.0
+        assert PT._tier_cash_floor("build", 0) == 0.0
 
     def test_gate_reports_tier_derived_floor(self):
         # 注意: three_tier_gate 的 wave_state 走 read_wave_state()（读 workspace/data/wave_state.json），
@@ -169,6 +171,8 @@ class TestP3SharesTierSource:
     def test_gate_cash_floor_matches_cap_for_same_op(self):
         """同源校验：同一个 operation 下，硬拦侧的现金底线必须 = 100 − 建议层目标。"""
         for op in OPS:
+            if op not in EXPECT_TARGET:
+                continue
             dec = PT.three_tier_gate(intent="new_base", has_base=True,
                                      wave_state={"operation": op, "level": "d3", "sub_level": "3-3"})
             assert dec["cash_floor_pct"] == round(100.0 - EXPECT_TARGET[op], 1), op

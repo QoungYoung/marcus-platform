@@ -15,7 +15,7 @@ import json
 DEFAULT_CFG = {
     "version": "2026-09-03",
     "wave": {
-        "build": {"base_mode": "new", "cash_floor_pct": 25,
+        "build": {"base_mode": "new", "cash_floor_pct": 0,
                   "intents": {"new_base": {"allow": True, "cap_pct": 10},
                               "add_base": {"allow": True, "cap_pct": 10},
                               "refill_base": {"allow": True, "cap_pct": 8},
@@ -36,11 +36,11 @@ DEFAULT_CFG = {
                                 "add_base": {"allow": False, "cap_pct": 0},
                                 "refill_base": {"allow": True, "cap_pct": 3},
                                 "t_refill": {"allow": True, "cap_pct": 5}}},
-        "exit": {"base_mode": "reduce_only", "cash_floor_pct": 85,
+        "exit": {"base_mode": "reduce_only", "cash_floor_pct": 100,
                  "intents": {"new_base": {"allow": False, "cap_pct": 0},
                              "add_base": {"allow": False, "cap_pct": 0},
                              "refill_base": {"allow": False, "cap_pct": 0},
-                             "t_refill": {"allow": True, "cap_pct": 5}}},
+                             "t_refill": {"allow": False, "cap_pct": 0}}},
     },
 }
 
@@ -173,7 +173,7 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
         _def_lv = int(_dc.current_level() or 0)
     except Exception:
         _def_lv = 0
-    if _def_lv >= 3 and intent in ("new_base", "add_base", "refill_base"):
+    if _def_lv >= 3 and intent in ("new_base", "add_base", "refill_base", "t_refill"):
         allowed, cap = False, 0.0
     elif _def_lv >= 2 and intent in ("new_base", "add_base"):
         allowed, cap = False, 0.0
@@ -185,8 +185,8 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
                 "refill_base": "T资格回补", "t_refill": "T仓日内低吸",
                 "probe": "试探底仓(自设档,狼大无语料)"}
     reasons = []
-    if _def_lv >= 3 and intent in ("new_base", "add_base", "refill_base"):
-        reasons.append("G3 空仓/极低：禁新开/加仓/底仓回补（只留 T ≤5%%）")
+    if _def_lv >= 3 and intent in ("new_base", "add_base", "refill_base", "t_refill"):
+        reasons.append("G3 空仓：禁新开/加仓/底仓回补/T 回补（下跌趋势不做）")
     elif _def_lv >= 2 and intent in ("new_base", "add_base"):
         reasons.append("G2 防御：禁新开/加仓（人工例外不走 P3）")
     if allowed:
@@ -202,7 +202,7 @@ def three_tier_gate(ts_code=None, wave_state=None, intent="new_base",
         if r.get("allow") and (not r.get("needs") or c2 > 0):
             allowed_actions.append(it)
     if _def_lv >= 3:
-        allowed_actions = [x for x in allowed_actions if x == "t_refill"]
+        allowed_actions = []
     elif _def_lv >= 2:
         allowed_actions = [x for x in allowed_actions if x not in ("new_base", "add_base")]
 
@@ -227,7 +227,7 @@ def _tier_cash_floor(op, fallback):
     单一事实来源 = `wolf_discipline.position_cap.tier_targets`（2026-09-11 定）。
     为什么要同源：此前 P3 的 cash_floor(build 25/t_only 35/side 30/defense 45/exit 50) 与
     建议层(`position_cap`) 各写一套 → 同一条"按市况给多大仓位"会有两个数（本项目反复踩的"两套并行口径"）。
-    现在硬拦侧自动跟随分档：build 25 / t_only·side 50 / defense 70 / exit 85（exit=G3 15% 目标，2026-10-25 拍板）。
+    现在硬拦侧自动跟随分档：build 0（G0 不设上限）/ t_only·side 50 / defense 70 / exit 100（G3=0% 空仓）。
     回退：`P3_USE_TIER_TARGETS=0` → 用配置里的原值（隔离/对照用）。
     """
     if os.getenv("P3_USE_TIER_TARGETS", "1").strip() in ("0", "false", "no"):

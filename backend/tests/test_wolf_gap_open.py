@@ -305,7 +305,6 @@ class TestWiredIntoContext:
         monkeypatch.setattr(G, "volume_ratio", lambda **kw: {"kind": "expand", "ratio": 1.18})
         monkeypatch.setattr(G, "index_levels", lambda force=False: {"support": 3800.0, "resistance": 4100.0, "src": "t"})
         monkeypatch.setattr(G, "hb_state", lambda: {"side": "bai", "spread": -0.9})
-        monkeypatch.setattr(WD, "weekend_de_risk", lambda *a, **k: {"active": False, "directive": ""})
         monkeypatch.setattr(WD, "board_half", lambda *a, **k: {"enabled": False, "active_sells": []})
         monkeypatch.setattr(WD, "profit_take", lambda *a, **k: {"enabled": False, "active_sells": []})
         monkeypatch.setattr(WD, "position_cap", lambda *a, **k: {})

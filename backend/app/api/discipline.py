@@ -16,7 +16,7 @@ from app.services import wolf_discipline as WD
 
 router = APIRouter(prefix="/discipline", tags=["WolfDiscipline"])
 
-_SECTIONS = ("weekend_de_risk", "board_half", "profit_take", "position_cap")
+_SECTIONS = ("board_half", "profit_take", "position_cap")
 
 
 @router.get("/config")

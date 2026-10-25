@@ -5,7 +5,7 @@
   14:20「**2点半 如果还是缩量 还是不拉升 我会先把这两天T进去的仓位出来一半 防止周末出利空
          这样周一再拿回来。 出于仓位安全考虑 65%仓位过周末。**」
   14:35「2点半过了 **我按刚才说的操作了**。」
-与既有 `wolf_discipline.weekend_de_risk` 的差别：后者只看"周五+仓位阈值"，
+为什么保留 G9：
 **不看量能与是否拉升**；本模块补上他原话里的两个前提。
 
 覆盖点：节前/周末前认定（含长假）／缩量判定／未拉升判定／三段门控／真实 m5 注入跑通／
@@ -34,11 +34,11 @@ def _env(monkeypatch):
 
 
 # ── 开关 ──────────────────────────────────────────────────────────────
-def test_switch_defaults_off():
-    assert WH.enabled() is False
+def test_switch_defaults_on():
+    assert WH.enabled() is True
 
 
-@pytest.mark.parametrize("val,expect", [("1", True), ("no", False), ("", False)])
+@pytest.mark.parametrize("val,expect", [("1", True), ("no", False), ("", True)])
 def test_switch_values(monkeypatch, val, expect):
     monkeypatch.setenv("WOLF_WEEKEND_HEDGE", val)
     assert WH.enabled() is expect
