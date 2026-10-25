@@ -37,6 +37,15 @@ from app.services.t_regime import _is_trading_time
 #   ⇒ 现挂上 ✓（见 `_check_stop_loss` 开头 ✓）；下面这个名字供测试/文档引用 ✓
 from app.services.t_playbook import STOP_BY_BREAK as STOP_BY_INDEX_BREAK
 
+# ── v3 统一止损层灰度（2026-10-23）─────────────────────────────────────────────
+# 2026-10-23 旧规则删除后：只走 wolf_stop_layer.evaluate()。
+# `reduce_to` 暂时**只记录/提示，不自动卖**（灰度对比阶段）。
+STOP_V3 = True   # 2026-10-23 旧规则删除后恒为 v3
+_V3_BYPASS_KINDS = frozenset({
+    "stop_loss", "custom_support_sell", "wolf_passive_stop_sell",
+    "wolf_early_swing_sell", "wolf_boll_mid_exit",
+})
+
 
 # ★ 账本 §9.713 ✓：**轮次度量**（`round_timing()`）—— 测试 `test_monitor_wired_markers` 一直在断言它 ✓
 #   用途 ✓：让「闸门到底拦了几次」**看得见** ✗（今晚反复吃亏的正是"看不见" ✗）
@@ -465,6 +474,11 @@ class TMonitor:
         self._daily_maintained = ""
         self._ai_thread: Optional[threading.Thread] = None
         self._wolf_done = set()   # (symbol, trigger_kind, date) 当日去抖，防同一腿反复触发
+        self._v3_done = set()     # v3 灰度：当日 (symbol, action) 去抖
+        self._v3_agent_done = set()  # 生产：当日 (symbol, phase) agent 只问一次
+        self._v3_m5_cache = {}       # (symbol, minute) -> 5m bars
+        self._v3_precompute_done = set()
+        self._v3_intraday_done = set()
         self._nochase_deferred = set()   # (symbol, date) 被"不追高"延后到 14:00–14:30 重评的票（只用于降噪打印）
         self._line_deferred = set()      # (symbol, date) 挂低位线等待成交的票（狼大 2026-04-10；只用于降噪打印）
         self._line_bars_cache = {}       # (symbol, date) → 算线用的 as-of 日线（每天只取一次，避免 30s 轮次重复请求）
@@ -549,20 +563,12 @@ class TMonitor:
                     # 开 WOLF_DAY_END_T_OUT=1 ⇒ 恢复狼大「做T当日出来，不留过夜」(14:45 后未确认即减T仓)
                     if DAY_END_T_OUT:
                         self._check_day_end_de_t()
-                    self._check_defensive_t_reduce()  # 风险/结构恶化(量能不足+滞涨)→减已持T仓(08-27式)
                     self._check_board_half()  # 板上减半(狼大纪律②): 触及/接近涨停+浮盈达标→减半锁定
                     self._check_profit_take()  # 小赚兑现(P0-3, 2026-09-14 开): 浮盈>=阈值→减T半仓(保留底仓)
                     self._check_weekend_hedge()  # G9 周末/长假前避险**执行层**(2026-09-14, 狼大 2026-08-21)
                     self._check_hedge_refill()   # C2b 避险回补腿(下一个交易日补回; 狼大「周一再拿回来」)
                     self._check_fib_target()     # G2 个股止盈点=前一波拉升 0.618 位(狼大 2026-04-23)
-                    self._check_passive_stop()   # G4 被动止盈线只上移、不破不卖(狼大 2025-06-09/2026-07-01)
-                    self._check_boll_sell()  # A10 BOLL上轨减半锁利(2026-09-11, 狼大 2026-04-29)
-                    self._check_boll_mid_exit()  # A10 BOLL中轨全止盈(尾盘确认窗, 狼大 2025-05-13)
-                    self._check_position_discipline()  # 去弱留强(P1-6): 反弹语境内减T仓最弱者
-                    self._check_index_level_stop()  # ③ 指数大级别止损(狼大2026-08-27): 转下跌1浪→止损
-                    self._check_logic_time_stop()  # ① 后半句: 13日内未碰前高→逻
-                    self._check_ambush_discipline()  # 埋伏纪律: 固定 N 日 + 宽止损（默认关 ✓）
-                    self._check_intraday_t_stop()  # 日内T仓紧止损（默认关 ✓；狼大 2026-02-02 口径）辑时间离场(狼大2026-03-05)
+                    self._check_boll_sell()  # A10 BOLL上轨减半锁利（兑现类，保留）
                     # 低位超额反弹线（paper-only）：日期闸 + 方向强 + 入场日 10:00/10:30 日内 trigger
                     try:
                         from app.services.wolf_low_position_line import tick as _lowpos_tick
@@ -2695,69 +2701,586 @@ class TMonitor:
             self._status['errors'] += 1
             print(f"[TMonitor] fib_target异常: {e}")
 
-    def _check_passive_stop(self) -> None:
-        """G4：被动止盈线「**只上移、不破不卖**」（狼大 2025-06-09 / 2025-07-17 / 2026-07-01）。
-
-        线 = max(近 13 日最低价, 已有线)（只上移）；浮盈 >100% 时并用 MA13/中轨；
-        跌破且有浮盈 → 卖 **T 仓**（保留底仓），受 ④ 时点门约束（13:00–14:30 不执行）。
-        开关 `WOLF_PASSIVE_STOP=0`。
-        """
+    # ── v3 统一止损层（2026-10-23，灰度）─────────────────────────────────────
+    def _v3_index_bars(self):
+        """上证日线（上一交易日及以前）+ 当日 quote；按日缓存。"""
+        import json as _j
+        today = datetime.now().strftime("%Y%m%d")
+        if getattr(self, "_v3_idx_day", "") == today and getattr(self, "_v3_idx", None):
+            return self._v3_idx
+        rows = []
+        data_dir = os.getenv("DATA_DIR", "/app/data")
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        for p in (os.path.join(data_dir, "index_daily_000001.json"),
+                  os.path.join(root, "data", "index_daily_000001.json")):
+            try:
+                d = _j.load(open(p, encoding="utf-8"))
+                if isinstance(d, list) and d:
+                    rows = [{"trade_date": str(r.get("trade_date") or r.get("date") or "").replace("-", ""),
+                             "open": float(r.get("open") or 0), "high": float(r.get("high") or 0),
+                             "low": float(r.get("low") or 0), "close": float(r.get("close") or 0),
+                             "vol": float(r.get("vol") or r.get("amount") or 0)} for r in d]
+                    break
+            except Exception:
+                continue
+        rows = [r for r in rows if len(r["trade_date"]) == 8 and r["close"] > 0]
+        rows.sort(key=lambda r: r["trade_date"])
         try:
-            from app.services import wolf_passive_stop as PS
-            if not PS.enabled():
-                return
-            held = [p for p in self._positions() if float(p.get('volume') or 0) > 0]
-            if not held:
-                return
-            from app.services.t_gateway import gateway_execute, get_sellable_ledger, base_floor_shares
-            today = datetime.now().strftime('%Y%m%d')
-            tok, treason = _stop_time_ok()
-            xq = sorted({_normalize_symbol(p['symbol']) for p in held})
-            quotes = fetch_tencent_quote([_normalize_symbol(_s) for _s in (xq or [])])
-            for p in held:
-                sym = _normalize_symbol(p['symbol'])
-                acct = p['account_id']
-                q = quotes.get(sym) or {}
-                cur = float(q.get('current') or 0)
-                cost = float(p.get('avg_price') or 0)
-                if cur <= 0:
-                    continue
-                bars = _fetch_daily_tencent_dated(sym, 60) or []
-                if not bars:
-                    continue
-                prof = ((cur / cost - 1.0) * 100.0) if cost > 0 else 0.0
-                line = PS.sync_line(acct, sym, bars, prof)     # 只上移
-                act, reason = PS.passive_decision(cur, line, cost, time_ok=tok)
-                if act != 'sell':
-                    continue
-                if (sym, 'wolf_passive_stop_sell', today) in self._wolf_done:
-                    continue
-                self._wolf_done.add((sym, 'wolf_passive_stop_sell', today))
+            q = fetch_quote_one("SH000001") or {}
+            px = float(q.get("current") or 0)
+            if px > 0 and (not rows or rows[-1]["trade_date"] < today):
+                rows.append({"trade_date": today, "open": float(q.get("open") or px),
+                             "high": float(q.get("high") or px), "low": float(q.get("low") or px),
+                             "close": px, "vol": float(q.get("vol") or q.get("amount") or 0)})
+        except Exception:
+            pass
+        self._v3_idx_day, self._v3_idx = today, rows
+        return rows
+
+    def _v3_intraday_bars(self, symbol: str):
+        """当日/前日 5min（腾讯 m5，60s 缓存）；失败返回空，不阻断日线逻辑。"""
+        try:
+            import datetime as _dt
+            key = (symbol, _dt.datetime.now().strftime("%H%M"))
+            if key in self._v3_m5_cache:
+                return self._v3_m5_cache[key]
+            from app.services.t_data_sources import fetch_minute_bars
+            bars = fetch_minute_bars(symbol, freq="m5", count=240) or []
+            self._v3_m5_cache = {key: bars}
+            return bars
+        except Exception:
+            return []
+
+    def _v3_stock_bars(self, symbol: str, quote: dict):
+        bars = self._daily_dated(symbol, 80) or []
+        today = datetime.now().strftime("%Y%m%d")
+        bars = [dict(b, trade_date=str(b.get("trade_date") or b.get("date") or "").replace("-", ""))
+                for b in bars if str(b.get("trade_date") or b.get("date") or "")]
+        bars = [b for b in bars if b.get("trade_date") != today]
+        px = float((quote or {}).get("current") or 0)
+        if px > 0:
+            bars.append({"trade_date": today, "open": float((quote or {}).get("open") or px),
+                         "high": float((quote or {}).get("high") or px),
+                         "low": float((quote or {}).get("low") or px),
+                         "close": px, "vol": float((quote or {}).get("vol") or 0)})
+        return bars
+
+    def _v3_context(self, symbol: str, quote: dict, ledger: dict):
+        from app.services import wolf_stop_layer as WL
+        wave = {}
+        try:
+            from app.services import wave_store
+            wave = wave_store.get_wave() or {}
+        except Exception:
+            wave = {}
+        today = datetime.now().strftime("%Y%m%d")
+        pos = (ledger or {}).get(symbol) or {}
+        cost = float(pos.get("avg_price") or 0) or float((quote or {}).get("pre_close") or 0)
+        cur = float((quote or {}).get("current") or 0)
+        pnl = ((cur / cost - 1.0) * 100.0) if (cost > 0 and cur > 0) else 0.0
+        try:
+            tok, _ = _stop_time_ok()
+        except Exception:
+            tok = True
+        phase = "close" if _in_close_window() else "intraday"
+        return WL.StopContext(
+            symbol=symbol, asof=today, phase=phase,
+            bars=self._v3_index_bars(), wave=wave,
+            operation=str(wave.get("operation") or "side"),
+            position={"pnl_pct": round(pnl, 2), "was_broken": False},
+            stock_bars=self._v3_stock_bars(symbol, quote), stock_symbol=symbol,
+            time_ok=bool(tok),
+        )
+
+    def _v3_log(self, rec: dict) -> None:
+        try:
+            import json as _j
+            data_dir = os.getenv("DATA_DIR", "data")
+            os.makedirs(data_dir, exist_ok=True)
+            with open(os.path.join(data_dir, "stop_v3_events.jsonl"), "a", encoding="utf-8") as f:
+                f.write(_j.dumps(rec, ensure_ascii=False) + "\n")
+            # PG 权威留痕（WOLF_V3_PG_LOG=1 时启用；失败不影响交易）
+            try:
+                if str(os.getenv("WOLF_V3_PG_LOG", "0")).strip() not in ("1", "true", "yes", "on"):
+                    raise RuntimeError("pg_log_off")
+                from app.database import SessionLocal
+                from sqlalchemy import text
+                _db = SessionLocal()
                 try:
-                    sellable = int(((get_sellable_ledger(account_id=acct).get(sym) or {}).get('sellable', 0)) or 0)
-                except Exception:
-                    sellable = 0
-                vol = (max(sellable - base_floor_shares(acct, sym, volume=sellable), 0) // 100) * 100
-                rid = self._insert_wolf_trigger(sym, 'wolf_passive_stop_sell', q,
-                                                "[G4 被动止盈] " + reason, account_id=acct)
-                if vol < 100:
-                    continue
-                gw = gateway_execute(sym, 'sell', cur, vol, reason="[G4 被动止盈] " + reason, trigger_id=rid,
-                                     decision_source='rule', account_id=acct)
-                print(f"[TMonitor] G4 被动止盈线跌破 {sym} {vol}股@{cur} [{acct}]: {gw.get('status')}")
-                if gw.get('status') == 'success':
-                    self._after_sell(sym, acct, 'wolf_passive_stop_sell', '被动止盈线跌破')
-                try:
-                    t_db.update_trigger_status(rid, 'executed' if gw.get('status') == 'success' else 'blocked',
-                                               reason=f"G4 被动止盈 {vol}股@{cur} [{acct}]: {gw.get('status')}")
-                except Exception as _eN13:
-                    # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
-                    from app.services import gate_alarm as _gaNote
-                    _gaNote.note("t_monitor:line1588", _eN13)
-                    pass
+                    _db.execute(text("""
+                        INSERT INTO stop_v3_events(event_date,symbol,phase,action,action_type,layer,severity,
+                            level_state,status_text,target_pct,reason,source,quote,level,payload)
+                        VALUES (:d,:s,:ph,:a,:at,:l,:sev,:ls,:st,:tp,:r,:src,:q,:lv,:pl)
+                    """), {"d": str(rec.get("date") or ""), "s": str(rec.get("symbol") or ""),
+                           "ph": str(rec.get("phase") or ""), "a": str(rec.get("action") or ""),
+                           "at": str(rec.get("action_type") or ""), "l": str(rec.get("layer") or ""),
+                           "sev": str(rec.get("severity") or ""), "ls": str(rec.get("level_state") or ""),
+                           "st": str(rec.get("status_text") or ""), "tp": rec.get("target_pct"),
+                           "r": str(rec.get("reason") or ""), "src": str(rec.get("source") or ""),
+                           "q": rec.get("quote"), "lv": _j.dumps(rec.get("level") or {}, ensure_ascii=False),
+                           "pl": _j.dumps(rec, ensure_ascii=False)})
+                    _db.commit()
+                finally:
+                    _db.close()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _check_all_positions_v3(self) -> None:
+        """v3：不依赖条件单，持仓每轮都扫一遍（否则没有 custom_support_sell 就不跑）。"""
+        try:
+            from app.services.t_gateway import get_sellable_ledger
+            self._v3_precompute_positions()
+            self._v3_check_intraday_watches()
+            self._v3_check_rebound_watches()
+            ledger = get_sellable_ledger(T_MONITOR_ACCOUNT)
+            holds = [p for p in self._positions() if float(p.get("volume") or 0) > 0]
+            pairs = [(p.get("symbol"), _normalize_symbol(p.get("symbol")))
+                     for p in holds if p.get("symbol")]
+            if not pairs:
+                return
+            quotes = self._fetch_quotes_concurrent([s for _, s in pairs])
+            try:
+                from app.services import decision_window as _dw2
+                _ph2 = _dw2.phase_at().get("phase")
+                _hm2 = _dt.datetime.now().strftime("%H:%M")
+                _scan_times = {x.strip() for x in os.getenv("WOLF_V3_REBOUND_SCAN_TIMES", "09:45,10:30").split(",") if x.strip()}
+                if _ph2 == "tail_confirm":
+                    self._v3_agent_positions("tail_confirm")
+                elif _ph2 == "intraday" and _hm2 in _scan_times:
+                    self._v3_agent_positions("rebound_scan_" + _hm2, scan_only=True)
+                elif _ph2 == "intraday" and _hm2 == "14:30":
+                    self._v3_agent_positions("time_1430")
+                # 3×15 的确认在 13:00-14:30 执行禁区，统一挪到 14:30 这一轮判；
+                # 与 time-specific 共用一次 agent 调用，避免重复问。
+                elif _ph2 == "intraday" and _dt.datetime.now().strftime("%H:%M") == os.getenv("WOLF_V3_AGENT_3X15_TIME", "14:30"):
+                    self._v3_agent_positions("intraday_3x15")
+            except Exception:
+                pass
+            for raw, sym in pairs:
+                q = quotes.get(sym)
+                if q and q.get("current"):
+                    self._check_stop_loss_v3(raw, q, ledger)
         except Exception as e:
-            self._status['errors'] += 1
-            print(f"[TMonitor] passive_stop异常: {e}")
+            print("[TMonitor][V3] 持仓扫描异常(不卖): %s" % str(e)[:120], flush=True)
+
+    def _check_stop_loss_v3(self, symbol: str, quote: dict, ledger: dict) -> None:
+        """v3 灰度：只记录/提示，**不自动卖**。"""
+        try:
+            from app.services import wolf_stop_layer as WL
+            ctx = self._v3_context(symbol, quote, ledger)
+            dec = WL.evaluate(ctx)
+            if dec.action == "hold":
+                return
+            today = datetime.now().strftime("%Y%m%d")
+            key = (symbol, dec.action, today)
+            if key in self._v3_done:
+                return
+            self._v3_done.add(key)
+            rec = {"date": today, "symbol": symbol, "action": dec.action,
+                   "action_type": dec.action_type,
+                   "layer": dec.layer, "severity": dec.severity,
+                   "level_state": dec.level_state, "status_text": dec.status_text,
+                   "target_pct": dec.target_pct, "no_new": dec.no_new,
+                   "reason": dec.reason, "source": dec.source,
+                   "level": dec.level, "quote": float((quote or {}).get("current") or 0)}
+            self._v3_log(rec)
+            print("[TMonitor][V3] %s %s %s target=%s %s" % (
+                symbol, dec.action, dec.layer, dec.target_pct, str(dec.reason)[:120]), flush=True)
+
+            # 生产接线（默认只计划；WOLF_V3_LIVE=1 才真下单）
+            if str(os.getenv("WOLF_V3_LIVE", "0")).strip() in ("1", "true", "yes", "on"):
+                try:
+                    from app.services import decision_window as _dw
+                    from app.services import wolf_v3_production as _vp
+                    _ph = _dw.phase_at().get("phase")
+                    if _ph not in ("tail_confirm", "intraday") or dec.action not in ("reduce_to", "exit"):
+                        return
+                    _akey = (symbol, _ph, today)
+                    if _akey in self._v3_agent_done:
+                        return
+                    self._v3_agent_done.add(_akey)
+                    _bars = getattr(ctx, "stock_bars", None) or getattr(ctx, "bars", None) or []
+                    _snap = _vp.build_snapshot(symbol, quote, _bars, self._v3_intraday_bars(symbol))
+                    _ag = _vp.ask_agent(_snap)
+                    _arec = {"date": today, "symbol": symbol, "phase": _ph,
+                             "agent_ok": bool(_ag.get("ok")), "agent_reason": _ag.get("reason"),
+                             "agent_decision": _ag.get("decision"), "agent_error": _ag.get("error"),
+                             "window": {"phase": _snap.get("phase"), "last_price": _snap.get("last_price"),
+                                        "same_day_executable": _snap.get("same_day_executable")}}
+                    self._v3_log(_arec)
+                    if not _ag.get("ok") or _ag.get("no_action"):
+                        return
+                    _plan = _vp.plan_sell(symbol, quote, float(dec.target_pct or 0),
+                                          account_id=T_MONITOR_ACCOUNT)
+                    if not _plan.get("ok"):
+                        _arec["plan_reason"] = _plan.get("reason")
+                        self._v3_log(_arec)
+                        return
+                    _key = _vp.action_key(today, symbol, dec.action, (dec.level or {}).get("price"))
+                    if _vp.already_done(_key):
+                        return
+                    _gw = _vp.execute_plan(_plan, reason="[v3] %s %s" % (dec.action, dec.reason),
+                                           live=True)
+                    _arec.update({"plan": _plan, "gateway": _gw, "key": _key})
+                    _vp.record_action({"key": _key, "date": today, "symbol": symbol,
+                                       "action": dec.action, "level": dec.level,
+                                       "target_pct": dec.target_pct, "plan": _plan,
+                                       "gateway": _gw})
+                    self._v3_log(_arec)
+                    if _gw.get("status") == "success":
+                        self._sold_this_round.add(symbol)
+                        print("[TMonitor][V3][LIVE] %s %s %s股 target=%s" % (
+                            symbol, dec.action, _plan.get("volume"), dec.target_pct), flush=True)
+                except Exception as _e_live:
+                    print("[TMonitor][V3][LIVE] 异常(不卖) %s: %s" % (symbol, str(_e_live)[:160]), flush=True)
+        except Exception as e:
+            print("[TMonitor][V3] 异常(不卖) %s: %s" % (symbol, str(e)[:120]), flush=True)
+
+    def _v3_precompute_positions(self) -> None:
+        """14:50 预计算：只问一次，结果落盘，14:55 读缓存。"""
+        if str(os.getenv("WOLF_V3_LIVE", "0")).strip() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            from app.services import decision_window as _dw
+            if _dw.phase_at().get("phase") != "tail_preview":
+                return
+            from app.services import wolf_v3_production as _vp
+            from app.services.t_gateway import get_sellable_ledger
+            ledger = get_sellable_ledger(T_MONITOR_ACCOUNT)
+            holds = [p for p in self._positions() if float(p.get("volume") or 0) > 0]
+            pairs = [(p.get("symbol"), _normalize_symbol(p.get("symbol"))) for p in holds if p.get("symbol")]
+            quotes = self._fetch_quotes_concurrent([s for _, s in pairs])
+            cap = int(os.getenv("WOLF_V3_PRECOMPUTE_MAX", "8"))
+            today = _dt.datetime.now().strftime("%Y%m%d")
+            for raw, sym in pairs[:cap]:
+                if (raw, today) in self._v3_precompute_done:
+                    continue
+                self._v3_precompute_done.add((raw, today))
+                q = quotes.get(sym)
+                if not q or not q.get("current"):
+                    continue
+                try:
+                    dec = self._v3_context(raw, q, ledger)
+                    bars = getattr(dec, "stock_bars", None) or getattr(dec, "bars", None) or []
+                    snap = _vp.build_snapshot(raw, q, bars, self._v3_intraday_bars(raw))
+                    res = _vp.precompute_agent(snap)
+                    self._v3_log({"date": _dt.datetime.now().strftime("%Y%m%d"), "symbol": raw,
+                                  "phase": "tail_preview", "precompute": True,
+                                  "agent_ok": bool(res.get("ok")), "agent_reason": res.get("reason"),
+                                  "agent_decision": res.get("decision")})
+                except Exception as _e:
+                    print("[TMonitor][V3] precompute %s: %s" % (raw, str(_e)[:100]), flush=True)
+        except Exception as e:
+            print("[TMonitor][V3] precompute 异常: %s" % str(e)[:120], flush=True)
+
+    def _v3_agent_positions(self, phase_label: str, scan_only: bool = False) -> None:
+        """窗口驱动的 agent 全持仓判定（tail_confirm / 14:30 定点）。
+
+        不依赖 WL.evaluate 是否 hold：先让 agent 判“是否执行”，再用确定性层给 target_pct；
+        agent 说 hold 就不卖；agent 说减仓且确定性层 hold 时，用 WOLF_V3_AGENT_TARGET（默认 0.5）。
+        """
+        if str(os.getenv("WOLF_V3_LIVE", "0")).strip() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            import datetime as _dt
+            from app.services import wolf_v3_production as _vp
+            from app.services import wolf_stop_layer as WL
+            from app.services.t_gateway import get_sellable_ledger
+            today = _dt.datetime.now().strftime("%Y%m%d")
+            ledger = get_sellable_ledger(T_MONITOR_ACCOUNT)
+            holds = [p for p in self._positions() if float(p.get("volume") or 0) > 0]
+            pairs = [(p.get("symbol"), _normalize_symbol(p.get("symbol"))) for p in holds if p.get("symbol")]
+            quotes = self._fetch_quotes_concurrent([s for _, s in pairs])
+            for raw, sym in pairs:
+                q = quotes.get(sym)
+                if not q or not q.get("current"):
+                    continue
+                if _vp.pg_symbol_action_today(raw, today):
+                    continue
+                akey = (raw, phase_label, today)
+                if akey in self._v3_agent_done:
+                    continue
+                self._v3_agent_done.add(akey)
+                try:
+                    ctx = self._v3_context(raw, q, ledger)
+                    dec = WL.evaluate(ctx)
+                    bars = getattr(ctx, "stock_bars", None) or getattr(ctx, "bars", None) or []
+                    snap = _vp.build_snapshot(raw, q, bars, self._v3_intraday_bars(raw))
+                    res = _vp.ask_agent_cached(snap)
+                    self._v3_log({"date": today, "symbol": raw, "phase": phase_label,
+                                  "agent_ok": bool(res.get("ok")), "agent_reason": res.get("reason"),
+                                  "agent_decision": res.get("decision")})
+                    if not res.get("ok") or res.get("no_action"):
+                        continue
+                    target = float(dec.target_pct) if dec.action in ("reduce_to", "exit") else float(
+                        os.getenv("WOLF_V3_AGENT_TARGET", "0.5"))
+                    _decd = res.get("decision") or {}
+                    _rz = _decd.get("rebound_zone") if isinstance(_decd, dict) else None
+                    if isinstance(_rz, dict) and _rz.get("zone"):
+                        try:
+                            _lo, _hi = float(_rz["zone"][0]), float(_rz["zone"][1])
+                            _bp = float((dec.level or {}).get("price") or 0)
+                            _vp.save_rebound_watch(raw, today, _lo, _hi, _bp, target,
+                                                   source="v3_agent", payload=_decd)
+                            self._v3_log({"date": today, "symbol": raw, "phase": phase_label,
+                                          "rebound_watch": {"zone": [_lo, _hi], "target": target}})
+                        except Exception:
+                            pass
+                    if scan_only or str(_decd.get("action_mode") or "") == "rebound_exit":
+                        # 早盘扫描只建 watch；反抽卖出也交给 watcher，不在这里现价卖
+                        continue
+                    plan = _vp.plan_sell(raw, q, target, account_id=T_MONITOR_ACCOUNT)
+                    if not plan.get("ok"):
+                        continue
+                    key = _vp.action_key(today, raw, "agent_" + phase_label, (dec.level or {}).get("price"))
+                    if _vp.already_done(key):
+                        continue
+                    gw = _vp.execute_plan(plan, reason="[v3-agent] %s" % phase_label, live=True)
+                    _vp.record_action({"key": key, "date": today, "symbol": raw,
+                                       "action": "agent_" + phase_label, "level": dec.level,
+                                       "target_pct": target, "plan": plan, "gateway": gw})
+                    self._v3_log({"date": today, "symbol": raw, "phase": phase_label,
+                                  "agent_exec": True, "plan": plan, "gateway": gw, "key": key})
+                    if gw.get("status") == "success":
+                        self._sold_this_round.add(raw)
+                        print("[TMonitor][V3][LIVE] %s agent %s %s股 target=%s" % (
+                            raw, phase_label, plan.get("volume"), target), flush=True)
+                except Exception as _e:
+                    print("[TMonitor][V3] agent %s %s: %s" % (phase_label, raw, str(_e)[:120]), flush=True)
+        except Exception as e:
+            print("[TMonitor][V3] agent positions 异常: %s" % str(e)[:120], flush=True)
+
+    def _v3_intraday_event(self, symbol: str, quote: dict, ledger: dict, mode: str, level: float) -> None:
+        """3×15/放量确认后的 agent 判定；反抽型转 rebound_watch，否则按 target 执行。"""
+        try:
+            import datetime as _dt
+            from app.services import wolf_v3_production as _vp
+            from app.services import wolf_stop_layer as WL
+            today = _dt.datetime.now().strftime("%Y%m%d")
+            ctx = self._v3_context(symbol, quote, ledger)
+            dec = WL.evaluate(ctx)
+            bars = getattr(ctx, "stock_bars", None) or getattr(ctx, "bars", None) or []
+            snap = _vp.build_snapshot(symbol, quote, bars, self._v3_intraday_bars(symbol))
+            if mode == "3x15":
+                _zz = _vp.rebound_zone_from_level(level, snap.get("candidates") or [])
+                if _zz:
+                    _vp.save_rebound_watch(symbol, today, _zz["zone_low"], _zz["zone_high"], level,
+                                           float(os.getenv("WOLF_V3_REBOUND_TARGET", "0.5")),
+                                           source="intraday_3x15",
+                                           payload={"level": level, "hit": "3x15"},
+                                           invalidation_level=round(_zz["zone_high"] * 1.01, 4))
+                    self._v3_log({"date": today, "symbol": symbol, "phase": "intraday_3x15",
+                                  "rebound_watch": _zz, "level": level, "auto_wait_rebound": True})
+                return
+            res = _vp.ask_agent(snap)
+            self._v3_log({"date": today, "symbol": symbol, "phase": "intraday_" + mode,
+                          "agent_ok": bool(res.get("ok")), "agent_reason": res.get("reason"),
+                          "agent_decision": res.get("decision"), "level": level})
+            if not res.get("ok") or res.get("no_action"):
+                return
+            d = res.get("decision") or {}
+            rz = d.get("rebound_zone") if isinstance(d, dict) else None
+            target = float(dec.target_pct) if dec.action in ("reduce_to", "exit") else float(
+                os.getenv("WOLF_V3_AGENT_TARGET", "0.5"))
+            if isinstance(rz, dict) and rz.get("zone"):
+                try:
+                    _vp.save_rebound_watch(symbol, today, float(rz["zone"][0]), float(rz["zone"][1]),
+                                           level, target, source="intraday_" + mode, payload=d)
+                except Exception:
+                    pass
+            if str(d.get("action_mode") or "") == "rebound_exit":
+                return
+            plan = _vp.plan_sell(symbol, quote, target, account_id=T_MONITOR_ACCOUNT)
+            if not plan.get("ok"):
+                return
+            key = _vp.action_key(today, symbol, "intraday_" + mode, "%.2f" % level)
+            if _vp.already_done(key):
+                return
+            gw = _vp.execute_plan(plan, reason="[v3-intraday-%s] %.2f" % (mode, level), live=True)
+            _vp.record_action({"key": key, "date": today, "symbol": symbol,
+                               "action": "intraday_" + mode, "level": {"price": level},
+                               "target_pct": target, "plan": plan, "gateway": gw})
+            self._v3_log({"date": today, "symbol": symbol, "phase": "intraday_" + mode,
+                          "intraday_exec": True, "plan": plan, "gateway": gw, "key": key})
+            if gw.get("status") == "success":
+                self._sold_this_round.add(symbol)
+        except Exception as e:
+            print("[TMonitor][V3] intraday event %s: %s" % (symbol, str(e)[:120]), flush=True)
+
+    def _v3_check_intraday_watches(self) -> None:
+        """30s 轮询：已完成 15min 连续 3 根 / 放量 5min 破位 → 事件。"""
+        if str(os.getenv("WOLF_V3_LIVE", "0")).strip() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            import datetime as _dt
+            from app.services import wolf_v3_intraday as _vi
+            from app.services import wolf_v3_production as _vp
+            from app.services.t_gateway import get_sellable_ledger
+            today = _dt.datetime.now().strftime("%Y%m%d")
+            ledger = get_sellable_ledger(T_MONITOR_ACCOUNT)
+            holds = [p for p in self._positions() if float(p.get("volume") or 0) > 0]
+            pairs = [(p.get("symbol"), _normalize_symbol(p.get("symbol"))) for p in holds if p.get("symbol")]
+            quotes = self._fetch_quotes_concurrent([s for _, s in pairs])
+            now = _dt.datetime.now()
+            for raw, sym in pairs:
+                q = quotes.get(sym)
+                if not q or not q.get("current"):
+                    continue
+                if _vp.pg_symbol_action_today(raw, today):
+                    continue
+                bars5 = self._v3_intraday_bars(raw)
+                if len(bars5) < 5:
+                    continue
+                ctx = self._v3_context(raw, q, ledger)
+                dec = WL.evaluate(ctx) if "WL" in globals() else None
+                if dec is None:
+                    from app.services import wolf_stop_layer as _wl
+                    dec = _wl.evaluate(ctx)
+                snap = _vp.build_snapshot(raw, q, getattr(ctx, "stock_bars", None) or getattr(ctx, "bars", None) or [],
+                                          bars5)
+                # 不只 broken：刚跌破/正在测试的 holding 位也纳入候选
+                _cur = float(q.get("current") or 0)
+                levels = [c for c in (snap.get("candidates") or [])
+                          if float(c.get("price") or 0) >= _cur * 0.999
+                          and str(c.get("state") or "") in ("broken", "holding")
+                          and abs(float(c.get("distance_pct") or 0)) <= 2.0]
+                levels.sort(key=lambda c: abs(float(c.get("distance_pct") or 0)))
+                for c in levels[:3]:
+                    lv = float(c.get("price") or 0)
+                    if lv <= 0:
+                        continue
+                    d3 = _vi.detect_3x15(bars5, lv, now)
+                    dv = _vi.detect_volume_break(bars5, lv, now,
+                                                 ratio_threshold=float(os.getenv("WOLF_V3_VOL_RATIO", "1.5")))
+                    for mode, hit in (("3x15", d3), ("volume", dv)):
+                        if not hit.get("confirmed"):
+                            continue
+                        dkey = (today, raw, mode, round(lv, 2))
+                        if dkey in self._v3_intraday_done:
+                            continue
+                        self._v3_intraday_done.add(dkey)
+                        blocked = _vi.in_execution_block(now)
+                        status = "pending" if blocked else "confirmed"
+                        _vi.save_watch(today, raw, lv, mode, str(hit.get("break_time") or hit.get("last_bar_time") or ""),
+                                       int(hit.get("bar_count") or 0), str(hit.get("last_bar_time") or ""),
+                                       float(hit.get("volume_ratio") or 0), status=status,
+                                       payload={"candidate": c, "hit": hit})
+                        self._v3_log({"date": today, "symbol": raw, "phase": "intraday_" + mode,
+                                      "intraday_watch": {"level": lv, "status": status, "hit": hit}})
+                        if not blocked:
+                            self._v3_intraday_event(raw, q, ledger, mode, lv)
+        except Exception as e:
+            print("[TMonitor][V3] intraday watch 异常: %s" % str(e)[:120], flush=True)
+
+    def _v3_check_rebound_watches(self) -> None:
+        """30s 轮询反抽带：进入 zone → 非禁区执行；13:00-14:30 只挂 pending；14:55 过期。"""
+        if str(os.getenv("WOLF_V3_LIVE", "0")).strip() not in ("1", "true", "yes", "on"):
+            return
+        try:
+            import datetime as _dt
+            from app.services import decision_window as _dw
+            from app.services import wolf_v3_production as _vp
+            today = _dt.datetime.now().strftime("%Y%m%d")
+            watches = _vp.list_rebound_watches(today)
+            if not watches:
+                return
+            syms = sorted({str(w.get("symbol")) for w in watches if w.get("symbol")})
+            quotes = self._fetch_quotes_concurrent([_normalize_symbol(x) for x in syms])
+            now = _dt.datetime.now()
+            phase = _dw.phase_at(now).get("phase")
+            after_1455 = (now.hour * 60 + now.minute) >= (14 * 60 + 55)
+            for w in watches:
+                sym = str(w.get("symbol"))
+                q = quotes.get(_normalize_symbol(sym)) or quotes.get(sym) or {}
+                px = float(q.get("current") or 0)
+                hi_px = float(q.get("high") or px)
+                lo, hi = float(w.get("zone_low") or 0), float(w.get("zone_high") or 0)
+                if px <= 0 or lo <= 0 or hi <= 0:
+                    continue
+                _sig = _vp.rebound_signal(px, hi_px, lo, hi)
+                in_zone, touch_limit = _sig["in_zone"], _sig["touch_limit"]
+                # 确认后/等待中，收盘或现价站回 zone 上沿之外 → 结构修复/假破，取消反抽卖
+                inv = float(w.get("invalidation_level") or hi)
+                if px > inv:
+                    _vp.mark_rebound_watch(int(w["id"]), "invalidated")
+                    # 没执行过减仓 → 允许同一 level 二次触发：清掉当日 done key，重新 arm rebreak
+                    if not _vp.pg_symbol_action_today(sym, today):
+                        try:
+                            for k in list(self._v3_intraday_done):
+                                if len(k) >= 4 and k[0] == today and k[1] == sym and abs(float(k[3]) - float(w.get("break_price") or 0)) < 0.001:
+                                    self._v3_intraday_done.discard(k)
+                        except Exception:
+                            pass
+                        try:
+                            from app.services import wolf_v3_intraday as _vi
+                            _vi.save_watch(today, sym, float(w.get("break_price") or hi), "rebreak",
+                                           "", 0, "", 0, status="watching",
+                                           payload={"reason": "rebound_invalidated", "zone": [lo, hi]})
+                        except Exception:
+                            pass
+                    self._v3_log({"date": today, "symbol": sym, "phase": phase,
+                                  "rebound_invalidated": {"zone": [lo, hi], "invalidation": inv, "price": px},
+                                  "rearm": not _vp.pg_symbol_action_today(sym, today)})
+                    continue
+                if in_zone and phase == "intraday_blocked":
+                    if w.get("status") != "pending":
+                        _vp.mark_rebound_watch(int(w["id"]), "pending")
+                        self._v3_log({"date": today, "symbol": sym, "phase": phase,
+                                      "rebound_pending": {"zone": [lo, hi], "price": px}})
+                    continue
+                if (in_zone or touch_limit) and not after_1455:
+                    target = float(w.get("target_pct") or os.getenv("WOLF_V3_REBOUND_TARGET", "0.5"))
+                    plan = _vp.plan_sell(sym, q, target, account_id=T_MONITOR_ACCOUNT)
+                    if not plan.get("ok"):
+                        continue
+                    if touch_limit:
+                        plan["price"] = lo
+                    key = _vp.action_key(today, sym, "rebound_exit", "%.2f" % hi)
+                    if _vp.already_done(key):
+                        _vp.mark_rebound_watch(int(w["id"]), "executed")
+                        continue
+                    gw = _vp.execute_plan(plan, reason="[v3-rebound%s] %.2f-%.2f" % (
+                        "-limit" if touch_limit else "", lo, hi), live=True)
+                    _vp.record_action({"key": key, "date": today, "symbol": sym,
+                                       "action": "rebound_exit", "level": {"price": hi},
+                                       "target_pct": target, "plan": plan, "gateway": gw})
+                    _vp.mark_rebound_watch(int(w["id"]), "executed" if gw.get("status") in ("success", "planned") else "watching")
+                    self._v3_log({"date": today, "symbol": sym, "phase": phase,
+                                  "rebound_exec": True, "zone": [lo, hi], "plan": plan, "gateway": gw})
+                    if gw.get("status") == "success":
+                        self._sold_this_round.add(sym)
+                        print("[TMonitor][V3][REBOUND] %s %s股 @%.2f zone=%.2f-%.2f" % (
+                            sym, plan.get("volume"), px, lo, hi), flush=True)
+                    continue
+                if after_1455 and w.get("status") in ("watching", "pending"):
+                    # 持续下跌/始终不反抽：尾盘兜底卖，不再“过期等于不卖”
+                    if _vp.pg_symbol_action_today(sym, today):
+                        _vp.mark_rebound_watch(int(w["id"]), "executed")
+                        continue
+                    target = float(w.get("target_pct") or os.getenv("WOLF_V3_REBOUND_TARGET", "0.5"))
+                    plan = _vp.plan_sell(sym, q, target, account_id=T_MONITOR_ACCOUNT)
+                    if not plan.get("ok"):
+                        _vp.mark_rebound_watch(int(w["id"]), "expired")
+                        continue
+                    key = _vp.action_key(today, sym, "rebound_fallback", "%.2f" % hi)
+                    if _vp.already_done(key):
+                        _vp.mark_rebound_watch(int(w["id"]), "executed")
+                        continue
+                    gw = _vp.execute_plan(plan, reason="[v3-rebound-fallback] %.2f-%.2f" % (lo, hi), live=True)
+                    _vp.record_action({"key": key, "date": today, "symbol": sym,
+                                       "action": "rebound_fallback", "level": {"price": hi},
+                                       "target_pct": target, "plan": plan, "gateway": gw})
+                    _vp.mark_rebound_watch(int(w["id"]), "executed" if gw.get("status") in ("success", "planned") else "expired")
+                    self._v3_log({"date": today, "symbol": sym, "phase": phase,
+                                  "rebound_fallback": True, "zone": [lo, hi], "plan": plan, "gateway": gw})
+                    if gw.get("status") == "success":
+                        self._sold_this_round.add(sym)
+                        print("[TMonitor][V3][FALLBACK] %s %s股 @%.2f zone=%.2f-%.2f" % (
+                            sym, plan.get("volume"), px, lo, hi), flush=True)
+        except Exception as e:
+            print("[TMonitor][V3] rebound watch 异常: %s" % str(e)[:120], flush=True)
 
     def _after_sell(self, sym, account, kind, reason="") -> None:
         """G3（2026-09-14）：**破线类**卖出成交后"删票"（登记观察池黑名单，带 TTL）。
@@ -2865,108 +3388,6 @@ class TMonitor:
         except Exception as e:
             self._status['errors'] += 1
             print(f"[TMonitor] position_discipline异常: {e}")
-
-    def _check_index_level_stop(self) -> None:
-        """③ 指数大级别止损（2026-09-10，狼大 2026-08-27 549楼原话）。
-
-        狼大:「**只看指数大级别**如果不走大5浪而转为下跌1浪就止损」。
-        信号 = wolf_context.index_level_stop(): 指数(上证) wave_state.level == "down"（**只取大级别**,
-               不掺 sub_level/operation, 依他"只看大级别"的原话）, 带**新鲜度护栏**(浪型数据过期则不触发)。
-
-        动作 = 对账户内所有持仓执行止损:
-          · 卖出量复用 _stop_exit_volume（收盘窗口→清仓 / 盘中→减半仓, 与个股止损同一分级;
-            理由: 不新造第二套量级规则, 避免 S7 那种并行口径）;
-          · 受 ④ 时点门约束(_stop_time_ok: 13:00-14:30 仅预警不执行);
-          · 走网关 is_stop_loss=True（止损单豁免日亏损熔断）。
-        开关: WOLF_INDEX_LEVEL_STOP=0 关闭。去抖: 每标的每日一次。
-        """
-        try:
-            if os.getenv("WOLF_INDEX_LEVEL_STOP", "1").strip() in ("0", "false", "no"):
-                return
-            import sys as _sp
-            _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps", "main_line")
-            if _p not in _sp.path:
-                _sp.path.insert(0, _p)
-            # ③层加宽（2026-09-14）：他的"尾段/结束"在系统里主要是 d4 系列/顶态子浪，不只是 down。
-            # 关键点重放校准：2026 年 6 次"尾段"→d4/4-x+defense/t_only；2022"反弹浪走完"→d4/C杀、d4/4-5；2021-01-21→d3/3-5。
-            # 开关 WOLF_INDEX_TOP_WIDEN=0 → 退回旧口径（只认 level=='down'）。
-            _today = datetime.now().strftime('%Y%m%d')
-            # ③ 附加护栏（2026-09-14）：锚点（wave_pivots）过旧也提示 —— 它是浪型判定的输入，
-            # 刷新链断了会导致"判定看似新鲜、依据却是旧的"。仅告警，不改行为。
-            try:
-                import sys as _s3, os as _o3
-                _s3.path.insert(0, _o3.path.join(_o3.path.dirname(_o3.path.dirname(_o3.path.dirname(_o3.path.abspath(__file__)))), "jobs"))
-                from wave_pivots_pg import age_days as _pv_age
-                _pa = _pv_age()
-                _lim = int(os.getenv("WOLF_PIVOTS_MAX_STALE_DAYS", "10"))
-                if _pa is not None and _lim > 0 and _pa > _lim:
-                    _tkp = ("__pivots__", "stale", _today)
-                    if _tkp not in _STOP_HOLD_WARNED:
-                        _STOP_HOLD_WARNED.add(_tkp)
-                        print("[TMonitor] ⚠️ wave_pivots 已 %d 天未重建（阈值 %d）→ 浪型判定的锚点可能滞后" % (_pa, _lim))
-            except Exception as _eN14:
-                # 2026-09-25（账本 §9.118）：静默兜底 ⇒ 接报警落盘（不改行为；gate_failures.jsonl 可复盘）
-                from app.services import gate_alarm as _gaNote
-                _gaNote.note("t_monitor:line1734", _eN14)
-                pass
-            _widen = os.getenv("WOLF_INDEX_TOP_WIDEN", "1").strip() not in ("0", "false", "no")
-            _act = None
-            if _widen:
-                from wolf_context import index_top_state
-                _act, _why = index_top_state(today=_today)
-                _stop = _act is not None
-            else:
-                from wolf_context import index_level_stop
-                _stop, _why = index_level_stop(today=_today)
-                _act = "clear" if _stop else None
-            if not _stop:
-                return
-            _tok, _treason = _stop_time_ok()
-            if not _tok:
-                _tk = ("__index__", "timegate", _today)
-                if _tk not in _STOP_HOLD_WARNED:
-                    _STOP_HOLD_WARNED.add(_tk)
-                    print(f"[TMonitor] 指数级止损被时点门拦下(仅预警): {_why} | {_treason}")
-                return
-            from app.services.t_gateway import gateway_execute, get_sellable_ledger
-            _acct = POS_ACCOUNT
-            _ledger = get_sellable_ledger(account_id=_acct) or {}
-            _rows = []
-            for p in self._positions(_acct):
-                if float(p.get('volume') or 0) <= 0:
-                    continue
-                _sym = _normalize_symbol(p.get('symbol'))
-                _sellable = int((_ledger.get(_sym) or {}).get("sellable", 0) or 0)
-                if _sellable > 0:
-                    _rows.append((_sym, _sellable))
-            if not _rows:
-                return
-            _quotes = fetch_tencent_quote([_normalize_symbol(s for s, _ in _rows)])
-            _close_win = _in_close_window()
-            for _sym, _sellable in _rows:
-                if (_sym, 'wolf_index_level_stop', _today) in self._wolf_done:
-                    continue
-                _q = _quotes.get(_sym) or {}
-                _cur = float(_q.get("current") or 0)
-                if _cur <= 0:
-                    continue
-                _vol, _mode = _stop_exit_volume(_sellable, _close_win)
-                if _act == "reduce":
-                    # 顶态 = **减仓级**（不是清仓）：不论是否收盘窗口都只减半
-                    _vol = max(((_vol // 2) // 100) * 100, 100) if _vol >= 200 else _vol
-                    _mode = "top_reduce"
-                if _vol <= 0:
-                    continue
-                _gw = gateway_execute(_sym, "sell", _cur, _vol,
-                                      reason="指数级%s→%s（%s）" % ("顶态减仓" if _act == "reduce" else "大级别止损", _mode, _why),
-                                      decision_source="rule", is_stop_loss=True, account_id=_acct)
-                print(f"[TMonitor] 指数级止损 {_sym} @ {_cur} x{_vol}[{_mode}]: {_gw.get('status')} | {_why}")
-                if _gw.get("status") == "success":
-                    self._after_sell(_sym, _acct, "stop_loss", "指数大级别止损")
-                self._wolf_done.add((_sym, 'wolf_index_level_stop', _today))
-        except Exception as e:
-            self._status['errors'] += 1
-            print(f"[TMonitor] index_level_stop异常: {e}")
 
     def _ambush_entry_day(self, acct: str, sym: str) -> str:
         """本段持仓的**入场日**（FIFO 口径：按成交**逆序**累加到当前持仓量为止 ✓）。"""
@@ -3640,15 +4061,12 @@ class TMonitor:
         for _fn in (
             self._settle_tsell_pending, self._ambush_warn_trim, self._settle_pullback_sell,
             self._check_plan_triggers, self._check_wolf_t_rules, self._check_roundtrip_sell,
-            self._check_defensive_t_reduce, self._check_board_half, self._check_profit_take,
+            self._check_board_half, self._check_profit_take,
             self._check_weekend_hedge, self._check_hedge_refill, self._check_fib_target,
-            self._check_passive_stop, self._check_boll_sell, self._check_boll_mid_exit,
-            self._check_position_discipline, self._check_index_level_stop,
-            self._check_logic_time_stop, self._check_ambush_discipline,
+            self._check_boll_sell,
             self._check_ambush_promote_add,   # **转正后主动加仓一次** ✓（账本 §9.244）
             self._check_breakout_add,        # **突破加仓／回踩确认加仓** ✓（账本 §9.304 ✓ 两个开关默认关 ✓）
             self._check_doji_fail,           # **B：十字星后不突破 ⇒ 减半** ✓（账本 §9.340 ✓ 默认关 ✓）
-            self._check_intraday_t_stop,
         ):
             try:
                 _fn()
@@ -4406,6 +4824,8 @@ class TMonitor:
             print("[round-prof] _round 开始（开关生效 ✓）", flush=True)
         # 1) regime 前置（每轮一次，缓存 5s）
         regime_state = compute_regime()
+        if STOP_V3:
+            self._check_all_positions_v3()
 
         # 2) 当日有效条件（只读目标账户 + 只跑狼大做T表达式条件, 屏蔽其他做T）
         conditions = t_db.list_active_conditions(account_id=T_MONITOR_ACCOUNT)
@@ -4518,6 +4938,8 @@ class TMonitor:
         _go_caution = {"computed": False, "reason": None}   # A6/A9 谨慎条件：每轮惰性算一次
         for cond in conditions:
             symbol = cond["symbol"]
+            if str(cond.get("trigger_kind") or "") in _V3_BYPASS_KINDS:
+                continue
             if not _board_tradable(symbol):
                 continue
             if str(cond.get("direction") or "") == "sell" and symbol in self._sold_this_round:
@@ -6259,273 +6681,11 @@ class TMonitor:
             return 0
 
     def _check_stop_loss(self, symbol: str, quote: dict, ledger: dict):
-        """止损扫描（生产）：持仓标的现价 ≤ stop_loss_price → 止损卖腿（reason=stop_loss）。
-
-        - 每标的每轮一次（符号条件共享同一止损价，取条件表中非零止损价）
-        - **阶段化止损线（2026-09-10, 狼大止损六层之①/④）**：
-          建仓初期（<= WOLF_EARLY_STOP_DAYS=13 交易日）→ **波段低点 ×(1-3%)**（狼大 2026-03-05 原话，
-          波段低点以**建仓日**为锚锁定，见 wolf_early_stop）；已成趋势后 → 既有 `stop_loss_price`
-          （六层之②趋势线法语料无参数，用户决策暂用 stop_loss_price）。
-          **「无利空」前提**：该标的有持有期内的意外事件/黑天鹅级利空（data/wolf_negative_events.json）
-          → **不套结构线**，退回 `stop_loss_price`（狼大: 那是"别的逻辑", 非自己逻辑被证伪）。
-          `WOLF_EARLY_STOP=0` 退回"一律 stop_loss_price"；`WOLF_NEG_EVENT=0` 忽略利空前提。
-        - 当日已止损过（t_triggers 含当日 stop_loss 事件）则跳过，防止重复卖
-        - **卖量分级（P2-4 完整落地, 2026-09-10）**：收盘时段(>=14:55)确认破位 → **清仓(含底仓)**;
-          盘中确认破位 → 减半仓。见 _stop_exit_volume / _in_close_window。
-          （原 docstring 写"卖量 = 可卖底仓全部", 与当时代码实际的"减半仓"不符, 已更正。）
-        - 破位是否"确认"由 _stop_close_confirm(假跌破守卫)判定; 走网关 ai_led 档位(is_stop_loss=True)
-        - 止损后冻结该标的全部条件（armed=0）
-        """
-        try:
-            from app.services import t_db
-            from app.services.t_gateway import gateway_execute
-            item = (ledger or {}).get(symbol) or {}
-            sellable = int(item.get("sellable", 0) or 0)
-            if sellable <= 0:
-                return
-            current = float(quote.get("current", 0) or 0)
-            if current <= 0:
-                return
-            # ★★ 账本 §9.713 ✓：**止损只在指数大级别破位**（＋地量不割）——
-            #   实现见 `t_playbook.stop_allowed` ✓；本处是**唯一接线点** ✓
-            #   开关 `WOLF_STOP_BY_INDEX_BREAK`（默认 **0** ⇒ 生产零影响 ✓、行为逐位不变 ✓）
-            if STOP_BY_INDEX_BREAK:
-                try:
-                    from app.services import t_playbook as _pb
-                    from app.services.wave_gate import check_gate as _wg_c, sim_day8 as _sd8
-                    _ix_down = (str((_wg_c("low_buy", as_of=_sd8() or None) or {}).get("regime")) == "down")
-                    _dry = bool(quote.get("volume_dry") or quote.get("dry"))
-                    _st = _pb.stop_allowed(_ix_down, volume_dry=_dry) or {}
-                    if not _st.get("ok"):
-                        _ROUND_TIMING["stop_gate_skip"] += 1
-                        print("[TMonitor] %s 止损跳过：%s" % (symbol, str(_st.get("why"))[:80]), flush=True)
-                        return
-                    _ROUND_TIMING["stop_gate_pass"] += 1
-                except Exception as _e_sb:
-                    _ROUND_TIMING["stop_gate_error"] += 1
-                    print("[TMonitor] 指数破位闸异常(放行): %s" % str(_e_sb)[:70], flush=True)
-            stop_price = None
-            conds = t_db.list_active_conditions(symbol=symbol,
-                                                account_id=T_MONITOR_ACCOUNT)
-            for c in conds or []:
-                sp = float(c.get("stop_loss_price") or 0)
-                if sp > 0:
-                    stop_price = sp
-                    break
-            # ── ①+④ 阶段化止损线（2026-09-10, 狼大止损六层之①/④）──
-            # 狼大 2026-03-05「13日内跌破波段低点的-3%没有收回 直接止损」;
-            #        2026-03-06「**已经成为趋势后**…这个就没意义了…转为我之前说的趋势波段止盈止损方法
-            #                    也就是用**趋势线**的方法…不是一个策略用到底的」。
-            # → 建仓初期(<=13 交易日)用"建仓时点锁定的波段低点 -3%"; 已成趋势后维持既有 stop_loss_price
-            #   （六层之②趋势线法: 语料**无参数**, 用户 2026-09-10 决策"先用 stop_loss_price"，回测后再定）。
-            # 波段低点以**建仓日**为锚重算（等价于建仓时锁定, 不随行情滚动）—— 见 wolf_early_stop 模块头。
-            _src = "none"
-            if os.getenv("WOLF_EARLY_STOP", "1").strip() not in ("0", "false", "no"):
-                try:
-                    from app.services.wolf_early_stop import resolve_stop as _resolve_stop
-                    _bd = self._buy_date(symbol)
-                    _stop_price, _src, _sreason = _resolve_stop(
-                        stop_price, self._daily_dated(symbol, 40), _bd,
-                        symbol=symbol, today=datetime.now().strftime('%Y%m%d'))
-                    if _src in ("wolf_early_swing", "neg_event"):
-                        _tk_s = (symbol, "earlyswing", datetime.now().strftime('%Y%m%d'))
-                        if _tk_s not in _STOP_HOLD_WARNED:
-                            _STOP_HOLD_WARNED.add(_tk_s)
-                            print(f"[TMonitor] ①波段逻辑止损线({_src}) {symbol}: {_sreason}")
-                    stop_price = _stop_price
-                except Exception as _ee:
-                    print(f"[TMonitor] 建仓初期止损线解析异常(退回 stop_loss_price) {symbol}: {str(_ee)[:100]}")
-            # ── ② 趋势线法（2026-09-14 落地）：**已成趋势后**换成他的趋势线口径 ──
-            # 狼大 2026-03-06「已经成为趋势后…用**趋势线**的方法…不是一个策略用到底的」；
-            #      2021-01-28「用 13日 34日做强弱分类，**60日是我的底线**，甚至没站稳 34日**带量**下穿的我都会砍掉」；
-            #      2026-01-12「收黑K跌破5日线…**减仓**避一下」。
-            # 运行条件：WOLF_TREND_STOP=1（默认）且已超出建仓初期窗口（① 未接管时）。
-            # 回退：WOLF_TREND_STOP=0 → 回到既有 stop_loss_price 口径（本文档下称"现状"）。
-            _trend_act = None
-            try:
-                from app.services import wolf_trend_stop as _TS
-                if _TS.enabled():
-                    _bd_t = self._buy_date(symbol)
-                    _held = None
-                    if _bd_t:
-                        try:
-                            from app.services.wolf_early_stop import held_trading_days as _htd
-                            _held = _htd(self._daily_dated(symbol, 90), _bd_t)
-                        except Exception:
-                            _held = None
-                    _early_days = int(os.getenv("WOLF_EARLY_STOP_DAYS", "13"))
-                    if _held is None or _held > _early_days:
-                        _tv = _TS.evaluate(self._daily_dated(symbol, 90))
-                        # **口径替换**：成趋势后按他的②只用趋势线；AI 建仓时给的 stop_loss_price 默认不再并行生效
-                        # （否则它总在趋势线之上、永远先触发 → ②等于没上）。要保留旧线：WOLF_TREND_KEEP_COND_STOP=1。
-                        _keep = os.getenv("WOLF_TREND_KEEP_COND_STOP", "0").strip() not in ("0", "false", "no")
-                        # fail-open：趋势线数据不足（含测试桩/新股）→ **保留**既有 stop_loss_price，
-                        # 不因为"算不出趋势线"而把保护撤掉（与 ① 的 fail-open 同口径）。
-                        if not _keep and bool((_tv.get("state") or {}).get("ok")):
-                            stop_price = None
-                        if _tv.get("action") == "notice":
-                            _tk_n = (symbol, "trend_notice", datetime.now().strftime('%Y%m%d'))
-                            if _tk_n not in _STOP_HOLD_WARNED:
-                                _STOP_HOLD_WARNED.add(_tk_n)
-                                print(f"[TMonitor] ②趋势线提示(不自动卖) {symbol}: {_tv['why']}")
-                        if _tv.get("action") in ("exit", "reduce") and _tv.get("line"):
-                            # 2026-09-26 用户「把②趋势线止损/减仓也加进豁免名单」✓（账本 §9.201）：
-                            #   **埋伏仓豁免本规则** ✗ —— 病灶：T35 里埋伏票被它卖了 17 笔 ✓
-                            #   （其中止损 11 笔合计 **−3,246** ✗），而长样本量化显示该形态需 **40~60 日** ✓
-                            #   开关沿用 `WOLF_AMBUSH_SELL_EXEMPT`（库内默认 0 ✓）
-                            _skip_trend = False
-                            if str(os.getenv("WOLF_AMBUSH_SELL_EXEMPT", "0")).strip().lower() in ("1", "true", "yes", "on"):
-                                try:
-                                    if self._is_ambush_position(T_MONITOR_ACCOUNT, symbol):
-                                        # ★ 账本 §9.699 ✓（用户 10-07 报警：
-                                        #   `tmonitor.py:5213 cannot access local variable _tk_t` ✗ ×18）：
-                                        #   真因 ✗：本分支**先用 _tk_t**，而它要到下面 5326 行（不豁免路径）才赋值
-                                        #     ⇒ 只要命中埋伏豁免就抛 ⇒ **5318/5319 的 stop_price=0.0 与
-                                        #       _skip_trend=True 永不执行** ⇒ **埋伏仓豁免完全失效** ✗
-                                        #       （正是注释里那句「T35 里埋伏票被它卖了 17 笔」的机制 ✓）
-                                        #   ⇒ 先建 key 再判断 ✓（键名带 exempt 以区分下面的趋势线告警 ✓）
-                                        _tk_t = (symbol, "trend_exempt", datetime.now().strftime('%Y%m%d'))
-                                        if _tk_t not in _STOP_HOLD_WARNED:
-                                            _STOP_HOLD_WARNED.add(_tk_t)
-                                            print(f"[TMonitor] ②趋势线豁免埋伏仓 {symbol}: {_tv['why']}"
-                                                  " （埋伏仓只走 50 交易日 + 宽止损 −20%）", flush=True)
-                                        stop_price = 0.0
-                                        _skip_trend = True      # 2026-09-26：此处**不是循环** ⇒ 用标志位跳过 ✗（原写 continue ⇒ SyntaxError ✗）
-                                except Exception as _eAmbEx:
-                                    print("[TMonitor] ②趋势线豁免查询异常(按不豁免处理): %s"
-                                          % str(_eAmbEx)[:70], flush=True)
-                            if not _skip_trend:
-                                stop_price = float(_tv["line"])
-                                _trend_act = _tv["action"]
-                                _tk_t = (symbol, "trend", datetime.now().strftime('%Y%m%d'))
-                                if _tk_t not in _STOP_HOLD_WARNED:
-                                    _STOP_HOLD_WARNED.add(_tk_t)
-                                    print(f"[TMonitor] ②趋势线止损({_tv['action']}) {symbol}: {_tv['why']} "
-                                          f"line={stop_price}")
-            except Exception as _te:
-                print(f"[TMonitor] ②趋势线判定异常(跳过) {symbol}: {str(_te)[:100]}")
-            if not stop_price or current > stop_price:
-                return
-            # ── P2-4(2026-09-10): 收盘确认 / 假跌破守卫 ──
-            # 狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
-            #        2026-01-12「**等收盘确认破位出清**」。
-            # 复用既有纯函数 t_stop_loss_guard.evaluate_stop —— 该函数此前**只在 t_backtest 里被调用,
-            # 生产从未接线**(其 docstring 却称"回测与实盘共用", 属"文档声称 > 代码实现"的又一例)。
-            # 口径: 以**最近一根 5min bar 的收盘**作为"收盘价"判定 ——
-            #   · tick 插针(bar 收盘未破) → 不执行(假跌破/收回幅度/缩量贴支撑/分钟企稳 由守卫细判);
-            #   · 触及价取 min(bar.low, 现价), 以反映"tick 已破但 bar 未收完"的情形。
-            # 未确认 → 本轮不执行(日志当日去抖); **数据不足 → 按原口径执行**(不改变既有行为, 避免因缺数据漏止损)。
-            if os.getenv("WOLF_STOP_CLOSE_CONFIRM", "1").strip() not in ("0", "false", "no"):
-                try:
-                    from app.services import t_build as _tb
-                    _v = _stop_close_confirm(current, stop_price, self._today_bars(symbol),
-                                             self._prev_daily(symbol, 20), _tb._params())
-                    if _v is not None and str(_v.get("action")) == "hold":
-                        _tk = (symbol, round(float(stop_price), 3), datetime.now().strftime('%Y%m%d'))
-                        if _tk not in _STOP_HOLD_WARNED:
-                            _STOP_HOLD_WARNED.add(_tk)
-                            print(f"[TMonitor] 止损未确认(收盘口径) {symbol} stop={stop_price} "
-                                  f"cur={current}: {_v.get('reason')}")
-                        return
-                except Exception as _ge:
-                    # ★ 账本 §9.638 ✓（用户：「这个也不推送QQ」✗）：
-                    #   **按我们的三分类，这条属于"真失败"** ✓ —— 它意味着
-                    #   **收盘确认守卫没跑成** ✗（正是狼大"等收盘确认破位才出"那道闸 ✓）
-                    #   ⇒ 只 print 不够 ✗ ⇒ **落盘 ＋ 推 QQ** ✓（受去重/限流约束 ✓）
-                    print(f"[TMonitor] 止损守卫异常(按原口径执行) {symbol}: {str(_ge)[:100]}")
-                    try:
-                        from app.services import alert_hub as _ah_sc
-                        _ah_sc.note("t_monitor.止损守卫", msg="%s（按原口径执行 ✓）: %s"
-                                    % (symbol, str(_ge)[:180]))
-                    except Exception as _e_sc:
-                        print("[TMonitor] 止损守卫留痕失败: %s" % str(_e_sc)[:70], flush=True)
-            # ── ④ 止损时点约束（2026-09-10）──
-            # 狼大 2026-03-23:「每天的止损绝对不应该是下午1点到2点半这个时间。。。要么你早上卖 要么你尾盘卖」。
-            # 该时段(默认 [13:00,14:30)) 只预警不执行; 收盘清仓(>=14:55)不受影响。
-            _tok, _treason = _stop_time_ok()
-            if not _tok:
-                _tk2 = (symbol, "timegate", datetime.now().strftime('%Y%m%d'))
-                if _tk2 not in _STOP_HOLD_WARNED:
-                    _STOP_HOLD_WARNED.add(_tk2)
-                    print(f"[TMonitor] 止损被时点门拦下(仅预警) {symbol} stop={stop_price} cur={current}: {_treason}")
-                return
-            # ── 当日已止损过则跳过（2026-09-11 修复"止损重复执行"）──
-            # 事故复现（生产 2026-09-11 09:36:25 / 09:36:29, SH588170）:
-            #   本函数**按条件逐个调用**（_round 的 `for cond in ...` 里每条件调一次），
-            #   原去抖查的是 t_triggers.event_type='stop_loss'，而本路径**从来不写这种行**
-            #   （成功时只 update_condition_state(armed=0)）→ 该查询恒为空 → **去抖形同虚设**。
-            #   同标的两个条件 → 同一轮里执行两次"盘中减半仓" 17000+17000 = **34000 全部清光**
-            #   （狼大"底仓不卖"被违反：本意只减半）。
-            # 修复: ①内存当日去抖（同轮/同日即时生效，不依赖 DB 时序）；
-            #       ②成功后在 t_triggers 落一行 event_type='stop_loss' 作为**审计与跨重启去抖**依据。
-            _dkey = (symbol, datetime.now().strftime('%Y%m%d'))
-            if _dkey in self._stop_done_day:
-                return
-            from sqlalchemy import text
-            from app.database import SessionLocal
-            db = SessionLocal()
-            try:
-                # ⚠️ 2026-09-19 修（用户报"买了卖不出去"排查中发现）：原用 CURRENT_DATE（DB 真钟）
-                #   比较 created_at ⇒ 回放里**恒真** ⇒ 某票一旦有过一次 stop_loss 触发，
-                #   **整个回放期间不再止损**（实测 drabjan7 的 SH603660 踩过）。改为 Python 钉钟日。
-                _today = datetime.now().strftime("%Y-%m-%d")
-                done = db.execute(text(
-                    "SELECT 1 FROM t_triggers WHERE symbol = :sym AND event_type = 'stop_loss' "
-                    "AND to_char(created_at, 'YYYY-MM-DD') = :today LIMIT 1"
-                ), {"sym": symbol, "today": _today}).scalar()
-            finally:
-                db.close()
-            if done:
-                self._stop_done_day.add(_dkey)
-                return
-            # ── 卖量分级（P2-4 完整落地, 2026-09-10）──
-            # 狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
-            #        2026-01-12「**等收盘确认破位出清**」。
-            #   · **收盘时段**（>= WOLF_CLOSE_BREAK_HM, 默认 14:55）确认破位 → **清仓**（全部可卖, 含 100 股工程底仓）;
-            #   · 盘中确认破位 → **减半仓**（保留底仓继续做T, 原语义不变, 避免盘中插针被全清）。
-            # 所谓"确认破位"由上方 `_stop_close_confirm`（假跌破守卫: 收盘确认/收回幅度/分钟企稳/缩量/支撑位）判定。
-            volume, _exit_mode = _stop_exit_volume(sellable, _in_close_window())
-            if _trend_act == "reduce":
-                # ②「收黑K跌破5日线…减仓避一下」= 减仓档（不论是否收盘窗口都只减半）
-                volume = max(((volume // 2) // 100) * 100, 100) if volume >= 200 else volume
-                _exit_mode = "trend_reduce"
-            if volume <= 0:
-                return
-            _reason = ("收盘确认破位→清仓（狼大: 收盘跌破我才出）" if _exit_mode == "close_clear"
-                       else "②趋势线减仓：收黑K破5日线（狼大 2026-01-12「减仓避一下」）" if _exit_mode == "trend_reduce"
-                       else "②趋势线止损：跌破 60 日底线 / 34 日带量下穿（狼大 2021-01-28）")
-            gw = gateway_execute(symbol, "sell", current, volume,
-                                 reason=_reason, decision_source="ai_led",
-                                 is_stop_loss=True,
-                                 account_id=T_MONITOR_ACCOUNT)
-            print(f"[TMonitor] 止损触发[{_exit_mode}] {symbol} @ {current} x{volume}: {gw.get('status')}")
-            # 迭代#58g：仅在止损**成交**后冻结当日条件——
-            # 此前无条件冻结：T+1 当日买入 sellable=0 时止损被拒（rejected），
-            # 仍把低吸/高抛条件冻成 armed=0 并与消费式重建打架（每轮刷屏）。
-            if gw.get("status") == "success":
-                # 先打内存标记: 同一轮里该标的的后续条件**不得**再执行一次止损
-                self._stop_done_day.add(_dkey)
-                try:
-                    # status='executed'（终态）—— 审计行**绝不能被认领**：
-                    # claim_pending_trigger 按 status='pending' 无差别取第一条(不筛 event_type)，
-                    # 留 pending 会被 t_bridge 当成待办再执行一次卖出。
-                    t_db.insert_trigger({
-                        "account_id": T_MONITOR_ACCOUNT,
-                        "condition_id": (conds or [{}])[0].get("id") if conds else None,
-                        "symbol": symbol, "event_type": "stop_loss",
-                        "trigger_price": stop_price, "quote_price": current,
-                        "direction": "sell", "mode": "auto",
-                        "reason": "%s | stop=%s mode=%s vol=%s" % (_reason, stop_price, _exit_mode, volume),
-                    }, status="executed")
-                except Exception as _te:
-                    print(f"[TMonitor] 止损审计行写入失败 {symbol}: {str(_te)[:80]}")
-                for c in conds or []:
-                    cid = c.get("id")
-                    if cid:
-                        t_db.update_condition_state(cid, armed=0)
-        except Exception as e:
-            print(f"[TMonitor] 止损扫描异常 {symbol}: {e}")
-
+        """v3：统一止损层（旧规则已删除）；只记录/提示，不自动卖。"""
+        item = (ledger or {}).get(symbol) or {}
+        if int(item.get("sellable", 0) or 0) <= 0:
+            return
+        self._check_stop_loss_v3(symbol, quote, ledger)
 
 def fill_premium_pct() -> float:
     """成交价溢价（%）：`suggest_bid_price = 现价×(1-p/100)`、`suggest_ask_price = 现价×(1+p/100)`。
@@ -6935,44 +7095,6 @@ def _stop_exit_volume(sellable: int, close_window: bool, floor: int = 100):
 
 # P2-4: 止损"收盘未确认"日志去抖 (symbol, stop_price, date) —— 避免每 30s 轮次刷屏
 _STOP_HOLD_WARNED: set = set()
-
-
-def _stop_close_confirm(current: float, stop_price: float, today_bars, prev_daily,
-                        params: Optional[dict] = None):
-    """P2-4(2026-09-10): 止损的**收盘确认 / 假跌破**判定（纯函数, 便于单测）。
-
-    狼大 2026-01-29「今天没跌破我没出, 我说了 **收盘跌破我才出**」;
-           2026-01-12「**等收盘确认破位出清**」。
-    复用既有 t_stop_loss_guard.evaluate_stop（此前只在 t_backtest 里被调用, 生产未接线）。
-
-    口径: 以**最近一根 5min bar 的收盘**作为"收盘价"; 触及价取 min(bar.low, 现价),
-          以反映"tick 已破但 bar 未收完"的情形。
-
-    返回:
-      · None            → **不做限制**(无 m5 数据 / 守卫异常) → 调用方按原口径执行止损
-      · {"action":"stop"} → 确认破位, 调用方执行
-      · {"action":"hold", ...} → 未确认, 调用方本轮不执行
-    """
-    if not today_bars:
-        return None
-    try:
-        from app.services.t_stop_loss_guard import evaluate_stop
-        b = today_bars[-1]
-        low = float(b.get("low") or current) or current
-        bar = {"low": min(low, current),
-               "close": float(b.get("close") or 0),
-               "vol": float(b.get("vol") or 0),
-               "time": str(b.get("time") or "")}
-        dly = None
-        if prev_daily:
-            dly = [{"low": (v or {}).get("low")} for _, v in sorted(prev_daily.items())]
-        return evaluate_stop(bar, today_bars, stop_price, params or {}, daily_bars=dly)
-    except Exception as e:
-        print(f"[TMonitor] 止损守卫异常(按原口径执行): {str(e)[:100]}")
-        return None
-
-_prev_low_cache = {"at": 0.0, "sym": "", "value": False}
-_daily_closes_cache: Dict[str, Any] = {}   # 账本 §9.498 ✓ 日线收盘缓存（按标的 ✓ 300s ✓）
 
 
 # ── 单例管理（对齐 candidate_pool_monitor 模式） ──

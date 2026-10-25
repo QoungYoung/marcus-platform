@@ -40,6 +40,7 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
         sys.path.insert(0, str(skill_dir))
 
 from app.api import accounts
+from app.api import break_stop as break_stop_api
 from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy, main_wave, wave
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
@@ -120,27 +121,6 @@ async def lifespan(app: FastAPI):
         print("[Main] ✅ PostgreSQL 连接池预热完成")
     except Exception as e:
         print(f"[Main] ⚠️ PostgreSQL 预热失败（非致命）: {e}")
-
-    # 预热 K 线缓存（后台任务，避免首次 API 调用因 Tushare 超时）
-    async def _warm_kline_cache():
-        await asyncio.sleep(5)  # 等止损监控线程启动 + 首次持仓查询完成
-        try:
-            from app.services.stop_loss_monitor import get_stop_loss_monitor, _cached_fetch_kline
-            from app.api.indicator import _normalize_to_ts_code
-            monitor = get_stop_loss_monitor()
-            if monitor.executor:
-                positions = monitor.executor.get_positions()
-                if positions:
-                    for pos in positions:
-                        try:
-                            ts_code = _normalize_to_ts_code(pos.get('symbol', ''))
-                            _cached_fetch_kline(ts_code)
-                        except Exception:
-                            pass
-                    print(f"[Main] ✅ K线缓存预热完成 ({len(positions)} 只)")
-        except Exception as e:
-            print(f"[Main] ⚠️ K线缓存预热失败（非致命）: {e}")
-    asyncio.create_task(_warm_kline_cache())
 
     # 预热 daily-pnl-breakdown 的 Tushare 收盘价缓存（后台线程，避免首次打开账户页耗时）
     async def _warm_breakdown_cache():
@@ -223,6 +203,7 @@ app.include_router(t_account_router, prefix="/api/v1")
 app.include_router(discipline_router, prefix="/api/v1")
 app.include_router(t_backtest_router, prefix="/api/v1")
 app.include_router(main_wave.router, prefix="/api/v1")
+app.include_router(break_stop_api.router, prefix="/api/v1")
 
 @app.get("/")
 async def root():

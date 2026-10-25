@@ -97,6 +97,7 @@ def init_db():
     import app.models.golden_pit_dca_log  # noqa: F401
     import app.models.golden_pit_sector_config  # noqa: F401
     import app.models.plan  # noqa: F401  # 计划库(plan_library)
+    import app.models.break_orm  # noqa: F401  # P4 破位事件账本
     Base.metadata.create_all(bind=engine)
     # ── Schema 补丁：给已存在的表加新列（避免 SQLAlchemy create_all 漏 ALTER） ──
     _apply_schema_patches()
@@ -169,6 +170,8 @@ def _apply_schema_patches():
     # ── 2026-09-12: 回测用行情表（tushare 回填 mkt_bars_daily，供真实回测） ──
     _apply_mkt_bars_migration()
     _apply_wave_state_migration()
+    _apply_break_stop_migration()
+    _apply_wolf_v3_migration()
 
     # ── 2026-09-12: 研报标题（catalyst 重建数据源；失败日期显式记账） ──
     _apply_research_reports_migration()
@@ -212,6 +215,172 @@ def _apply_schema_patches():
                 print(f"[DB] PATCH: {table}.{col} ALTER TYPE → {new_type}")
     except Exception as e:
         print(f"[DB] PATCH warn: {e}")
+
+
+
+def _apply_wolf_v3_migration():
+    """v3 止损：事件表 + 动作幂等表（PG 为权威，JSONL 仅兜底）。"""
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            _lock_timeout(conn)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS stop_v3_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_date TEXT NOT NULL,
+                    symbol TEXT DEFAULT '',
+                    phase TEXT DEFAULT '',
+                    action TEXT DEFAULT '',
+                    action_type TEXT DEFAULT '',
+                    layer TEXT DEFAULT '',
+                    severity TEXT DEFAULT '',
+                    level_state TEXT DEFAULT '',
+                    status_text TEXT DEFAULT '',
+                    target_pct DOUBLE PRECISION,
+                    reason TEXT DEFAULT '',
+                    source TEXT DEFAULT '',
+                    quote DOUBLE PRECISION,
+                    level JSONB,
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_stop_v3_events_date ON stop_v3_events(event_date)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_stop_v3_events_symbol ON stop_v3_events(symbol, event_date)"))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS wolf_v3_actions (
+                    action_key TEXT PRIMARY KEY,
+                    event_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    action TEXT DEFAULT '',
+                    level_price DOUBLE PRECISION,
+                    target_pct DOUBLE PRECISION,
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_wolf_v3_actions_date ON wolf_v3_actions(event_date)"))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS wolf_v3_rebound_watch (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    zone_low DOUBLE PRECISION NOT NULL,
+                    zone_high DOUBLE PRECISION NOT NULL,
+                    break_price DOUBLE PRECISION,
+                    target_pct DOUBLE PRECISION DEFAULT 0.5,
+                    invalidation_level DOUBLE PRECISION,
+                    status TEXT NOT NULL DEFAULT 'watching',
+                    source TEXT DEFAULT '',
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(event_date, symbol, zone_low, zone_high)
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_wolf_v3_rebound_status ON wolf_v3_rebound_watch(event_date,status)"))
+            try:
+                conn.execute(text("ALTER TABLE wolf_v3_rebound_watch ADD COLUMN IF NOT EXISTS invalidation_level DOUBLE PRECISION"))
+            except Exception:
+                pass
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS wolf_v3_intraday_watch (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    level DOUBLE PRECISION NOT NULL,
+                    mode TEXT NOT NULL,
+                    break_time TEXT DEFAULT '',
+                    bar_count INTEGER DEFAULT 0,
+                    last_bar_time TEXT DEFAULT '',
+                    volume_ratio DOUBLE PRECISION DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'watching',
+                    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(event_date, symbol, level, mode)
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_wolf_v3_intraday_status ON wolf_v3_intraday_watch(event_date,status)"))
+        print("[DB] wolf_v3 migration ok")
+    except Exception as e:
+        print(f"[DB] wolf_v3 migration warn: {e}")
+
+
+def _apply_break_stop_migration():
+    """P4 破位事件账本：break_events（append-only）+ break_actions（幂等动作）。"""
+    from sqlalchemy import text
+
+    try:
+        with engine.begin() as conn:
+            _lock_timeout(conn)
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS break_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    asof DATE NOT NULL,
+                    symbol VARCHAR(16) NOT NULL,
+                    domain VARCHAR(10) NOT NULL DEFAULT 'index',
+                    level_type VARCHAR(32) NOT NULL DEFAULT '',
+                    level_price NUMERIC(14,4),
+                    phase VARCHAR(10) NOT NULL DEFAULT 'close',
+                    status VARCHAR(20) NOT NULL DEFAULT 'none',
+                    close NUMERIC(14,4),
+                    high NUMERIC(14,4),
+                    low NUMERIC(14,4),
+                    vol_ratio NUMERIC(10,4),
+                    volume_branch VARCHAR(10),
+                    wave_op VARCHAR(10),
+                    position_pnl NUMERIC(10,4),
+                    action VARCHAR(20),
+                    target_pct NUMERIC(8,4),
+                    reason TEXT,
+                    mode VARCHAR(16) NOT NULL DEFAULT 'alert',
+                    data_warning TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT uq_break_events_semantic UNIQUE (asof, symbol, level_type, status)
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_break_events_asof_status ON break_events (asof, status)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_break_events_symbol ON break_events (symbol)"
+            ))
+            conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS break_actions (
+                    id BIGSERIAL PRIMARY KEY,
+                    asof DATE NOT NULL,
+                    symbol VARCHAR(16) NOT NULL,
+                    domain VARCHAR(10) NOT NULL DEFAULT 'index',
+                    severity VARCHAR(10) NOT NULL DEFAULT '',
+                    level_type VARCHAR(32),
+                    action VARCHAR(20) NOT NULL,
+                    target_pct NUMERIC(8,4),
+                    target_is_cap VARCHAR(1) NOT NULL DEFAULT '1',
+                    block_new_buy VARCHAR(1) NOT NULL DEFAULT '0',
+                    allow_zero VARCHAR(1) NOT NULL DEFAULT '0',
+                    reason TEXT,
+                    invalidation TEXT,
+                    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                    trigger_id BIGINT,
+                    executed_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT uq_break_actions_semantic UNIQUE (asof, symbol, action)
+                )
+                """
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_break_actions_asof_status ON break_actions (asof, status)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_break_actions_symbol ON break_actions (symbol)"
+            ))
+        print("[DB] PATCH: break_events / break_actions 创建完成")
+    except Exception as e:
+        print(f"[DB] PATCH warn (break tables): {e}")
 
 
 def _apply_worker_control_migration():

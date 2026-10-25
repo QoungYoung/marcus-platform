@@ -1047,7 +1047,7 @@ class TBacktestEngine:
         # 假跌破守卫（add-fake-breakdown-stop-guard）：收盘确认/收回幅度/企稳/缩量/支撑位
         try:
             from app.services import t_build as _tb
-            from app.services.t_stop_loss_guard import evaluate_stop
+            from app.services.wolf_stop_layer import guard_stop as evaluate_stop
             _guard_params = _tb._params()
             _m1_today = [b for b in getattr(self, "m1", []) if str(b.get("time", "")).startswith(trade_day)]
             _verdict = evaluate_stop(

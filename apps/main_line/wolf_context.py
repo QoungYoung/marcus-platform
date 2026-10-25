@@ -461,14 +461,14 @@ def _theme_index_series(theme):
 
 
 def _index_not_broken(day=""):
-    """指数未破位（复用 t_index_break.index_breakdown：收盘跌破 MA60/144/200 中 ≥2 根 = 破位）。"""
+    """指数未破位（复用 point_engine.index_breakdown：收盘跌破 MA60/144/200 中 ≥2 根 = 破位）。"""
     try:
         import sys as _s4
         _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         _be = os.path.join(_root, "backend")
         if _be not in _s4.path:
             _s4.path.insert(0, _be)
-        from app.services.t_index_break import index_breakdown
+        from app.services.point_engine import index_breakdown
         from datetime import datetime as _dt2
         j = index_breakdown(str(day or "").replace("-", "") or _dt2.now().strftime("%Y%m%d"))
         if j.get("broken"):

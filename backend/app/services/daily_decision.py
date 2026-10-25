@@ -299,7 +299,7 @@ def _l3(tiers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if _tbl:
             _lvl = None
             try:
-                from app.services import t_index_break as _ib
+                from app.services import point_engine as _ib
                 # ★ 账本 §9.714 ✓（扫描器扫出）：`_l3(tiers)` **没有 trade_date 参数** ✗
                 #   ⇒ 原写法 `str(trade_date or "")` **每次都抛 NameError** ✗ 再被 except 吞掉 ⇒ `_d=""` ✓
                 #   ⇒ 这里直接取兜底（**行为逐位不变** ✓），只去掉无意义的异常 ✓
@@ -365,7 +365,7 @@ def _l5(l2: Dict[str, Any], gates: Dict[str, Any], d8: str = "") -> Dict[str, An
     # 见 `t_index_break` 模块 docstring）。语义按语料：破位 = **持仓的止损/减仓评估**，
     # **不是禁止买入**（2026-08-24 破位当天他照样"跌破了 按计划打入"）⇒ 这里只记警告，不做 blocker。
     try:
-        from app.services import t_index_break as _ib
+        from app.services import point_engine as _ib
         if _ib.enabled():
             # ★ 账本 §9.616 ✓：原表达式 `day if 'day' in dir() else (trade_date or "")` ✗
             #   在本作用域里 **两个名字都不存在** ✗ ⇒ 每天 4 条 `NameError` ✗ ⇒ **指数破位检查静默失效** ✗

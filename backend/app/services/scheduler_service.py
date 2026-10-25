@@ -52,15 +52,14 @@ logger = logging.getLogger(__name__)
 _stop_loss_monitor = None
 
 
+class _NoopMonitor:
+    """旧 stop_loss_monitor 删除后的空壳：时间证伪检查不再执行。"""
+    def check_time_falsification(self):
+        return []
+
+
 def _get_monitor():
-    global _stop_loss_monitor
-    if _stop_loss_monitor is None:
-        try:
-            from app.services.stop_loss_monitor import get_stop_loss_monitor
-            _stop_loss_monitor = get_stop_loss_monitor()
-        except Exception as e:
-            logger.warning(f"[StopLoss] 监控模块加载失败: {e}")
-    return _stop_loss_monitor
+    return _NoopMonitor()
 
 
 class JobStatus(Enum):
@@ -618,8 +617,7 @@ class SchedulerService:
                 # ── 时间证伪检查（尾盘 + 每日复盘时触发）──
                 if is_closing or 'daily_review' in task.id or 'review' in task.id:
                     try:
-                        from app.services.stop_loss_monitor import get_stop_loss_monitor
-                        monitor = get_stop_loss_monitor()
+                        monitor = _get_monitor()
                         falsifications = monitor.check_time_falsification()
                         if falsifications:
                             logger.warning(
@@ -667,8 +665,7 @@ class SchedulerService:
                 self._send_notifications(task, execution)
                 # ── 周度反思后触发时间证伪检查 ──
                 try:
-                    from app.services.stop_loss_monitor import get_stop_loss_monitor
-                    rf_monitor = get_stop_loss_monitor()
+                    rf_monitor = _get_monitor()
                     rf_falsifications = rf_monitor.check_time_falsification()
                     if rf_falsifications:
                         logger.warning(
@@ -825,8 +822,7 @@ class SchedulerService:
             # ── 每日复盘后触发时间证伪检查 ──
             if 'daily_review' in task.id or 'review' in task.id:
                 try:
-                    from app.services.stop_loss_monitor import get_stop_loss_monitor
-                    tm_monitor = get_stop_loss_monitor()
+                    tm_monitor = _get_monitor()
                     falsifications = tm_monitor.check_time_falsification()
                     if falsifications:
                         logger.warning(

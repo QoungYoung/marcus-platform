@@ -93,10 +93,7 @@ def _start_services(settings):
 
     executor = MarcusVNPyExecutor(bridge=bridge, account_id="stock")
 
-    # 2026-09-02 止损监控改造为动态离场监控（只读）：展示黄线/分时T出距离，
-    # 不自动卖出（STOP_LOSS_DYNAMIC_ONLY=1, 卖出由 t_monitor 狼大条件负责）
-    from app.services.stop_loss_monitor import start_monitor
-    start_monitor(executor=executor)
+    # 2026-10-23：旧 stop_loss_monitor 已删除；v3 止损层由 t_monitor 负责。
 
     # 2026-09-04 说明：长期池/短期池(candidate/long_term)是此前平台测试，非狼大逻辑范围，保持停用；
     # P3 档位/P3_TIER_MODE 在 check_entry_filters/calc_position 内生效即可（狼大决策链=trade_graph/做T），不依赖 legacy 池 monitor。
@@ -227,7 +224,6 @@ def _publish_loop():
 
     def _build_snapshot() -> Dict[str, Any]:
         from app.services.scheduler_service import scheduler_service
-        from app.services.stop_loss_monitor import get_monitor_status, get_position_distances
         from app.services.position_tier_monitor import get_tier_status
         from app.services.candidate_pool_monitor import get_pool_monitor_status
         from app.services.long_term_pool_monitor import get_lt_pool_monitor_status
@@ -235,8 +231,8 @@ def _publish_loop():
             "scheduler": scheduler_service.get_scheduler_status(),
             "tasks": scheduler_service.get_tasks(),
             "next_runs": scheduler_service.get_next_runs(),
-            "stop_loss_monitor": get_monitor_status(),
-            "stop_loss_distances": get_position_distances(),
+            "stop_loss_monitor": {"running": False, "removed": "v3"},
+            "stop_loss_distances": [],
             "tier_monitor": get_tier_status(),
             "candidate_pool_monitor": get_pool_monitor_status(),
             "long_term_pool_monitor": get_lt_pool_monitor_status(),
@@ -282,7 +278,6 @@ def _handle_command(cmd: str, payload: dict) -> dict:
     """执行来自 API 的控制命令，返回结果 dict。"""
     from app.core.trading.marcus_trade import MarcusVNPyExecutor
     from app.services.scheduler_service import scheduler_service
-    from app.services.stop_loss_monitor import start_monitor, stop_monitor
     from app.services.position_tier_monitor import start_tier_monitor, stop_tier_monitor
 
     if cmd == "scheduler.trigger":
@@ -303,11 +298,9 @@ def _handle_command(cmd: str, payload: dict) -> dict:
         scheduler_service.stop()
         return {"success": True, "message": "Scheduler stopped"}
     if cmd == "monitor.stop_loss.start":
-        ok = start_monitor(executor=MarcusVNPyExecutor(account_id="stock"))
-        return {"success": bool(ok), "message": "止损监控已启动" if ok else "启动失败"}
+        return {"success": False, "error": "旧 stop_loss_monitor 已删除；v3 由 t_monitor 接管"}
     if cmd == "monitor.stop_loss.stop":
-        stop_monitor()
-        return {"success": True, "message": "止损监控已停止"}
+        return {"success": False, "error": "旧 stop_loss_monitor 已删除；v3 由 t_monitor 接管"}
     if cmd == "monitor.tier.start":
         ok = start_tier_monitor(executor=MarcusVNPyExecutor(account_id="stock"))
         return {"success": bool(ok), "message": "加仓层级监控已启动" if ok else "启动失败"}

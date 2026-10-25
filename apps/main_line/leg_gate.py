@@ -127,7 +127,7 @@ def stats() -> Dict[str, Any]:
 
 
 # ── 弱市不进新票（语料：下跌趋势就不做 / 收盘确认破位才走；2026-09-19 用户拍板）──
-# 用指数大级别破位（backend/app/services/t_index_break.index_breakdown：收盘跌破 MA60/144/200 ≥2 根）
+# 用指数大级别破位（backend/app/services/point_engine.index_breakdown：收盘跌破 MA60/144/200 ≥2 根）
 # 作"不新开"的闸；**只拦新票**，持仓做 T 照旧（语料里破位是止损/不新开，不是停止做T）。
 # 开关 WOLF_INDEX_NEW_BUY：库内默认关（生产逐位不变），回测默认开。
 INDEX_NEW_BUY_ON = str(os.getenv("WOLF_INDEX_NEW_BUY",
@@ -142,7 +142,7 @@ def _index_broken(day: str = "") -> Tuple[bool, str]:
         _be = os.path.join(_root, "backend")
         if _be not in _s.path:
             _s.path.insert(0, _be)
-        from app.services.t_index_break import index_breakdown, SWITCH as _IDX_SWITCH
+        from app.services.point_engine import index_breakdown, SWITCH as _IDX_SWITCH
         if not _IDX_SWITCH:
             return False, "指数破位判定关(WOLF_INDEX_BREAKDOWN=0)"
         from datetime import datetime as _dt
