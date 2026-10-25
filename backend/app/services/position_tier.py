@@ -31,12 +31,12 @@ DEFAULT_CFG = {
                              "add_base": {"allow": True, "cap_pct": 3},
                              "refill_base": {"allow": True, "cap_pct": 5},
                              "t_refill": {"allow": True, "cap_pct": 5}}},
-        "defense": {"base_mode": "hold_refill", "cash_floor_pct": 45,
+        "defense": {"base_mode": "hold_refill_no_add", "cash_floor_pct": 70,
                     "intents": {"new_base": {"allow": False, "cap_pct": 0},
-                                "add_base": {"allow": True, "cap_pct": 3},
+                                "add_base": {"allow": False, "cap_pct": 0},
                                 "refill_base": {"allow": True, "cap_pct": 3},
                                 "t_refill": {"allow": True, "cap_pct": 5}}},
-        "exit": {"base_mode": "reduce_only", "cash_floor_pct": 50,
+        "exit": {"base_mode": "reduce_only", "cash_floor_pct": 85,
                  "intents": {"new_base": {"allow": False, "cap_pct": 0},
                              "add_base": {"allow": False, "cap_pct": 0},
                              "refill_base": {"allow": False, "cap_pct": 0},
@@ -208,7 +208,7 @@ def _tier_cash_floor(op, fallback):
     单一事实来源 = `wolf_discipline.position_cap.tier_targets`（2026-09-11 定）。
     为什么要同源：此前 P3 的 cash_floor(build 25/t_only 35/side 30/defense 45/exit 50) 与
     建议层(`position_cap`) 各写一套 → 同一条"按市况给多大仓位"会有两个数（本项目反复踩的"两套并行口径"）。
-    现在硬拦侧自动跟随分档：build 25 / t_only·side 50 / defense 70 / exit 50（exit 是本仓 reduce_only，不压到 0）。
+    现在硬拦侧自动跟随分档：build 25 / t_only·side 50 / defense 70 / exit 85（exit=G3 15% 目标，2026-10-25 拍板）。
     回退：`P3_USE_TIER_TARGETS=0` → 用配置里的原值（隔离/对照用）。
     """
     if os.getenv("P3_USE_TIER_TARGETS", "1").strip() in ("0", "false", "no"):

@@ -53,14 +53,14 @@ class ThreeTierGateTest(unittest.TestCase):
         self.assertTrue(d2["intent_allowed"]); self.assertEqual(d2["cap_pct"], 3.0)
         self.assertEqual(d2["base_mode"], "ambush")
 
-    def test_defense_no_new_but_add_allowed_for_mainline_base(self):
+    def test_defense_no_new_and_no_add_by_default(self):
         d1 = self._call("defense", "new_base")
         self.assertFalse(d1["intent_allowed"])
         d2 = self._call("defense", "add_base", has_base=True, mainline=True)
-        self.assertTrue(d2["intent_allowed"]); self.assertEqual(d2["cap_pct"], 3.0)
+        self.assertFalse(d2["intent_allowed"], "G2 默认禁止 add_base（人工例外不走 P3）")
         d3 = self._call("defense", "add_base", has_base=True, mainline=False, rel_low=False)
         self.assertFalse(d3["intent_allowed"])
-        self.assertEqual(d1["cash_floor_pct"], 45.0)
+        self.assertEqual(d1["cash_floor_pct"], 70.0)
 
     def test_exit_only_t_on_existing_base(self):
         for intent in ("new_base", "add_base", "refill_base"):
@@ -68,7 +68,7 @@ class ThreeTierGateTest(unittest.TestCase):
             self.assertFalse(d["intent_allowed"], intent)
         d = self._call("exit", "t_refill", has_base=True)
         self.assertTrue(d["intent_allowed"]); self.assertEqual(d["cap_pct"], 5.0)
-        self.assertEqual(d["cash_floor_pct"], 50.0)
+        self.assertEqual(d["cash_floor_pct"], 85.0)
 
     def test_unknown_op_falls_back_side_conservative(self):
         d = pt.three_tier_gate(wave_state={"operation": "unknown"}, intent="new_base", cfg=self.cfg)
@@ -79,7 +79,7 @@ class ThreeTierGateTest(unittest.TestCase):
         d = self._call("t_only", "probe")
         self.assertTrue(d["intent_allowed"])
         self.assertEqual(d["cap_pct"], 3.0)
-        self.assertEqual(d["tier"], "PROBE")
+        self.assertIn("试探底仓", d["tier"])
         d2 = self._call("exit", "probe", has_base=True)
         self.assertFalse(d2["intent_allowed"])
         d3 = self._call("build", "probe")

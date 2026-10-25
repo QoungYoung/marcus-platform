@@ -111,8 +111,8 @@
       }
     },
     "defense": {
-      "base_mode": "hold_refill",
-      "cash_floor_pct": 45,
+      "base_mode": "hold_refill_no_add",
+      "cash_floor_pct": 70,
       "intents": {
         "new_base": {
           "allow": false,
@@ -120,12 +120,9 @@
           "needs": []
         },
         "add_base": {
-          "allow": true,
-          "cap_pct": 3,
-          "needs": [
-            "has_base",
-            "mainline_or_rel_low"
-          ]
+          "allow": false,
+          "cap_pct": 0,
+          "needs": []
         },
         "refill_base": {
           "allow": true,
@@ -145,7 +142,7 @@
     },
     "exit": {
       "base_mode": "reduce_only",
-      "cash_floor_pct": 50,
+      "cash_floor_pct": 85,
       "intents": {
         "new_base": {
           "allow": false,

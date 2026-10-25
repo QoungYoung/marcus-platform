@@ -191,7 +191,7 @@ def _cfg():
         # 系统自设项(单票/集中度/底仓T仓结构上限)默认一律 0=不启用, 不冒充狼大规则。
         "position_cap": {"enabled": True, "tier_enabled": True,
                          "tier_targets": {"build": 75.0, "t_only": 50.0, "side": 50.0,
-                                          "defense": 30.0, "exit": 50.0},
+                                          "defense": 30.0, "exit": 15.0},
                          # 下限**只挂 build 档**：原话带"这个位置"限定且他当时明确看多；
                          # 若也挂 t_only/side 会与"调整就50%"的目标(50%)数学互斥(55>50) → 自相矛盾。
                          "tier_floor": {"build": 55.0, "t_only": 0.0, "side": 0.0,
@@ -688,7 +688,15 @@ def discipline_context(portfolio=None, now=None, window=None, quotes=None):
             print("[silent:wolf_discipline.py:608] %s: %s" % (type(_e_sil15).__name__, str(_e_sil15)[:110]), flush=True)
     if pc.get("directive"):
         parts.append(pc["directive"])
-    if wd.get("active"):
+    # 2026-10-25 拍板：周末避险 65% 是唯一目标；只有“缩量+不拉升”条件成立时才走 G9 的 65%，
+    # 未成立时 weekend_de_risk 的 50% 只作保守回退，不能和 65% 同时注入。
+    _wh_active = False
+    try:
+        from app.services import wolf_weekend_hedge as _wh
+        _wh_active = bool((_wh.load() or {}).get("active"))
+    except Exception:
+        _wh_active = False
+    if wd.get("active") and not _wh_active:
         parts.append(wd["directive"])
     if bh.get("enabled") and bh.get("directive"):
         parts.append(bh["directive"])

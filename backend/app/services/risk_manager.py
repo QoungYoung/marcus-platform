@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
-"""风险管理器 v3：动态仓位缩放 + 紧急重训信号。
+"""风险管理器 v3（已退役，仅保留模型重训信号）。
 
-核心原则：
+⚠️ 2026-10-25 拍板：**risk_manager 不再参与防御/仓位**。仓位统一由 defense_cash 的
+G0-G3 决定（G3=15%，底仓10+T5）。本类的 `position_scale()` / 连续降仓曲线**不再使用**，
+不得在任何下单/仓位链路引用；保留本文件只为 `model_update_scheduler.emergency_check()`
+（Top-10 连续 3 日跑输基准 → 紧急重训）。后续应把 emergency_check 拆到独立模块后删除。
+
+历史说明（已不生效）：
   - 连续仓位缩放（1.0→0.2），永不清仓
   - 线性区间 (dd 2%→5%) + 加速区间 (dd 5%→8%)
   - 紧急重训信号基于 Top-10 连续 3 日跑输基准
@@ -12,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+DEPRECATED = True  # 2026-10-25：不参与防御/仓位，仅模型重训
 
 
 class RiskManager:

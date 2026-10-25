@@ -1,0 +1,103 @@
+{
+  "version": "2026-10-25",
+  "status": "draft_ssot",
+  "note": "防御/空仓唯一配置。当前仅作为 defense_cash 的设计事实源，尚未接线；接线前不要删除旧配置。所有阈值需按 docs/defense-cash-strategy.md §7 判例回归校准。",
+  "enabled": true,
+  "mode": "shadow",
+  "levels": {
+    "G0": {
+      "name": "正常",
+      "target_pct": null,
+      "note": "按浪型分档：build 75 / t_only·side 50"
+    },
+    "G1": {
+      "name": "警戒",
+      "target_pct": 50,
+      "buckets": {"base": 40, "t": 10, "cash": 50},
+      "allow_new": false,
+      "allow_add": false,
+      "allow_t": true,
+      "note": "调整档；T 仓减半，只做确定性 T"
+    },
+    "G2": {
+      "name": "防御",
+      "target_pct": 30,
+      "buckets": {"base": 25, "t": 5, "cash": 70},
+      "allow_new": false,
+      "allow_add": false,
+      "allow_t": "reduce_only",
+      "manual_exception": "仅 4-3 支撑 + 无硬触发时允许核心底仓 add ≤3%；需记录理由与过期时间",
+      "note": "有风险档；禁止新开/加仓/补仓/杠杆/题材"
+    },
+    "G3": {
+      "name": "空仓/极低",
+      "target_pct": 15,
+      "buckets": {"base": 10, "t": 5, "cash": 85},
+      "allow_new": false,
+      "allow_add": false,
+      "allow_t": "reduce_only",
+      "note": "下跌趋势不做；只留核心 ETF/底仓 ≤10，T ≤5，反抽继续减"
+    }
+  },
+  "segment_gate": {
+    "4-3": "封顶 G1（无 G3 硬触发时）；价格弱不等于 G2",
+    "4-4": "可升 G1/G2",
+    "4-5": "可升 G2/G3",
+    "down1": "可升 G2/G3",
+    "undecided": "封顶 G1；输出两阶段升级/降级条件"
+  },
+  "triggers": {
+    "G1": {
+      "index_high_stall": {"off_60d_high_pct": -3, "vol_ratio_20d": 0.85},
+      "margin": {"pct_3y": 90, "net_5d_yi": -1},
+      "bank_tech_divergence": {"bank_pct": 1.5, "tech_pct": -1.0, "days": 2},
+      "event_window_days": 2,
+      "account_drawdown_pct": 5,
+      "top_signals": 2
+    },
+    "G2": {
+      "key_level_break": true,
+      "big_black": {"pct": -2.5, "close_pos_max": 30, "vol_ratio_20d": 1.3},
+      "systemic_level": 1,
+      "margin": {"net_1d_yi": -300, "net_5d_yi": -800, "index_pct": -1.5},
+      "external": {"us10y_bp_3d": 15, "sox_pct_3d": -5},
+      "top_signals": 3,
+      "account_drawdown_pct": 8
+    },
+    "G3": {
+      "systemic_level": 2,
+      "bank_dividend_black": {"pct": -3.0, "vol_ratio_20d": 1.5, "below_ma20": true},
+      "key_levels": [3764, 3674],
+      "down_wave_confirmed": true,
+      "margin_cascade": {"net_1d_yi": -500, "index_pct": -3.0, "limit_down_gt": 100},
+      "account_drawdown_pct": 12
+    }
+  },
+  "weekend_hedge": {
+    "target_pct": 65,
+    "time": "14:30",
+    "conditions": ["缩量", "不拉升"],
+    "fallback_target_pct": 50,
+    "note": "满足缩量+不拉升 → 65%；否则按 G1/G2 的常规目标"
+  },
+  "execution": {
+    "no_stop_window": ["13:00", "14:30"],
+    "morning_reduce": ["09:35", "10:30"],
+    "closing_reduce": ["14:30", "14:55"],
+    "protect_base_lot": 100,
+    "reduce_order": ["t", "high_beta_crowded_foreign", "weak", "core_base"],
+    "g3_keep_only": "core_etf_or_mainline_base"
+  },
+  "retired": {
+    "pi_stance_table": "green/yellow/red 仅保留兼容别名：green→G0、yellow→G1、red→G2；仓位以 defense_state 为准",
+    "risk_manager_position_scale": "不再参与防御/仓位；仅保留 model_update_scheduler 的 emergency_check"
+  },
+  "sources": {
+    "four_tier": "2026-01-17「主升趋势就75%以上…调整就50% 有风险就30% 下跌趋势就不做」",
+    "g3": "2026-03-20「最好的防守就是不做熊市和下跌浪」；2022-04-25「今天刚出5，策略肯定只有空仓」",
+    "g2_add": "2026-08-17「不加，目前70%」；2026-09-17「降到50%以下…降到30%以下」",
+    "weekend": "2026-08-21「2点半如果还是缩量还是不拉升…65%仓位过周末」",
+    "bank_dividend": "2026-10-12「直到银行红利出放量出货大黑K」",
+    "key_level": "2026-10-15「有效跌破3764就确认走下跌1浪」"
+  }
+}

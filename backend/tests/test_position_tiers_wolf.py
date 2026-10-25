@@ -30,7 +30,7 @@ from app.services import position_tier as PT  # noqa: E402
 from app.services import wolf_discipline as WD  # noqa: E402
 
 OPS = ("build", "t_only", "side", "defense", "exit")
-EXPECT_TARGET = {"build": 75.0, "t_only": 50.0, "side": 50.0, "defense": 30.0, "exit": 50.0}
+EXPECT_TARGET = {"build": 75.0, "t_only": 50.0, "side": 50.0, "defense": 30.0, "exit": 15.0}
 EXPECT_FLOOR = {"build": 55.0}
 
 
@@ -105,9 +105,9 @@ class TestPositionCapTier:
         assert WD.position_cap(pf(72), operation="build")["allowed"] is True
         assert WD.position_cap(pf(80), operation="build")["allowed"] is False
 
-    def test_exit_tier_does_not_force_zero(self):
-        """exit 档不把总仓位压到 0（该档 P3 已是 reduce_only，且他确实做 T 回补）。"""
-        assert WD.tier_target_pct("exit") == 50.0
+    def test_exit_tier_is_g3_15(self):
+        """2026-10-25 拍板：G3 = 底仓10 + T5 = 15%，不再保留 50%。"""
+        assert WD.tier_target_pct("exit") == 15.0
 
     def test_below_floor_is_advice_not_block(self):
         r = WD.position_cap(pf(30), operation="build")

@@ -869,7 +869,7 @@ def _read_stock_confirm_context() -> str:
                 block += ("## 主线候选权重分配(wave调档, 2026-09-07 回测落地)" + chr(10)
                           + f"- 当前wave={a['operation']} → TOP3权重 {int(100*w[0])}/{int(100*w[1])}/{int(100*w[2])}，仓位投入 {int(100*invest)}%"
                           + f"；TOP3=" + (chr(44).join(f"{k}({s})" for k, s in zip(a['top3'], a['scores'])) or "无") + chr(10)
-                          + "- 决策：build→分散吃轮动；t_only→主第1(70%)+2/3试仓；side→主第1(60%)；defense→仅30%仓参与(不追突破, 回踩低吸)；exit→70%仓(只降不空)。"
+                          + "- 决策：build→分散吃轮动；t_only→主第1(70%)+2/3试仓；side→主第1(60%)；defense→总仓≤30%，禁新开/禁加仓(T仓只减不加)；exit→总仓≤15%(底仓10+T5)，只减不加。"
                           + chr(10) + chr(10))
         except Exception as _e_sil11:
             print("[silent:trade_graph.py:852] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)

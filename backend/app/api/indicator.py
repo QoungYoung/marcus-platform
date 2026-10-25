@@ -1302,6 +1302,22 @@ def _get_total_cap(stance: str) -> float:
     return {"green": 100.0, "yellow": 50.0, "red": 20.0}.get(stance, 50.0)
 
 
+def _get_defense_cap():
+    """按 defense 的 G0-G3 给总仓上限（2026-10-25 拍板）。
+
+    Pi stance 已退役为兼容别名；真正的防守档位来自 wave operation：
+      build→G0(不额外压) / t_only·side→G1(50) / defense→G2(30) / exit·down→G3(15)。
+    取不到 operation 时返回 None（不改变旧行为），避免在数据缺失时误压仓位。
+    """
+    try:
+        from app.services.wolf_discipline import current_operation
+        op = str(current_operation() or "").strip().lower()
+        return {"build": None, "t_only": 50.0, "side": 50.0,
+                "defense": 30.0, "exit": 15.0}.get(op)
+    except Exception:
+        return None
+
+
 def _get_tier_condition(tier: str) -> str:
     """加仓层级 → 前仓条件描述"""
     return {
@@ -1641,6 +1657,11 @@ def calc_position(req: CalcPositionRequest):
     single_cap_pct = _get_single_stock_cap(req.signal_strength)
     role_cap_pct = _get_role_cap(req.chain_role)
     total_cap_pct = _get_total_cap(req.stance)
+    # 2026-10-25：G0-G3 覆盖 Pi stance（退役旧表）；只压不抬，取不到 operation 不改变旧行为
+    _dcap = _get_defense_cap()
+    if _dcap is not None and _dcap < total_cap_pct:
+        warnings.append("🛡️ 防御档位：总仓上限 %.0f%% → %.0f%%（G0-G3 统一口径）" % (total_cap_pct, _dcap))
+        total_cap_pct = _dcap
     tier_condition = _get_tier_condition(req.tier)
     amplitude_tier = _get_amplitude_tier(amplitude)
     # 2026-09-02 对齐狼大离场体系：静态止损改为 3% 逻辑止损兜底（狼大3-05：
