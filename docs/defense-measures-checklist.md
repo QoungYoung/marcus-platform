@@ -81,7 +81,7 @@
 | **v3 止损（wolf_stop_layer）** | down-wave / 关键位破位 / 反抽失败 / 目标位 | 计划卖；`breakdown_reduce` 交给残余 planner | `wolf_stop_layer.py` + `_check_stop_loss_v3` | 生效（`WOLF_V3_LIVE=1`） |
 | **防御性减 T** | wave t_only/side/defense/exit + 量能不足/滞涨 | 只减 T | `_check_defensive_t_reduce` | G0/G1 生效；G2/G3 跳过（交给残余） |
 | **去弱留强** | 反弹语境 + 主题结构确认 + 大盘非系统性下跌 | 只减 T 最弱票 | `_check_position_discipline` | G0/G1 生效；G2/G3 跳过 |
-| ~~破位 override~~ | `break_actions` 个股/板块破位 | 单票 override | — | **随残余删除；破位只作状态输入** |
+| ~~破位 override~~ | — | — | — | **已删；破位由 v3 wolf_stop_layer 处理** |
 | **周末避险（G9）** | 周五/长假前 14:30 + 缩量 + 不拉升 | 减近两日 T 的一半，目标 65% | `_check_weekend_hedge` | **默认关**（`WOLF_WEEKEND_HEDGE=0`） |
 | **板上减半** | 触及涨停 + 浮盈≥3% | 减半锁定 | `_check_board_half` | 生效（止盈，不是防御） |
 | **小赚兑现** | 浮盈≥3% | 减 T 半仓 | `_check_profit_take` | 生效（止盈） |
@@ -96,7 +96,7 @@
 
 | 措施 | 触发 | 动作 | 位置 | 状态 |
 |---|---|---|---|---|
-| **systemic_risk** | 银行双头+科技不反 → level 1；大光破位大黑 K → level 2 | G2 / G3 | `apps/main_line/systemic_risk.py`，15:05 | 生效（当前 level 2） |
+| **systemic_risk** | 银行双头+科技不反 → level 1；大光/光模块破位 → level 2 | **仅 level 1 抬 G2**；level 2 只做相关持仓止盈，不参与 G 级 | `apps/main_line/systemic_risk.py`，15:05 | 生效 |
 | **macro_state** | `margin_burst` / `gjd_withdraw` / `us_yield_spike` / `cn30_spike` | G2 / G1 | `apps/main_line/build_macro_state.py`，15:06 | 生效 |
 | **wolf_top_signals** | 顶部信号 ≥2/≥3 | G1/G2 输入 | `wolf_top_signals.py` | 生效 |
 | **事件窗口** | 议息/非农/CPI/关税/谈判/长假 | 降仓/不做/不赌 | prompt + 人工 | 人工 |
@@ -164,7 +164,6 @@
   "target_pct": 15.0,
   "allow_new": false,
   "reasons": [
-    "systemic_risk level=2（大光破位/彻底止盈）",
     "wave level=down operation=defense（下跌趋势不做）",
     "macro margin_burst（杀杠杆/两融净卖）"
   ]
