@@ -2103,3 +2103,184 @@
   .cp-lowpos-card { aspect-ratio: auto; min-height: 300px; }
   .cp-lowpos-ring { right: -110px; top: 32px; }
 }
+
+/* ── 防御等级卡片 ── */
+.cp-defense-card { padding: 12px; }
+
+.cp-defense-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-defense-error {
+  font-size: 10px;
+  color: var(--cc-text-dim);
+  text-align: center;
+  padding: 8px 0;
+}
+
+.cp-defense-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.cp-defense-level {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 1px;
+  flex: none;
+}
+
+.cp-defense-level.g0 { color: var(--cc-green); }
+.cp-defense-level.g1 { color: var(--cc-amber); }
+.cp-defense-level.g2 { color: #d97706; }
+.cp-defense-level.g3 { color: var(--cc-red); }
+
+.cp-defense-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cp-defense-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.cp-defense-target {
+  font-size: 10px;
+  color: var(--cc-text-dim);
+  white-space: nowrap;
+}
+
+.cp-defense-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: auto;
+  flex: none;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.cp-defense-bar {
+  height: 5px;
+  background: rgba(47, 124, 211, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.cp-defense-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.cp-defense-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  color: var(--cc-faint);
+  margin-top: 3px;
+  font-family: var(--font-display);
+}
+
+.cp-defense-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.cp-defense-chip {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--cc-line-soft);
+  color: var(--cc-text-dim);
+  background: rgba(47, 124, 211, 0.03);
+  white-space: nowrap;
+}
+
+.cp-defense-chip.ok {
+  color: var(--cc-green);
+  border-color: rgba(39, 160, 107, 0.28);
+  background: rgba(39, 160, 107, 0.07);
+}
+
+.cp-defense-chip.warn {
+  color: var(--cc-amber);
+  border-color: rgba(201, 138, 18, 0.28);
+  background: rgba(201, 138, 18, 0.07);
+}
+
+.cp-defense-chip.no {
+  color: var(--cc-red);
+  border-color: rgba(229, 72, 77, 0.24);
+  background: rgba(229, 72, 77, 0.06);
+}
+
+.cp-defense-stack {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 8px;
+  background: rgba(47, 124, 211, 0.06);
+}
+
+.cp-defense-stack span { height: 100%; }
+
+.cp-defense-legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  color: var(--cc-faint);
+  margin-top: 3px;
+}
+
+.cp-defense-reasons {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cp-defense-reasons li {
+  position: relative;
+  padding-left: 8px;
+  font-size: 9px;
+  line-height: 1.35;
+  color: var(--cc-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cp-defense-reasons li::before {
+  content: '·';
+  position: absolute;
+  left: 0;
+  color: var(--cc-blue);
+  font-weight: 700;
+}
+
+.cp-defense-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 8px;
+  color: var(--cc-faint);
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--cc-line-soft);
+}

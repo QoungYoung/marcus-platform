@@ -58,6 +58,13 @@ def put_config(payload: Dict[str, Any] = Body(...), updated_by: str = Query("api
                                            for op in ("build", "t_only", "side", "defense", "exit")}}}
 
 
+@router.get("/defense")
+def defense_state():
+    """当前防御档位（defense_cash G0-G3）；只读，不下单。"""
+    from app.services import defense_cash as DC
+    return DC.get_state(refresh=True)
+
+
 @router.get("/position")
 def position_status(ratio: Optional[float] = Query(None, description="总仓位%（不传则用 t 账户实际值）"),
                     operation: Optional[str] = Query(None, description="覆盖浪型档位（调试用）")):

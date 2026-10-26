@@ -154,6 +154,11 @@ export const schedulerApi = {  getStatus: () => api.get('/scheduler/status'),
   stopStopLossMonitor: () => api.post('/scheduler/stop-loss-monitor/stop'),
 }
 
+// Defense / Discipline APIs
+export const disciplineApi = {
+  getDefenseState: () => api.get('/discipline/defense'),
+}
+
 // Reflect Panel APIs
 export const reflectApi = {
   getSessions: () => api.get('/panel/reflect/sessions'),

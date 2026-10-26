@@ -6,7 +6,7 @@ import {
   BarChart, Bar, Cell,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi, tradesApi, schedulerApi, goldenPitApi, tApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi, schedulerApi, tApi } from '../api/client';
 import { useAccountStore } from '../store/accountStore';
 import {
   computeSharpeRatio, computeMonthlyReturns, computeQuarterlyReturns,
@@ -17,6 +17,7 @@ import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 import IndexWaveCard from '../components/IndexWaveCard';
 import LowPositionCard from '../components/LowPositionCard';
+import DefenseLevelCard from '../components/DefenseLevelCard';
 
 // ── 资金流类型 ──
 interface MoneyflowRow {
@@ -191,19 +192,6 @@ export default function PortfolioPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   usePortfolioBackground(canvasRef);
 
-  // ── 黄金坑信号 ──
-  const [gpSignal, setGpSignal] = useState<{
-    phase: string; pit_count: number; warning_count: number;
-    min_greed: number | null; min_greed_index: string | null;
-    position_tier_label: string | null; as_of: string;
-    panic_count: number;
-    pit_threshold: number;
-    warn_threshold: number;
-    max_entry_greed: number;
-  } | null>(null);
-  const [gpError, setGpError] = useState(false);
-  const [loadingGp, setLoadingGp] = useState(true);
-
   // ── 资金流 ──
   const [moneyflowMap, setMoneyflowMap] = useState<Record<string, MoneyflowRow>>({});
   const [loadingFlow, setLoadingFlow] = useState(false);
@@ -271,48 +259,6 @@ export default function PortfolioPage() {
     } catch { flushSync(() => { setStopLoss({ running: false } as StopLossStatus); setLoadingStopLoss(false); }); }
   }, []);
 
-  const refreshGoldenPit = useCallback(async () => {
-    setLoadingGp(true);
-    setGpError(false);
-    try {
-      const res = await goldenPitApi.getStatus();
-      const data = res.data?.data || res.data;
-      if (data?.indices?.length > 0) {
-        const gw = data.golden_pit_window || {};
-        const indices = data.indices as any[];
-        // 找贪婪值最低的指数 — 它最接近恐慌线
-        let minIdx = indices[0];
-        for (const idx of indices) {
-          if ((idx.greed ?? 1) < (minIdx.greed ?? 1)) minIdx = idx;
-        }
-        const phase = gw.phase || (gw.active ? 'waiting' : 'idle');
-        // Extract per-index thresholds
-        const allPitGreeds = indices.map((i: any) => i.pit_greed).filter((v: any) => v != null) as number[];
-        const allEntryGreeds = indices.map((i: any) => i.entry_greed).filter((v: any) => v != null) as number[];
-        const pitThreshold = allPitGreeds.length > 0 ? Math.min(...allPitGreeds) : 0.35;
-        const warnThreshold = allEntryGreeds.length > 0 ? Math.min(...allEntryGreeds) : 0.40;
-        const maxEntryGreed = allEntryGreeds.length > 0 ? Math.max(...allEntryGreeds) : 0.50;
-        setGpSignal({
-          phase,
-          pit_count: indices.filter((i: any) => i.status === 'golden_pit').length,
-          warning_count: indices.filter((i: any) => i.status === 'warning').length,
-          min_greed: minIdx?.greed ?? null,
-          min_greed_index: minIdx?.index_name || minIdx?.fund_code || null,
-          position_tier_label: minIdx?.position_tier_label || null,
-          as_of: data.as_of || '',
-          panic_count: gw.pit_count ?? indices.filter((i: any) => i.status === 'golden_pit').length,
-          pit_threshold: pitThreshold,
-          warn_threshold: warnThreshold,
-          max_entry_greed: maxEntryGreed,
-        });
-      } else {
-        setGpError(true);
-      }
-    } catch {
-      setGpError(true);
-    } finally { setLoadingGp(false); }
-  }, []);
-
   // ── 账户列表（顶部导航栏全局加载，这里仅确保已加载）──
   useEffect(() => {
     loadAccounts();
@@ -330,7 +276,6 @@ export default function PortfolioPage() {
   useEffect(() => {
     refreshTickers();
     refreshStopLoss();
-    refreshGoldenPit();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -781,78 +726,7 @@ export default function PortfolioPage() {
             )}
           </div>
 
-          {/* 黄金坑信号 */}
-          <div className="cp-strategic-panel">
-            <PanelHead title="黄金坑信号" en="GOLDEN PIT SIGNAL" />
-            {loadingGp ? (
-              <Skel w="100%" h={40} />
-            ) : gpError || !gpSignal ? (
-              <div style={{ fontSize: 10, color: 'var(--cc-text-dim)', textAlign: 'center', padding: '8px 0' }}>
-                <i className="fas fa-exclamation-circle" style={{ marginRight: 4 }} />
-                信号获取失败
-              </div>
-            ) : gpSignal.min_greed == null ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
-                <span className="cp-gp-dot" style={{ background: '#93a9c0' }} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--cc-text)' }}>无信号</span>
-                <span style={{ fontSize: 10, color: 'var(--cc-text-dim)' }}>
-                  {gpSignal.warning_count > 0 ? `${gpSignal.warning_count}预警` : '静默'}
-                </span>
-              </div>
-            ) : (() => {
-              const greed = gpSignal.min_greed;
-              const panicLine = gpSignal.pit_threshold;
-              const warnLine = gpSignal.warn_threshold;
-              const safeCeil = Math.max(gpSignal.max_entry_greed + 0.10, 0.50);
-              const rawPct = ((safeCeil - greed) / (safeCeil - panicLine)) * 100;
-              const dangerPct = Math.max(0, Math.min(100, rawPct));
-              const level = greed <= panicLine ? 'panic' : greed <= warnLine ? 'warn' : 'greedy';
-              const levelLabel = level === 'panic' ? '恐慌' : level === 'warn' ? '预警' : '贪婪';
-              const levelColor = level === 'panic' ? 'var(--cc-red)' : level === 'warn' ? 'var(--cc-amber)' : 'var(--cc-green)';
-              return (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, marginBottom: 6 }}>
-                    <span className={`cp-gp-dot ${level}`} />
-                    <span style={{ fontSize: 14, fontWeight: 800, color: 'var(--cc-text)' }}>
-                      {levelLabel}
-                    </span>
-                    <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: levelColor, marginLeft: 'auto' }}>
-                      {greed.toFixed(4)}
-                    </span>
-                    {gpSignal.panic_count >= 3 && (
-                      <span className="cp-gp-resonance">
-                        {gpSignal.panic_count}指共振
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 2 }}>
-                    <span style={{ color: 'var(--cc-text-dim)' }}>
-                      最低: {gpSignal.min_greed_index}
-                    </span>
-                  </div>
-                  <div className="cp-gp-gauge">
-                    <div className="cp-gp-gauge-fill" style={{ width: `${dangerPct}%` }} />
-                    <span className="cp-gp-gauge-mark" style={{ left: `${((warnLine - panicLine) / (safeCeil - panicLine)) * 100}%` }} />
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 2 }}>
-                    <span>pit≤{panicLine.toFixed(3)}</span>
-                    <span style={{ color: levelColor, fontWeight: 700, fontSize: 9 }}>{levelLabel}</span>
-                    <span>warn≤{warnLine.toFixed(3)}</span>
-                  </div>
-                  {gpSignal.position_tier_label && (
-                    <div style={{ fontSize: 10, color: 'var(--cc-blue)', fontWeight: 600, marginTop: 5 }}>
-                      {gpSignal.position_tier_label}
-                    </div>
-                  )}
-                </>
-              );
-            })()}
-            {gpSignal?.as_of && (
-              <div style={{ fontSize: 8, color: 'var(--cc-text-dim)', marginTop: 6, textAlign: 'right' }}>
-                更新 {gpSignal.as_of}
-              </div>
-            )}
-          </div>
+          <DefenseLevelCard />
         </aside>
 
         {/* ══════════ 中列：收益图 + 指标行 + 三面板 ══════════ */}
