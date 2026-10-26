@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """systemic_risk.py — 系统性风险联动开关（docs/p2-risk-wolf-logic.md §3）
 开关1 银行双头 + 科技不反(09-01"真完了") → 防御
-开关2 大光破位大黑K(09-02楼726"彻底止盈就是大光破位大黑K") → 彻底止盈
+开关2 大光/光模块破位大黑K(09-02楼726"彻底止盈就是大光破位大黑K") → 仅相关持仓止盈
 开关3(预留) 缩量无新增+高位抱团 → 降仓(需两融/量能输入)
 输入建议来源: 银行=512800银行ETF / 科技=科创50或半导体ETF / 大光=300308·300502·300394(腾讯qt实时或tushare日线)
 输出: data/systemic_risk.json {level, alerts[], advice}
@@ -69,7 +69,7 @@ def evaluate(bank_close=None, tech_close=None, tech_ma20=None, tech_r5=None,
         if big_black_break(o.get("close"), o.get("open"), o.get("prev_low"), o.get("ma20")):
             level = max(level, 2)
             alerts.append("%s 破位大黑K → 彻底止盈(09-02狼大铁律)" % sym)
-    advice = {0: "无系统性风险开关触发", 1: "防御模式: 减仓/不抄科技, 等银行或科技一方出方向", 2: "高优先级: 大光破位大黑K已现 → 彻底止盈离场"}.get(level, "")
+    advice = {0: "无系统性风险开关触发", 1: "防御模式: 减仓/不抄科技, 等银行或科技一方出方向", 2: "大光/光模块破位大黑K：仅相关持仓彻底止盈；不是全面防御/清仓"}.get(level, "")
     return {"level": level, "alerts": alerts, "advice": advice, "ts": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 def main():

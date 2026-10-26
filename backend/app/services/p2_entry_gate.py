@@ -110,11 +110,8 @@ def p2_gate_check(symbol=None, ts_code=None):
         out["systemic"]={"level":sr.get("level",0),"advice":sr.get("advice","")}
         lv=int(sr.get("level") or 0)
         if lv>=2:
-            msg="P2系统性风险level=%s: %s"%(lv,str(sr.get("advice") or "")[:80])
-            if hard:
-                out["hard_block"]=True; out["reasons"].append(msg)
-            else:
-                out["multiplier"]=min(out["multiplier"],0.0); out["reasons"].append(msg+"(dry-run)")
+            # 2026-10-26：level=2 是“大光/光模块个股止盈”，不是组合防御，不再全面硬拦
+            out["reasons"].append("P2系统性风险level=2: 大光/光模块止盈信号（非全面防御），不硬拦")
     ms=_load("macro_state.json")
     if ms:
         flags=(ms.get("macro_switches") or {}).get("flags") or []

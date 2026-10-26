@@ -22,7 +22,7 @@
 
 数据源（只读）：
   · wave_state（PG 优先，文件兜底）→ level/operation
-  · data/systemic_risk.json → level 0/1/2
+  · data/systemic_risk.json → 仅 level=1 参与组合防御（level=2 是个股/光模块止盈信号）
   · data/macro_state.json → macro_switches.flags
   · 本模块不读账户，也不读 break_actions（破位由 v3 处理）
 
@@ -125,10 +125,7 @@ def evaluate(segment: Optional[str] = None) -> Dict[str, Any]:
     reasons = []
     level = 0
 
-    # G3 硬触发
-    if sys_level >= 2:
-        level = 3
-        reasons.append("systemic_risk level=%s（大光破位/彻底止盈）" % sys_level)
+    # G3 硬触发（注意：systemic level=2 是“大光/光模块个股止盈”，不是组合防御，不抬 G3）
     if op == "exit" or wl == "down":
         level = max(level, 3)
         reasons.append("wave level=%s operation=%s（下跌趋势不做）" % (wl or "?", op or "?"))

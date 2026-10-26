@@ -34,13 +34,18 @@ class DefenseCashTest(unittest.TestCase):
             DC._CACHE.update({"at": 0.0, "state": None})
             return DC.evaluate(segment=segment)
 
-    def test_g3_systemic_2(self):
-        st = self._eval({"operation": "defense", "level": "down"}, systemic=2)
-        self.assertEqual(st["level"], "G3")
-        self.assertEqual(st["target_pct"], 0.0)
-        self.assertEqual(st["buckets"], {"base": 0, "t": 0, "cash": 100})
-        self.assertFalse(st["allow_new"])
-        self.assertEqual(st["allow_t"], "reduce_only")
+    def test_systemic_2_is_not_portfolio_g3(self):
+        """level=2 是“大光/光模块个股止盈”，不是组合防御。"""
+        st = self._eval({"operation": "build", "level": "d3"}, systemic=2)
+        self.assertEqual(st["level"], "G0")
+        self.assertIsNone(st["target_pct"])
+        self.assertFalse(any("systemic" in r for r in st["reasons"]))
+
+    def test_systemic_1_is_g2(self):
+        """level=1（银行双头+科技不反）才是组合防御。"""
+        st = self._eval({"operation": "build", "level": "d3"}, systemic=1)
+        self.assertEqual(st["level"], "G2")
+        self.assertEqual(st["target_pct"], 30.0)
 
     def test_g3_wave_exit(self):
         st = self._eval({"operation": "exit", "level": "down"})
