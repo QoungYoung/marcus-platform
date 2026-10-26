@@ -17,40 +17,21 @@ from app.services import defense_cash as DC  # noqa: E402
 from app.services import position_tier as PT  # noqa: E402
 
 
-def _patch(wave, systemic=0, flags=()):
+def _patch(wave, flags=()):
     DC._CACHE.update({"at": 0.0, "state": None})
     return mock.patch.multiple(
         DC,
         _wave=mock.Mock(return_value=wave),
-        _systemic_level=mock.Mock(return_value=systemic),
         _macro_flags=mock.Mock(return_value=set(flags)),
     )
 
 
 class DefenseCashTest(unittest.TestCase):
-    def _eval(self, wave, systemic=0, flags=(), segment=None):
-        p = _patch(wave, systemic, flags)
+    def _eval(self, wave, flags=(), segment=None):
+        p = _patch(wave, flags)
         with p:
             DC._CACHE.update({"at": 0.0, "state": None})
             return DC.evaluate(segment=segment)
-
-    def test_systemic_2_is_not_portfolio_g3(self):
-        """level=2 是“大光/光模块个股止盈”，不是组合防御。"""
-        st = self._eval({"operation": "build", "level": "d3"}, systemic=2)
-        self.assertEqual(st["level"], "G0")
-        self.assertIsNone(st["target_pct"])
-        self.assertFalse(any("systemic" in r for r in st["reasons"]))
-
-    def test_systemic_1_is_g2(self):
-        """level=1（银行双头+科技不反）才是组合防御。"""
-        st = self._eval({"operation": "build", "level": "d3"}, systemic=1)
-        self.assertEqual(st["level"], "G2")
-        self.assertEqual(st["target_pct"], 30.0)
-
-    def test_g3_wave_exit(self):
-        st = self._eval({"operation": "exit", "level": "down"})
-        self.assertEqual(st["level"], "G3")
-        self.assertEqual(st["target_pct"], 0.0)
 
     def test_g2_defense(self):
         st = self._eval({"operation": "defense", "level": "d4"})
@@ -64,7 +45,7 @@ class DefenseCashTest(unittest.TestCase):
 
     def test_43_bottom_caps_g1(self):
         st = self._eval({"operation": "build", "level": "d4", "sub_level": "4-3"},
-                        systemic=1, segment="4-3")
+                        flags=("margin_burst",), segment="4-3")
         self.assertEqual(st["level"], "G1", st)
         self.assertEqual(st["target_pct"], 50.0)
 

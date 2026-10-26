@@ -96,7 +96,7 @@
 
 | 措施 | 触发 | 动作 | 位置 | 状态 |
 |---|---|---|---|---|
-| **systemic_risk** | 银行双头+科技不反 → level 1；大光/光模块破位 → level 2 | **仅 level 1 抬 G2**；level 2 只做相关持仓止盈，不参与 G 级 | `apps/main_line/systemic_risk.py`，15:05 | 生效 |
+| **systemic_risk** | 银行双头+科技不反 → level 1；大光/光模块破位 → level 2 | **不参与 G 级**；只做观察/减科技/主题止盈 | `apps/main_line/systemic_risk.py`，15:05 | 观察 |
 | **macro_state** | `margin_burst` / `gjd_withdraw` / `us_yield_spike` / `cn30_spike` | G2 / G1 | `apps/main_line/build_macro_state.py`，15:06 | 生效 |
 | **wolf_top_signals** | 顶部信号 ≥2/≥3 | G1/G2 输入 | `wolf_top_signals.py` | 生效 |
 | **事件窗口** | 议息/非农/CPI/关税/谈判/长假 | 降仓/不做/不赌 | prompt + 人工 | 人工 |

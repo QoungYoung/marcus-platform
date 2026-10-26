@@ -974,7 +974,7 @@ def _read_risk_context() -> str:
             if _os.path.exists(_p3):
                 sr = _json.load(open(_p3, encoding="utf-8"))
                 if sr.get("level", 0) > 0:
-                    block += "- 系统性风险开关：level=%s — %s" % (sr.get("level"), (sr.get("advice") or "")) + NL
+                    block += "- 系统性风险观察（非组合防御）：level=%s — %s" % (sr.get("level"), (sr.get("advice") or "")) + NL
                     for a in (sr.get("alerts") or []):
                         block += "  · " + a + NL
         except Exception as _e_sil13:

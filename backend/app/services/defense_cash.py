@@ -2,7 +2,7 @@
 """defense_cash.py — 防御档位 G0-G3 单一仲裁（v0，2026-10-25 直接上线）。
 
 设计原则（docs/defense-cash-strategy.md）：
-  · 信号层可以分散：wave / systemic_risk / macro_state，各自只报事实；
+  · 信号层：wave / macro_state；systemic_risk 只做观察/主题止盈，不参与组合档位；
   · 仲裁层唯一：本模块取**最严**档位，输出 target/buckets/allow_*；
   · 执行层只读：wolf_discipline / position_tier / calc_position / prompt 都读这里。
 
@@ -22,7 +22,6 @@
 
 数据源（只读）：
   · wave_state（PG 优先，文件兜底）→ level/operation
-  · data/systemic_risk.json → 仅 level=1 参与组合防御（level=2 是个股/光模块止盈信号）
   · data/macro_state.json → macro_switches.flags
   · 本模块不读账户，也不读 break_actions（破位由 v3 处理）
 
@@ -84,13 +83,6 @@ def _wave() -> dict:
     return _load("wave_state.json")
 
 
-def _systemic_level() -> int:
-    try:
-        return int((_load("systemic_risk.json") or {}).get("level") or 0)
-    except Exception:
-        return 0
-
-
 def _macro_flags():
     try:
         ms = _load("macro_state.json") or {}
@@ -120,7 +112,6 @@ def evaluate(segment: Optional[str] = None) -> Dict[str, Any]:
     w = _wave() or {}
     op = str(w.get("operation") or "side").strip().lower()
     wl = str(w.get("level") or "").strip().lower()
-    sys_level = _systemic_level()
     flags = _macro_flags()
     reasons = []
     level = 0
@@ -134,9 +125,6 @@ def evaluate(segment: Optional[str] = None) -> Dict[str, Any]:
     if op == "defense":
         level = max(level, 2)
         reasons.append("wave operation=defense（防御不建仓）")
-    if sys_level == 1:
-        level = max(level, 2)
-        reasons.append("systemic_risk level=1（银行双头+科技不反）")
     if "margin_burst" in flags:
         level = max(level, 2)
         reasons.append("macro margin_burst（杀杠杆/两融净卖）")
@@ -168,7 +156,6 @@ def evaluate(segment: Optional[str] = None) -> Dict[str, Any]:
         "allow_t": True if level <= 1 else "reduce_only",
         "reasons": reasons,
         "wave": {"level": wl, "operation": op, "sub_level": seg},
-        "systemic_level": sys_level,
         "macro_flags": sorted(flags),
         "segment": seg,
         "asof": time.strftime("%Y-%m-%d %H:%M:%S"),
