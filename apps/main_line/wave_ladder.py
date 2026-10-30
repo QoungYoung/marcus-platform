@@ -34,8 +34,8 @@
     ∧ 未创 60 日新高 ∧ 自该高点回落 ≥ `FADE_MIN`(⛔ 3%)
     —— “摸到前高附近”这一条是 2026-10-15 实测补的：**少了它，深调里任何一次 3% 反弹
        都会把档位误判成「失败4-5」**（首测 2026-07-31 就误报，而他当时说的是「调整浪」✗）；
-  · 数据：`data/index_daily_<code>.json`（东财日线，`[date, close, high, amount]` ✓ 已实测），
-    缺失回落 `data/指数数据/index_daily/<code>.csv`；**取不到一律返回 None（fail-open）** ✓；
+  · 数据：PG `index_daily`（5 个指数；由 jobs/index_data_chain.py 统一写库）；
+    **取不到一律返回 []（fail-open）** ✓；
   · 操作/仓位口径复用 `wave_alloc.WAVE_ALLOC`（同一张表，避免两处各写一份 ✓）。
 
 离线验收（`python jobs/eval_wave_ladder.py`，2026 全年 as-of 回放，RESET=5%：8 次降级 / 5 次重定浪 / 无非法升档 ✓）：
@@ -60,8 +60,18 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+# ★ 2026-10-30 修（chain 08:10 `ModuleNotFoundError: No module named 'app'` ✗）：
+#   直跑脚本时 sys.path[0] 只有 apps/main_line ⇒ `from app.services.…` 找不到包
+#   （容器里 `app` 包 = /app/app，本地 = backend/app）⇒ 取数为空 ⇒ 写失败 fail-open ✗。
+_HERE = os.path.dirname(os.path.abspath(__file__))              # apps/main_line
+_ROOT = os.path.dirname(os.path.dirname(_HERE))                 # 仓库根（容器内 = /app）
+for _p in (os.path.join(_ROOT, "backend"), _ROOT, _HERE):
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 # ★ DATA_DIR 可能是"设了但为空"（生产 backend 容器即如此：DATA_DIR= ✗）⇒ 空串必须回落 "data" ✓
 #   （os.environ.get("DATA_DIR", "data") 对空串**不会**取默认值 ✗，会把所有路径解析成 "./xxx" ）
@@ -644,23 +654,15 @@ def clear_rows_cache() -> None:
 
 
 def _load_rows_uncached(code: Optional[str] = None) -> List[Tuple[str, float, float, float]]:
-    """→ [(date8, close, high, amount)] 升序；**两源合并**（CSV 2016+ 长历史 ∪ JSON 近一年，
-    同日以 JSON 为准）；取不到返回 []（fail-open）。
-    长历史是**铁律② 的前提**：JSON 只回溯到 2024-11 ⇒ 看不到 2024-10-08 那个 1 浪顶（3674）。"""
-    code = code or index_code()
-    merged: Dict[str, Tuple[str, float, float, float]] = {}
-    for r in _load_csv(code):
-        merged[r[0]] = r
-    for r in _load_json(code):
-        merged[r[0]] = r
-    return [merged[k] for k in sorted(merged)]
+    """→ [(date8, close, high, amount)]；唯一来源 = PG index_daily。"""
+    try:
+        from app.services.index_daily_store import load_rows
+        return load_rows(code or index_code())
+    except Exception as e:
+        _silent_alert("wave_ladder.py:db_load", e)
+        return []
 
 
-# ────────────── 结构位（教材「铁律②」，2026-10-15 接入） ──────────────
-# 出处：中山证券投资者教育《波浪理论》https://www.zszq.com/tzzyd/article/292
-#   「数浪的两条基本规则：……（二）**第四个浪的底部，不可以低于第一个浪的浪顶**」
-#   「（一）第三浪永远不允许是第一至第五浪中最短的一个浪」；补充规则一＝**交替规则**。
-# 意义：这就是“4浪调整”被证伪的**客观失效线** —— 比我们早期拍的“60 日新低”有依据 ✓。
 def pivots(rows: Sequence[Tuple[str, float, float, float]], asof: str,
            pct: Optional[float] = None) -> List[Tuple[str, str, float, str]]:
     """**因果** zigzag 拐点（只用 ≤ asof 的数据；极值反向 ≥ pct 才确认 ⇒ 无未来函数 ✓）。
