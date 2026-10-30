@@ -668,7 +668,6 @@ export default function PortfolioPage() {
             )}
           </div>
 
-          <AgentLevelsCard />
         </aside>
 
         {/* ══════════ 中列：收益图 + 指标行 + 三面板 ══════════ */}
@@ -677,6 +676,10 @@ export default function PortfolioPage() {
           <div className="cp-wave-row">
             <IndexWaveCard days={750} height={340} />
             <LowPositionCard />
+          </div>
+
+          <div className="cp-agent-wide">
+            <AgentLevelsCard />
           </div>
 
           <div className="cp-battlefield">
