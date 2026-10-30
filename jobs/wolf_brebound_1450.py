@@ -186,8 +186,13 @@ def wave_block(asof: str) -> dict | None:
     iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
     try:
         import psycopg2
+        try:
+            from b_rebound_schema import ensure_schema          # 直跑：sys.path[0] = jobs/
+        except ImportError:                                     # 被当包导入（pytest 等）
+            from jobs.b_rebound_schema import ensure_schema
         dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
         with psycopg2.connect(dsn, connect_timeout=6) as conn:
+            ensure_schema(conn)        # 本地/新环境缺这两张表时自愈（2026-10-30 14:50 就是缺表 ✗）
             cur = conn.cursor()
             cur.execute("select as_of,level,completed,running,next_watch,rejudge_trigger,evidence "
                         "from b_rebound_wave_state where as_of<=%s order by as_of desc limit 1", (asof,))

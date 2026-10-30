@@ -279,6 +279,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="真正写库（默认 dry-run）")
     a = ap.parse_args()
+    try:
+        from b_rebound_schema import ensure_schema          # 直跑：sys.path[0] = jobs/
+    except ImportError:                                     # 被当包导入（pytest 等）
+        from jobs.b_rebound_schema import ensure_schema
+    try:
+        ensure_schema()      # 本地/新环境缺这两张表时自愈（2026-10-30 14:50 就是缺表 ✗）
+    except Exception as e:
+        print(f"[warn] 建表失败（继续，读不到会走文件兜底）: {str(e)[:90]}", file=sys.stderr)
     total = 0
     added: list[str] = []
     wave_change = ""
