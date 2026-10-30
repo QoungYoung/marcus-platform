@@ -78,7 +78,7 @@ function fmt(v: number | null | undefined, digits = 2): string {
 function short(s: string): string { return s.replace(/^(SH|SZ|BJ)/, ''); }
 function statusMeta(s: string) { return STATUS_LABEL[s] || STATUS_LABEL.no_agent; }
 
-export default function AgentLevelsCard() {
+export default function AgentLevelsCard({ compact = false }: { compact?: boolean }) {
   const [data, setData] = useState<AgentLevels | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -101,6 +101,56 @@ export default function AgentLevelsCard() {
     const timer = window.setInterval(load, 60_000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  if (compact) {
+    const idx = (data?.index || {}) as IndexLevels;
+    const ag = (data?.index_agent || {}) as IndexAgent;
+    return (
+      <div className="cp-bottom-panel cp-agent-levels cp-agent-compact">
+        <div className="cp-panel-head">
+          <span className="cp-tick" />
+          <h2>Agent 关键位</h2>
+          <span className="cp-en">AGENT LEVELS</span>
+          <div className="cp-panel-actions">
+            <button className="cp-icon-btn" onClick={load} disabled={loading} title="刷新 Agent 关键位">
+              <i className={`fas fa-sync-alt ${loading ? 'fa-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+        <div className="cp-bottom-body cp-agent-compact-body">
+          {loading && !data ? (
+            <div className="cp-agent-skeleton"><div className="cp-skel" style={{ width: '100%', height: 10 }} /><div className="cp-skel" style={{ width: '80%', height: 10 }} /></div>
+          ) : !ag?.ok ? (
+            <div className="cp-agent-empty compact">
+              <i className="fas fa-robot" />
+              <div>{ag?.error ? `Agent 不可用：${ag.error}` : 'Agent 暂无判定'}</div>
+            </div>
+          ) : (
+            <>
+              <div className="cp-agent-compact-cur">
+                <span>上证</span><b>{fmt(idx.current, 2)}</b>
+                <em>{ag.current_state || ''}</em>
+              </div>
+              <div className="cp-agent-index-cols">
+                <div className="cp-agent-index-col up">
+                  <span>Agent 压力</span>
+                  {(ag.resistances || []).slice(0, 3).map((l, i) => (
+                    <div key={i} className="cp-agent-index-row"><b>{fmt(l.price, 2)}</b><em>{l.type || ''}</em></div>
+                  ))}
+                </div>
+                <div className="cp-agent-index-col down">
+                  <span>Agent 支撑</span>
+                  {(ag.supports || []).slice(0, 3).map((l, i) => (
+                    <div key={i} className="cp-agent-index-row"><b>{fmt(l.price, 2)}</b><em>{l.type || ''}</em></div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="cp-strategic-panel cp-agent-levels">

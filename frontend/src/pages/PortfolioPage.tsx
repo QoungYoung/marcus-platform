@@ -678,10 +678,6 @@ export default function PortfolioPage() {
             <LowPositionCard />
           </div>
 
-          <div className="cp-agent-wide">
-            <AgentLevelsCard />
-          </div>
-
           <div className="cp-battlefield">
             <div className="cp-battlefield-scanline" />
             <PanelHead title="战略收益概览" en="STRATEGIC OVERVIEW">
@@ -782,6 +778,8 @@ export default function PortfolioPage() {
 
           {/* 底部三面板 */}
           <div className="cp-bottom-zone">
+            {/* Agent 关键位（只展示 Agent 给的上下位置） */}
+            <AgentLevelsCard compact />
             {/* 情报中心 · 今日 buy_new 低吸布腿监控 */}
             <div className="cp-bottom-panel">
               <PanelHead title="情报中心" en="INTEL CENTER">

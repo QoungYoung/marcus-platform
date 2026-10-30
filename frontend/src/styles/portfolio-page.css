@@ -2355,3 +2355,13 @@
 .cp-agent-wide .cp-agent-index-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; }
 .cp-agent-wide .cp-agent-index-row em { min-width: 0; }
 .cp-agent-wide .cp-agent-index-col { min-width: 0; }
+/* Agent 关键位 · 底部三面板紧凑卡（只展示 Agent 上下位置） */
+.cp-agent-compact { padding: 12px; min-height: 170px; max-height: 290px; }
+.cp-agent-compact-body { display: flex; flex-direction: column; gap: 6px; }
+.cp-agent-compact-cur { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.cp-agent-compact-cur span { font-size: 9px; color: var(--cc-faint); }
+.cp-agent-compact-cur b { font-size: 18px; color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.cp-agent-compact-cur em { font-size: 9px; color: var(--cc-text-dim); font-style: normal; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-agent-compact .cp-agent-index-cols { margin-top: 2px; gap: 10px; }
+.cp-agent-compact .cp-agent-index-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
+.cp-agent-compact .cp-agent-index-row em { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
