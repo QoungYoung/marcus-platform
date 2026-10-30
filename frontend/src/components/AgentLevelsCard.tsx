@@ -213,7 +213,7 @@ export default function AgentLevelsCard() {
                     <span className={`cp-agent-badge ${st.cls}`}>{st.text}</span>
                     <span className="cp-agent-price">{p.current_price == null ? '—' : fmt(p.current_price, p.current_price >= 10 ? 2 : 3)}</span>
                   </div>
-                  <div className="cp-agent-levels">
+                  <div className="cp-agent-level-list">
                     {bt && (
                       <div className={`cp-agent-level ${bt.state === 'broken' ? 'broken' : 'hold'}`}>
                         <span className="cp-agent-k">破位线</span>

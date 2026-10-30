@@ -2314,7 +2314,7 @@
 .cp-agent-badge.danger { color: var(--cc-red); border-color: rgba(229,72,77,.35); background: rgba(229,72,77,.08); }
 .cp-agent-badge.muted { color: var(--cc-faint); border-color: var(--cc-line-soft); }
 .cp-agent-price { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--cc-text); font-variant-numeric: tabular-nums; }
-.cp-agent-levels { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 6px; }
+.cp-agent-level-list { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 6px; }
 .cp-agent-level { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--cc-text-dim); }
 .cp-agent-level b { color: var(--cc-text); font-variant-numeric: tabular-nums; }
 .cp-agent-level.broken b { color: var(--cc-red); }
@@ -2349,7 +2349,7 @@
 .cp-agent-wide .cp-agent-index-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .cp-agent-wide .cp-agent-list { max-height: 220px; }
 .cp-agent-wide .cp-agent-row { min-width: 0; overflow: hidden; }
-.cp-agent-wide .cp-agent-levels { min-width: 0; overflow: hidden; }
+.cp-agent-wide .cp-agent-level-list { min-width: 0; overflow: hidden; }
 .cp-agent-wide .cp-agent-level { min-width: 0; max-width: 100%; }
 .cp-agent-wide .cp-agent-status { min-width: 0; max-width: 100%; }
 .cp-agent-wide .cp-agent-index-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; }
