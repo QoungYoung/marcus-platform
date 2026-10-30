@@ -16,6 +16,7 @@ export const accountsApi = {
 export const portfolioApi = {
   getSummary: (account = 'stock') => api.get('/portfolio', { params: { account } }),
   getPositions: (account = 'stock') => api.get('/portfolio/positions', { params: { account } }),
+  getAgentLevels: (account = 'stock') => api.get('/portfolio/agent-levels', { params: { account } }),
   getEquityHistory: (days = 60, account = 'stock') => api.get('/portfolio/equity-history', { params: { days, account } }),
   getDailyPnlBreakdown: (days = 30, account = 'stock') => api.get('/portfolio/daily-pnl-breakdown', { params: { days, account } }),
   getDailyPnlBreakdownByDate: (date: string, account = 'stock') => api.get('/portfolio/daily-pnl-breakdown/date', { params: { date, account } }),

@@ -2284,3 +2284,42 @@
   padding-top: 6px;
   border-top: 1px dashed var(--cc-line-soft);
 }
+
+/* ═══════════════════════════════════════════════════════
+   Agent 关键位卡（替代旧防御等级/防御系统）
+   ═══════════════════════════════════════════════════════ */
+.cp-agent-levels { padding: 12px; }
+.cp-agent-skeleton { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
+.cp-agent-empty {
+  min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--cc-text-dim); font-size: 11px; text-align: center;
+}
+.cp-agent-empty i { font-size: 20px; color: var(--cc-blue); opacity: .75; }
+.cp-agent-empty small { font-size: 9px; color: var(--cc-faint); }
+.cp-agent-summary {
+  display: flex; align-items: center; gap: 10px; padding: 6px 0 8px;
+  font-size: 10px; color: var(--cc-text-dim); border-bottom: 1px solid var(--cc-line-soft);
+}
+.cp-agent-summary b { color: var(--cc-text); font-size: 13px; margin-right: 2px; }
+.cp-agent-summary .muted { margin-left: auto; color: var(--cc-faint); font-size: 9px; }
+.cp-agent-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; padding-top: 8px; }
+.cp-agent-list::-webkit-scrollbar { width: 3px; }
+.cp-agent-list::-webkit-scrollbar-thumb { background: rgba(47,124,211,.18); border-radius: 8px; }
+.cp-agent-row { padding: 8px; border: 1px solid var(--cc-line-soft); border-radius: 6px; background: rgba(255,255,255,.015); }
+.cp-agent-row-head { display: flex; align-items: center; gap: 6px; }
+.cp-agent-sym { font-size: 11px; font-weight: 700; color: var(--cc-text); letter-spacing: .3px; }
+.cp-agent-badge { font-size: 8px; padding: 1px 5px; border-radius: 8px; border: 1px solid transparent; }
+.cp-agent-badge.ok { color: var(--cc-green); border-color: rgba(39,160,107,.35); background: rgba(39,160,107,.08); }
+.cp-agent-badge.warn { color: var(--cc-amber); border-color: rgba(201,138,18,.35); background: rgba(201,138,18,.08); }
+.cp-agent-badge.danger { color: var(--cc-red); border-color: rgba(229,72,77,.35); background: rgba(229,72,77,.08); }
+.cp-agent-badge.muted { color: var(--cc-faint); border-color: var(--cc-line-soft); }
+.cp-agent-price { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.cp-agent-levels { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 6px; }
+.cp-agent-level { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--cc-text-dim); }
+.cp-agent-level b { color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.cp-agent-level.broken b { color: var(--cc-red); }
+.cp-agent-level.rebound b { color: var(--cc-amber); }
+.cp-agent-k { font-size: 9px; color: var(--cc-faint); }
+.cp-agent-status { font-size: 9px; color: var(--cc-red); opacity: .85; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-agent-meta { display: flex; gap: 8px; margin-top: 5px; font-size: 8px; color: var(--cc-faint); }
+.cp-agent-meta .warn { color: var(--cc-amber); }

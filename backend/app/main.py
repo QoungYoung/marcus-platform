@@ -40,6 +40,7 @@ for skill_dir in [settings.akshare_dir, settings.vnpy_dir]:
         sys.path.insert(0, str(skill_dir))
 
 from app.api import accounts
+from app.api import agent_levels
 from app.api import portfolio, trades, market, news, strategy, agent, etf, db, scan, prompts, panel, indicator, backtest, pool, lt_pool, direction, golden_pit, proxy, main_wave, wave
 from app.api.scheduler import router as scheduler_router
 from app.api.monitor_log import router as monitor_log_router
@@ -178,6 +179,7 @@ app.add_middleware(
 # Include routers
 app.include_router(accounts.router, prefix="/api/v1")
 app.include_router(portfolio.router, prefix="/api/v1")
+app.include_router(agent_levels.router, prefix="/api/v1")
 app.include_router(trades.router, prefix="/api/v1")
 app.include_router(market.router, prefix="/api/v1")
 app.include_router(news.router, prefix="/api/v1")

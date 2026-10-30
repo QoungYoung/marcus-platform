@@ -6,7 +6,7 @@ import {
   BarChart, Bar, Cell,
   PieChart, Pie, Cell as PieCell,
 } from 'recharts';
-import { portfolioApi, marketApi, tradesApi, schedulerApi, tApi } from '../api/client';
+import { portfolioApi, marketApi, tradesApi, tApi } from '../api/client';
 import { useAccountStore } from '../store/accountStore';
 import {
   computeSharpeRatio, computeMonthlyReturns, computeQuarterlyReturns,
@@ -17,7 +17,7 @@ import '../styles/agent-theme.css';
 import '../styles/portfolio-page.css';
 import IndexWaveCard from '../components/IndexWaveCard';
 import LowPositionCard from '../components/LowPositionCard';
-import DefenseLevelCard from '../components/DefenseLevelCard';
+import AgentLevelsCard from '../components/AgentLevelsCard';
 
 // ── 资金流类型 ──
 interface MoneyflowRow {
@@ -57,29 +57,6 @@ interface IndexTicker { name: string; price: number; change_pct: number; }
 interface TradeRecord { order_id?: string; symbol: string; name?: string; direction: string; price: number; volume: number; created_at?: string; }
 interface StockPnlItem { symbol: string; name?: string; volume: number; close_price: number; prev_close: number; float_pnl: number; realized_pnl: number; }
 interface PnlBreakdownItem { date: string; daily_pnl: number; realized_total: number; float_total: number; stocks: StockPnlItem[]; }
-
-// ── 止损监控类型 ──
-interface StopDistance {
-  symbol: string; name?: string; avg_price: number; current_price: number; volume: number;
-  float_pnl_pct: number; t1_locked: boolean; daily_stops_used: number;
-  nearest_trigger: { rule: string; distance_pct: number; danger_level: string; };
-  rule_distances: Record<string, number | null>;
-  sell_refs?: {
-    rule?: string; label?: string; direction?: string;
-    price?: number | null; dist_pct?: number | null; touched?: boolean;
-  }[];
-  levels?: {
-    current?: number | null;
-    support?: { price: number; label?: string }[];
-    resistance?: { price: number; label?: string }[];
-  };
-}
-interface StopLossStatus {
-  running: boolean; thread_alive: boolean; interval_seconds: number;
-  today_stops_count: number; is_trading_time: boolean;
-  is_morning_volatility: boolean; position_count: number;
-  triggered_count: number; positions: StopDistance[];
-}
 
 // ── 情报中心 · 今日 buy_new 低吸布腿（switch 253/254）──
 interface TLegCondition {
@@ -166,13 +143,11 @@ export default function PortfolioPage() {
   const [modalDate, setModalDate] = useState<string | null>(null);
   const [modalData, setModalData] = useState<PnlBreakdownItem | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
-  const [stopLoss, setStopLoss] = useState<StopLossStatus | null>(null);
 
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingTickers, setLoadingTickers] = useState(true);
   const [loadingEquity, setLoadingEquity] = useState(true);
   const [loadingTrades, setLoadingTrades] = useState(true);
-  const [loadingStopLoss, setLoadingStopLoss] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate] = useState<Date>(new Date());
@@ -187,8 +162,6 @@ export default function PortfolioPage() {
   const [capNote, setCapNote] = useState('');
   const [capError, setCapError] = useState<string | null>(null);
   const [capSubmitting, setCapSubmitting] = useState(false);
-  const [slExpanded, setSlExpanded] = useState(false);
-  const [slToggling, setSlToggling] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   usePortfolioBackground(canvasRef);
 
@@ -247,18 +220,6 @@ export default function PortfolioPage() {
     } catch { flushSync(() => setLoadingTrades(false)); }
   }, []);
 
-  const refreshStopLoss = useCallback(async () => {
-    setLoadingStopLoss(true);
-    try {
-      const res = await schedulerApi.getStopLossMonitor();
-      flushSync(() => {
-        if (res.data?.success) { setStopLoss(res.data as StopLossStatus); }
-        else { setStopLoss({ running: false } as StopLossStatus); }
-        setLoadingStopLoss(false);
-      });
-    } catch { flushSync(() => { setStopLoss({ running: false } as StopLossStatus); setLoadingStopLoss(false); }); }
-  }, []);
-
   // ── 账户列表（顶部导航栏全局加载，这里仅确保已加载）──
   useEffect(() => {
     loadAccounts();
@@ -275,7 +236,6 @@ export default function PortfolioPage() {
   // ── 首次并行加载 ──
   useEffect(() => {
     refreshTickers();
-    refreshStopLoss();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -369,24 +329,6 @@ export default function PortfolioPage() {
   }, []);
 
   useEffect(() => { refreshIntel(); }, [refreshIntel]);
-
-  // 启动/停止止损监控
-  const handleToggleSL = useCallback(async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (slToggling || !stopLoss) return;
-    setSlToggling(true);
-    try {
-      const isRunning = stopLoss.running && stopLoss.thread_alive;
-      if (isRunning) {
-        await schedulerApi.stopStopLossMonitor();
-      } else {
-        await schedulerApi.startStopLossMonitor();
-      }
-      await refreshStopLoss();
-    } catch (err) {
-      console.error('止损监控操作失败:', err);
-    } finally { setSlToggling(false); }
-  }, [slToggling, stopLoss, refreshStopLoss]);
 
   const handleUnfreeze = useCallback(async () => {
     if (unfreezing) return;
@@ -726,7 +668,7 @@ export default function PortfolioPage() {
             )}
           </div>
 
-          <DefenseLevelCard />
+          <AgentLevelsCard />
         </aside>
 
         {/* ══════════ 中列：收益图 + 指标行 + 三面板 ══════════ */}
@@ -837,131 +779,6 @@ export default function PortfolioPage() {
 
           {/* 底部三面板 */}
           <div className="cp-bottom-zone">
-            {/* 防御系统 */}
-            <div className="cp-bottom-panel">
-              <PanelHead title="防御系统" en="DEFENSE SYSTEM">
-                <button className="cp-icon-btn" onClick={refreshStopLoss} title="刷新">
-                  <i className={`fas fa-sync-alt ${loadingStopLoss ? 'fa-spin' : ''}`} />
-                </button>
-              </PanelHead>
-              <div className="cp-bottom-body">
-                {loadingStopLoss ? <Skel w="100%" h={80} /> : stopLoss && (
-                  <>
-                    <div className="cp-defense-status">
-                      <div className="cp-defense-indicator">
-                        <span className={`cp-defense-dot ${stopLoss.running && stopLoss.thread_alive ? 'live' : 'dead'}`} />
-                        <span className="cp-defense-text">
-                          {stopLoss.interval_seconds === 0 ? 'API 不可达' : stopLoss.running && stopLoss.thread_alive ? 'ACTIVE' : 'STANDBY'}
-                        </span>
-                      </div>
-                      <div className="cp-defense-tags">
-                        {stopLoss.is_morning_volatility && <span className="cp-defense-tag warn">早盘冷静期</span>}
-                        {!stopLoss.is_trading_time && <span className="cp-defense-tag muted">非交易时段</span>}
-                      </div>
-                      <button className={`cp-defense-toggle ${stopLoss.running && stopLoss.thread_alive ? 'on' : 'off'}`}
-                        onClick={handleToggleSL} disabled={slToggling}>
-                        <i className={`fas fa-${slToggling ? 'spinner fa-spin' : stopLoss.running && stopLoss.thread_alive ? 'shield-halved' : 'play'}`} />
-                        {' '}{stopLoss.running && stopLoss.thread_alive ? 'SHIELD ON' : 'SHIELD OFF'}
-                      </button>
-                    </div>
-                    <div className="cp-defense-metrics">
-                      <div className={`cp-defense-metric ${stopLoss.triggered_count > 0 ? 'danger' : ''}`}>
-                        <div className={`cp-defense-metric-val ${stopLoss.triggered_count > 0 ? 'danger' : ''}`}>{stopLoss.triggered_count}</div>
-                        <div className="cp-defense-metric-label">已触发</div>
-                      </div>
-                      <div className="cp-defense-metric">
-                        <div className="cp-defense-metric-val">{stopLoss.position_count}</div>
-                        <div className="cp-defense-metric-label">监控中</div>
-                      </div>
-                      <div className="cp-defense-metric">
-                        <div className="cp-defense-metric-val">{stopLoss.today_stops_count}</div>
-                        <div className="cp-defense-metric-label">今日止损</div>
-                      </div>
-                      <div className="cp-defense-metric">
-                        <div className="cp-defense-metric-val">{stopLoss.interval_seconds}s</div>
-                        <div className="cp-defense-metric-label">扫描间隔</div>
-                      </div>
-                    </div>
-                    <div className="cp-defense-detail" onClick={() => setSlExpanded(e => !e)}>
-                      <i className={`fas fa-chevron-${slExpanded ? 'up' : 'down'}`} /> {slExpanded ? '收起' : '展开'}单位距离详情
-                    </div>
-                    {slExpanded && stopLoss.positions.length > 0 && (
-                      <div className="cp-sl-list">
-                        {stopLoss.positions.slice(0, 6).map(p => {
-                          const danger = p.nearest_trigger?.danger_level || 'no_rules';
-                          const levelText: Record<string, string> = {
-                            triggered: '已触发', critical: '危急', warning: '警告',
-                            caution: '关注', safe: '安全', no_rules: '—',
-                          };
-                          const refs: { rule?: string; label?: string; direction?: string; price?: number | null; dist_pct?: number | null; touched?: boolean }[] = p.sell_refs || [];
-                          const fmt = (v: number | null | undefined, d = 2) =>
-                            (v == null || isNaN(v)) ? '—' : v.toFixed(d);
-                          return (
-                            <div key={p.symbol} className="cp-sl-row">
-                              <div className="cp-sl-head">
-                                <span className="cp-sl-name">{p.name || p.symbol.replace(/^(SH|SZ|BJ)/, "")}</span>
-                                <span className="cp-sl-sym">{p.symbol.replace(/^(SH|SZ|BJ)/, "")}</span>
-                                <span className={`cp-sl-badge ${danger}`}>{levelText[danger] || "—"}</span>
-                                <span className={`cp-sl-pnl ${(p.float_pnl_pct || 0) >= 0 ? "up" : "down"}`}>
-                                  {(p.float_pnl_pct || 0) >= 0 ? '+' : ''}{fmt(p.float_pnl_pct, 1)}%
-                                </span>
-                              </div>
-                              <div className="cp-sl-refs">
-                                <span className="cp-sl-now">现价 <b>{fmt(p.current_price)}</b></span>
-                                {refs.map(rf => {
-                                  const isDown = rf.direction === 'down';
-                                  const dist = rf.dist_pct;
-                                  const distAbs = dist == null ? 0 : Math.abs(dist);
-                                  let txt = '';
-                                  if (isDown) {
-                                    txt = rf.touched ? '已跌破·离场' : `高于黄线 ${fmt(distAbs, 1)}%`;
-                                  } else {
-                                    txt = rf.touched ? '已到·可T出'
-                                      : (dist != null && dist < 0 ? `还差 ${fmt(distAbs, 1)}% 到卖点`
-                                          : `高于卖点 ${fmt(distAbs, 1)}%`);
-                                  }
-                                  return (
-                                    <span key={rf.rule} className={`cp-sl-ref ${rf.touched ? 'touched' : isDown ? 'down' : 'up'}`}
-                                      title={`${rf.label || ''} · 触发价 ${fmt(rf.price, 3)}`}>
-                                      <i className={`fas fa-arrow-${isDown ? "down" : "up"}`} />
-                                      <em>{rf.label}</em>
-                                      <b>{fmt(rf.price, (rf.price || 0) >= 10 ? 2 : 3)}</b>
-                                      <span className="cp-sl-dist">{txt}</span>
-                                    </span>
-                                  );
-                                })}
-                                <div className="cp-sl-levels">
-                                {(p.levels?.support || []).slice(0, 2).length > 0 && (
-                                  <span className="cp-lv-group sup">
-                                    <i className="fas fa-arrow-down" />支撑{' '}
-                                    {(p.levels?.support || []).slice(0, 2).map((s, i) => (
-                                      <b key={i}>{fmt(s.price, 3)}</b>
-                                    ))}
-                                  </span>
-                                )}
-                                {(p.levels?.resistance || []).slice(0, 2).length > 0 && (
-                                  <span className="cp-lv-group res">
-                                    <i className="fas fa-arrow-up" />压力{' '}
-                                    {(p.levels?.resistance || []).slice(0, 2).map((r, i) => (
-                                      <b key={i}>{fmt(r.price, 3)}</b>
-                                    ))}
-                                  </span>
-                                )}
-                                {p.levels?.current != null && (
-                                  <span className="cp-lv-asof">日线@{fmt(p.levels.current, 3)}</span>
-                                )}
-                              </div>
-                            </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
-
             {/* 情报中心 · 今日 buy_new 低吸布腿监控 */}
             <div className="cp-bottom-panel">
               <PanelHead title="情报中心" en="INTEL CENTER">
