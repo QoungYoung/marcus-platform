@@ -48,6 +48,26 @@ def _silent_alert(where, exc=None):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _child_python_env(workspace) -> Dict[str, str]:
+    """调度子进程的 env：UTF-8 + PYTHONPATH 兜底。
+
+    ★ 2026-10-30：`python <脚本>` 的 sys.path[0] 只有**脚本目录**（cwd 不进 sys.path），而 `app`
+    包在容器里是 /app/app、本地是 backend/app ⇒ 子脚本里 `from app.…` 会 ModuleNotFoundError
+    （2026-10-30 08:10「浪型状态+历史」链即此 ✗）。jobs/chain_util.py 对链步骤做了同一兜底，
+    这里补上调度直启这一路 ⇒ 以后新增任务脚本不再踩 ✓。
+    """
+    env = os.environ.copy()
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUNBUFFERED'] = '1'  # Force unbuffered output
+    ws = str(workspace)
+    paths = [p for p in (ws, os.path.join(ws, "backend")) if os.path.isdir(p)]
+    if (env.get("PYTHONPATH") or "").strip():
+        paths.append(env["PYTHONPATH"])
+    if paths:
+        env["PYTHONPATH"] = os.pathsep.join(paths)
+    return env
+
 # 实时止损监控（延迟导入避免循环依赖）
 _stop_loss_monitor = None
 
@@ -731,9 +751,7 @@ class SchedulerService:
             logger.info(f"[{execution_id}] Command: {' '.join(cmd)}")
 
             # Execute with UTF-8 encoding
-            env = os.environ.copy()
-            env['PYTHONIOENCODING'] = 'utf-8'
-            env['PYTHONUNBUFFERED'] = '1'  # Force unbuffered output
+            env = _child_python_env(self._get_workspace_path())
             logger.info(f"[{execution_id}] About to run subprocess...")
 
             # Debug: write command to batch file and run it
