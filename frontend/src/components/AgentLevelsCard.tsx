@@ -24,11 +24,30 @@ interface AgentPosition {
   updated_at?: string | null;
   source?: string;
 }
+interface IndexLevel {
+  price: number;
+  type?: string;
+  state?: string;
+  confluence?: number;
+  distance_pct?: number;
+}
+interface IndexLevels {
+  symbol: string;
+  name: string;
+  current: number | null;
+  high?: number | null;
+  low?: number | null;
+  supports: IndexLevel[];
+  resistances: IndexLevel[];
+  stale?: boolean;
+  asof?: string;
+}
 interface AgentLevels {
   date: string;
   generated_at?: string | null;
   positions: AgentPosition[];
   watches: Array<Record<string, unknown>>;
+  index?: IndexLevels | Record<string, never>;
   message?: string;
 }
 
@@ -95,13 +114,50 @@ export default function AgentLevelsCard() {
         </div>
       ) : error && !data ? (
         <div className="cp-agent-empty"><i className="fas fa-exclamation-circle" /> 关键位获取失败</div>
-      ) : !data || data.positions.length === 0 ? (
-        <div className="cp-agent-empty">
-          <i className="fas fa-crosshairs" />
-          <div>{data?.message || '今日无持仓，agent 未触发'}</div>
-          <small>窗口 09:45 / 10:30 / 14:30 / 14:55</small>
-        </div>
-      ) : (
+      ) : !data ? null : (
+        <>
+          {(() => {
+            const idx = (data.index || {}) as IndexLevels;
+            if (!idx.current) return null;
+            return (
+              <div className="cp-agent-index">
+                <div className="cp-agent-index-head">
+                  <span className="cp-agent-index-name">{idx.name || '上证指数'}</span>
+                  <span className="cp-agent-index-px">{fmt(idx.current, 2)}</span>
+                  <span className="cp-agent-index-sub">高 {fmt(idx.high, 2)} · 低 {fmt(idx.low, 2)}{idx.stale ? ' · 数据滞后' : ''}</span>
+                </div>
+                <div className="cp-agent-index-cols">
+                  <div className="cp-agent-index-col up">
+                    <span>上方压力</span>
+                    {(idx.resistances || []).slice(0, 4).map((l, i) => (
+                      <div key={i} className="cp-agent-index-row">
+                        <b>{fmt(l.price, 2)}</b>
+                        <em>{l.type || ''}</em>
+                        <small>{l.distance_pct == null ? '' : `+${Number(l.distance_pct).toFixed(2)}%`}</small>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="cp-agent-index-col down">
+                    <span>下方支撑</span>
+                    {(idx.supports || []).slice(0, 4).map((l, i) => (
+                      <div key={i} className="cp-agent-index-row">
+                        <b>{fmt(l.price, 2)}</b>
+                        <em>{l.type || ''}</em>
+                        <small>{l.distance_pct == null ? '' : `${Number(l.distance_pct).toFixed(2)}%`}</small>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          {data.positions.length === 0 ? (
+            <div className="cp-agent-empty compact">
+              <i className="fas fa-crosshairs" />
+              <div>{data.message || '今日无持仓，agent 未触发'}</div>
+              <small>上证关键位来自 point_engine；持仓 Agent 窗口 09:45 / 10:30 / 14:30 / 14:55</small>
+            </div>
+          ) : (
         <>
           <div className="cp-agent-summary">
             <span><b>{data.positions.length}</b> 持仓</span>
@@ -155,6 +211,8 @@ export default function AgentLevelsCard() {
               );
             })}
           </div>
+        </>
+          )}
         </>
       )}
     </div>

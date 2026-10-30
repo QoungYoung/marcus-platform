@@ -2323,3 +2323,18 @@
 .cp-agent-status { font-size: 9px; color: var(--cc-red); opacity: .85; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cp-agent-meta { display: flex; gap: 8px; margin-top: 5px; font-size: 8px; color: var(--cc-faint); }
 .cp-agent-meta .warn { color: var(--cc-amber); }
+.cp-agent-index { margin: 4px 0 8px; padding: 8px; border: 1px solid var(--cc-line-soft); border-radius: 6px; background: rgba(47,124,211,.035); }
+.cp-agent-index-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cp-agent-index-name { font-size: 10px; color: var(--cc-text-dim); letter-spacing: .4px; }
+.cp-agent-index-px { font-size: 17px; font-weight: 700; color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.cp-agent-index-sub { margin-left: auto; font-size: 8px; color: var(--cc-faint); }
+.cp-agent-index-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 7px; }
+.cp-agent-index-col { display: flex; flex-direction: column; gap: 2px; }
+.cp-agent-index-col > span { font-size: 8px; color: var(--cc-faint); margin-bottom: 2px; }
+.cp-agent-index-col.up > span { color: var(--cc-red); }
+.cp-agent-index-col.down > span { color: var(--cc-green); }
+.cp-agent-index-row { display: grid; grid-template-columns: 1fr auto auto; gap: 4px; align-items: baseline; font-size: 10px; }
+.cp-agent-index-row b { color: var(--cc-text); font-variant-numeric: tabular-nums; }
+.cp-agent-index-row em { font-style: normal; font-size: 8px; color: var(--cc-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-agent-index-row small { font-size: 8px; color: var(--cc-text-dim); font-variant-numeric: tabular-nums; }
+.cp-agent-empty.compact { min-height: 54px; font-size: 10px; }
