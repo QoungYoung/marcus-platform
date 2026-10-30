@@ -2338,3 +2338,8 @@
 .cp-agent-index-row em { font-style: normal; font-size: 8px; color: var(--cc-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cp-agent-index-row small { font-size: 8px; color: var(--cc-text-dim); font-variant-numeric: tabular-nums; }
 .cp-agent-empty.compact { min-height: 54px; font-size: 10px; }
+.cp-agent-index-agent { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--cc-line-soft); }
+.cp-agent-agent-head { display: flex; align-items: center; gap: 5px; font-size: 9px; color: var(--cc-blue); }
+.cp-agent-agent-head span { color: var(--cc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-agent-agent-head em { margin-left: auto; font-style: normal; font-size: 8px; color: var(--cc-faint); }
+.cp-agent-agent-note { margin-top: 5px; font-size: 8px; color: var(--cc-faint); }

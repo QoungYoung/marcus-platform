@@ -14,8 +14,10 @@ from app.services import point_engine as PE
 
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 
-_INDEX_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_INDEX_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None, "points": [], "bars": [], "quote": {}}
 _INDEX_TTL = 60.0
+_INDEX_AGENT_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_INDEX_AGENT_TTL = 300.0
 
 
 def _loads(v: Any) -> Any:
@@ -116,9 +118,91 @@ def _index_levels() -> Dict[str, Any]:
             resi = sorted({round(r["price"], 2): r for r in resi}.values(), key=lambda x: x["price"])[:4]
             out.update({"supports": sup, "resistances": resi,
                         "asof_bar": bars[-1]["trade_date"], "bars": len(bars)})
+            _INDEX_CACHE["points"] = pts
+            _INDEX_CACHE["bars"] = bars
+            _INDEX_CACHE["quote"] = q
     except Exception as e:
         out["error"] = str(e)[:120]
     _INDEX_CACHE.update({"ts": now, "data": out})
+    return out
+
+
+def _index_agent() -> Dict[str, Any]:
+    """让 dsh agent 单独给上证上下关键位（60s 缓存；失败返回 ok=false）。"""
+    import time as _t
+    now = _t.time()
+    if _INDEX_AGENT_CACHE.get("data") and now - float(_INDEX_AGENT_CACHE.get("ts") or 0) < _INDEX_AGENT_TTL:
+        return _INDEX_AGENT_CACHE["data"]  # type: ignore[return-value]
+    out: Dict[str, Any] = {"ok": False, "supports": [], "resistances": [],
+                           "current_state": "", "risk_trigger": None,
+                           "confidence": None, "error": ""}
+    try:
+        import os, json as _j, re as _re, requests as _rq
+        cur = float((_INDEX_CACHE.get("data") or {}).get("current") or 0)
+        pts = _INDEX_CACHE.get("points") or []
+        if cur <= 0 or not pts:
+            out["error"] = "no_index_snapshot"
+            _INDEX_AGENT_CACHE.update({"ts": now, "data": out})
+            return out
+        cands = []
+        for p in pts:
+            try:
+                cands.append({"type": p.get("type"), "price": round(float(p.get("price") or 0), 2),
+                              "state": p.get("state"), "confluence": p.get("confluence"),
+                              "distance_pct": p.get("distance_pct")})
+            except Exception:
+                continue
+        cands = sorted(cands, key=lambda x: abs(float(x.get("distance_pct") or 0)))[:50]
+        prompt = (
+            "你是上证指数关键位分析器。只输出一个 JSON，不要 markdown。\n"
+            "当前上证：%.2f；今日高 %.2f、低 %.2f。\n"
+            "请给：上方压力 2-4 档、下方支撑 2-4 档、当前状态一句话、最关键的破位/防守线。\n"
+            "只能用候选里的价格，不得发明。\n候选：%s\n"
+            '输出：{"current_state":"...","supports":[{"price":0.0,"type":"...","why":"..."}],'
+            '"resistances":[{"price":0.0,"type":"...","why":"..."}],'
+            '"risk_trigger":{"price":0.0,"type":"...","why":"..."},'
+            '"confidence":0.0,"no_confident_level":false}'
+        ) % (cur, float((_INDEX_CACHE.get("data") or {}).get("high") or 0),
+             float((_INDEX_CACHE.get("data") or {}).get("low") or 0), _j.dumps(cands, ensure_ascii=False))
+        url = os.getenv("WOLF_V3_AGENT_URL") or os.getenv("PI_SERVER_URL") or "http://dsh:3001/chat"
+        r = _rq.post(url, json={"message": prompt, "session_id": "index_levels_%s" % datetime.now().strftime("%Y%m%d")},
+                     headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                     timeout=float(os.getenv("WOLF_INDEX_AGENT_TIMEOUT", "20")), verify=False)
+        r.raise_for_status()
+        raw = r.json().get("reply", "")
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = _re.sub(r"^```[a-zA-Z]*\s*", "", text)
+            text = _re.sub(r"\s*```$", "", text)
+        try:
+            obj = _j.loads(text)
+        except Exception:
+            st = text.find("{")
+            obj = _j.loads(text[st:text.rfind("}") + 1]) if st >= 0 and text.rfind("}") > st else None
+        if not isinstance(obj, dict):
+            out["error"] = "bad_json"
+        else:
+            valid = {round(float(x["price"]), 2) for x in cands if x.get("price")}
+            def _clean(rows):
+                out_rows = []
+                for x in rows or []:
+                    try:
+                        p = round(float(x.get("price")), 2)
+                        if p in valid:
+                            out_rows.append({"price": p, "type": x.get("type") or "",
+                                             "why": str(x.get("why") or "")[:120]})
+                    except Exception:
+                        continue
+                return out_rows[:4]
+            out.update({"ok": True, "supports": _clean(obj.get("supports")),
+                        "resistances": _clean(obj.get("resistances")),
+                        "current_state": str(obj.get("current_state") or "")[:200],
+                        "risk_trigger": obj.get("risk_trigger"),
+                        "confidence": obj.get("confidence"),
+                        "no_confident_level": bool(obj.get("no_confident_level"))})
+    except Exception as e:
+        out["error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
+    _INDEX_AGENT_CACHE.update({"ts": now, "data": out})
     return out
 
 
@@ -201,8 +285,10 @@ def agent_levels(account: str = Query("stock"), date: Optional[str] = Query(None
             })
         try:
             out["index"] = _index_levels()
+            out["index_agent"] = _index_agent()
         except Exception:
             out["index"] = {}
+            out["index_agent"] = {}
         if not pos_rows:
             out["message"] = "今日无持仓，agent 未触发"
         elif not ev:

@@ -42,12 +42,21 @@ interface IndexLevels {
   stale?: boolean;
   asof?: string;
 }
+interface IndexAgent {
+  ok: boolean;
+  supports: IndexLevel[];
+  resistances: IndexLevel[];
+  current_state?: string;
+  confidence?: number | null;
+  error?: string;
+}
 interface AgentLevels {
   date: string;
   generated_at?: string | null;
   positions: AgentPosition[];
   watches: Array<Record<string, unknown>>;
   index?: IndexLevels | Record<string, never>;
+  index_agent?: IndexAgent | Record<string, never>;
   message?: string;
 }
 
@@ -148,6 +157,33 @@ export default function AgentLevelsCard() {
                     ))}
                   </div>
                 </div>
+                {(() => {
+                  const ag = (data.index_agent || {}) as IndexAgent;
+                  if (!ag || !ag.ok) return ag?.error ? <div className="cp-agent-agent-note">Agent 暂不可用：{ag.error}</div> : null;
+                  return (
+                    <div className="cp-agent-index-agent">
+                      <div className="cp-agent-agent-head">
+                        <i className="fas fa-robot" /> Agent 视角
+                        <span>{ag.current_state || ''}</span>
+                        {ag.confidence != null && <em>conf {fmt(ag.confidence, 2)}</em>}
+                      </div>
+                      <div className="cp-agent-index-cols">
+                        <div className="cp-agent-index-col up">
+                          <span>Agent 压力</span>
+                          {(ag.resistances || []).slice(0, 3).map((l, i) => (
+                            <div key={i} className="cp-agent-index-row"><b>{fmt(l.price, 2)}</b><em>{l.type || ''}</em></div>
+                          ))}
+                        </div>
+                        <div className="cp-agent-index-col down">
+                          <span>Agent 支撑</span>
+                          {(ag.supports || []).slice(0, 3).map((l, i) => (
+                            <div key={i} className="cp-agent-index-row"><b>{fmt(l.price, 2)}</b><em>{l.type || ''}</em></div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
