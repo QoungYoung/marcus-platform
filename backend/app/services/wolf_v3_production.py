@@ -407,7 +407,7 @@ def rebound_signal(price: float, high: float, lo: float, hi: float) -> Dict[str,
 
 
 def plan_sell(symbol: str, quote: Dict[str, Any], target_pct: float,
-              account_id: str = "stock") -> Dict[str, Any]:
+              account_id: str = "stock", allow_floor: bool = True) -> Dict[str, Any]:
     """按 target_pct（目标剩余仓位）算卖出量；只卖可卖，尊重底仓 floor。"""
     from app.services.t_gateway import get_sellable_ledger, base_floor_shares
     px = _f((quote or {}).get("current") or (quote or {}).get("last"))
@@ -418,7 +418,8 @@ def plan_sell(symbol: str, quote: Dict[str, Any], target_pct: float,
     if sellable < 100:
         return {"ok": False, "reason": "no_sellable"}
     floor = int(base_floor_shares(account_id, symbol, volume=sellable) or 0)
-    cap = max(sellable - floor, 0)
+    # 止损/破位是保护性卖出：不能用“底仓 floor”挡住止血（网关 is_stop_loss=True 同样豁免 floor）
+    cap = sellable if allow_floor else max(sellable - floor, 0)
     pct = max(min(float(target_pct), 1.0), 0.0)
     raw = sellable if pct <= 0 else max(sellable - int(sellable * pct), 0)
     vol = min(raw, cap) if pct > 0 else sellable

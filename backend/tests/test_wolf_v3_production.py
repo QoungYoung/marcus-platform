@@ -102,8 +102,12 @@ def test_plan_sell_target_and_floor(monkeypatch):
                         lambda account_id, symbol, volume=None: 2000)
     plan = P.plan_sell("000001.SH", {"current": 4110}, 0.30)
     assert plan["ok"] is True
-    # 目标剩 30% -> 卖 7000，但可穿透底仓上限 8000
+    # 止损/破位是保护性卖出：目标剩 30% -> 卖 7000，不被底仓 2000 挡住
     assert plan["volume"] == 7000
+    plan15 = P.plan_sell("000001.SH", {"current": 4110}, 0.15)
+    assert plan15["volume"] == 8500  # 旧口径会被 floor 卡在 8000
+    plan_floor = P.plan_sell("000001.SH", {"current": 4110}, 0.30, allow_floor=False)
+    assert plan_floor["volume"] == 7000  # 8000 cap > 7000
 
 
 def test_execute_plan_default_not_live(monkeypatch):
