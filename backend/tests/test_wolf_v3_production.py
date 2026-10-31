@@ -98,7 +98,7 @@ def test_rebound_zone():
 def test_plan_sell_target_and_floor(monkeypatch):
     monkeypatch.setattr("app.services.t_gateway.get_sellable_ledger",
                         lambda account_id="t": {"000001.SH": {"sellable": 10000}})
-    monkeypatch.setattr("app.services.t_gateway.base_floor_shares",
+    monkeypatch.setattr("app.services.position_sizing.base_floor_shares",
                         lambda account_id, symbol, volume=None: 2000)
     plan = P.plan_sell("000001.SH", {"current": 4110}, 0.30)
     assert plan["ok"] is True

@@ -409,7 +409,8 @@ def rebound_signal(price: float, high: float, lo: float, hi: float) -> Dict[str,
 def plan_sell(symbol: str, quote: Dict[str, Any], target_pct: float,
               account_id: str = "stock", allow_floor: bool = True) -> Dict[str, Any]:
     """按 target_pct（目标剩余仓位）算卖出量；只卖可卖，尊重底仓 floor。"""
-    from app.services.t_gateway import get_sellable_ledger, base_floor_shares
+    from app.services.t_gateway import get_sellable_ledger
+    from app.services.position_sizing import base_floor_shares
     px = _f((quote or {}).get("current") or (quote or {}).get("last"))
     if px <= 0:
         return {"ok": False, "reason": "no_price"}

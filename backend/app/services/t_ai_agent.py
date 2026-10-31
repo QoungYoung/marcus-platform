@@ -359,7 +359,8 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
                     volume = 100
             # 系统上限截断：min(建议量, resolve cap)（AI 建议超上限时自动收敛，不整单拒绝）
             try:
-                from app.services.t_gateway import resolve_buy_cap, resolve_sell_cap
+                from app.services.t_gateway import resolve_buy_cap
+                from app.services.position_sizing import resolve_sell_cap
                 _acc = (trigger or {}).get("account_id") or "stock"
                 if side == "buy":
                     _cap = resolve_buy_cap(symbol, price=price, account_id=_acc,

@@ -95,7 +95,7 @@ def _t_floor_shares(symbol: str, account: str = "stock", volume: Optional[int] =
         conds = list_active_conditions(symbol=symbol, account_id=account)
         if not conds:
             return 0
-        from app.services.t_gateway import base_floor_shares
+        from app.services.position_sizing import base_floor_shares
         return base_floor_shares(account, symbol, volume=volume)
     except Exception:
         return 0

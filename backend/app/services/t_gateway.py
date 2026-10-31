@@ -122,48 +122,6 @@ def _cum_buy_volume(account_id: str, symbol: str) -> Optional[int]:
         return None
 
 
-def base_floor_shares(account_id: str, symbol: str, volume: Optional[int] = None) -> int:
-    """底仓保留下限(狼大'底仓不动/T出半')。
-
-    **2026-09-16 口径升级（用户拍板）**：委托 `app.services.t_base_floor`——锚仍是「累计未void买入」
-    （卖出不动锚，保留 2026-09-07 防 588170 连卖超卖的原始意图），但补齐两点：
-      ① **一次性认账(rebasing)**：当 floor > 可卖 − 100 股（T 仓被锁死）时，把该标的的锚重标为
-         「可卖 × ratio」并留痕；此后 floor 只随**新增买入**增长，卖出不动它 → 既解锁、又不被啃掉。
-         依据：2026-09-16 实测 SH588170(持仓23200/累计买入109000)、SH512480(1300/8000)、
-         SZ002409(200/400) 的卖腿推导量恒 0；而反过来"floor 跟持仓走"会几何侵蚀底仓（09-07 已证否）。
-      ② **分档 ratio**：按浪型 operation 取档（build 2/3 / t_only·side 1/2 / defense 1/3 / exit 0），
-         依据狼大 2026-01-17「主升趋势就75%以上…调整就50% 有风险就30 下跌趋势就不做」。
-    开关 `T_BASE_FLOOR_REBASE=0` 退回旧口径；新口径内部异常时本函数也回退旧实现（不改变可用性）。
-    无成交流水(外部同步仓)时回退 volume 动态 / 旧覆盖 / 100。"""
-    symbol = std_symbol(symbol)      # 2026-09-17：底仓锚/覆盖表(如 SH588170)按标准形态取数
-    # ── 亏损豁免（WOLF_MA5_EXIT / WOLF_BASE_FLOOR_LOSS_EXEMPT，库内默认关；回测驱动打开）──
-    # 语料「破 5 日线丢」「不把挣大钱的票拿到亏本」：浮亏且破 MA5、或浮亏超阈值 ⇒ 底仓锚归零。
-    # 实测 3 月：快克智能 SH603203 因底仓锚"仅底仓无T仓可卖"被挡 3,701 次，3 月已实现 −4,279。
-    try:
-        from app.services.wolf_exit_rules import floor_exempt
-        if floor_exempt(account_id, symbol):
-            return 0
-    except Exception as _e_sil1:
-        try:
-            from app.services import alert_hub as _ah_sil
-            _ah_sil.note_silent("t_gateway.py:102", _e_sil1)
-        except Exception:
-            print("[silent:t_gateway.py:102] %s: %s" % (type(_e_sil1).__name__, str(_e_sil1)[:110]), flush=True)
-    try:
-        from app.services.t_base_floor import base_floor_shares as _impl
-        return _impl(account_id, symbol, volume=volume,
-                     override=T_BASE_FLOOR_OVERRIDES.get(symbol))
-    except Exception as e:
-        print(f"[t-gate] 底仓新口径失败，回退旧实现: {type(e).__name__}: {str(e)[:90]}")
-    keep = float(os.getenv("T_BASE_KEEP_RATIO", "0.5"))
-    base = _cum_buy_volume(account_id, symbol)
-    if base and int(base) > 0:
-        return max(int(int(base) * keep), 100)
-    if volume is not None and int(volume) > 0:
-        return max(int(int(volume) * keep), 100)
-    ov = T_BASE_FLOOR_OVERRIDES.get(symbol)
-    return int(ov) if ov is not None else 100
-
 # ── 执行账户白名单（2026-09-02 用户决策：只有狼大做T可以操作）──
 # 默认只放行股票任务账户 stock；t 账户（做T/V反/ETF动量/建仓）一律拒绝。
 # 如需临时人工管理 t 账户持仓：T_EXEC_ALLOWED_ACCOUNTS=stock,t 后重启 worker。
@@ -220,7 +178,6 @@ _BUILD_CAP_KINDS = {k.strip() for k in str(os.getenv(
 #   **口径（2026-09-22 修正）**：只作用于**止盈类**卖腿（`sell_floor_applies`，正向判据，
 #   与 0.5d 方案③同源）；止损/破位/减仓/未知**一律放行**（语料「止血动作必须能执行」+ 允许「减仓到 40%/50%」）；
 #   开关关 / 取数失败 ⇒ 原样返回（fail-safe，绝不放大）。
-_SELL_FLOOR_ENFORCE = os.getenv("WOLF_SELL_FLOOR_ENFORCE", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ★★ 账本 §9.718 ✓（用户 2026-10-07 复盘拍板方向 ✓：「**强的留 弱的丢**」）：
@@ -284,82 +241,6 @@ def strong_trend(symbol: str) -> bool:
     return _res
 
 
-def sell_floor_applies(reason: str = "", is_stop_loss: bool = False, kind: str = "") -> bool:
-    """底仓 floor 是否作用于这笔卖腿 —— **只作用于「止盈类」**（与网关 0.5d 方案③同一判据）。
-
-    ⚠️ 为什么改用**正向**判据，而不是"豁免关键词"（2026-09-22 自查修正，重要）：
-      第一版写成 `_SELL_FLOOR_EXEMPT_KW`（止损/破位/清仓/减仓/风控/避险/离场…）的**反向**排除，
-      结果被 AI 的**理由文案**骗到 —— 止盈腿的说明里常写「**未破止损**」「未跌破止损（②不成立）」
-      「无止损价可破」，全都含「止损」二字 ⇒ **假豁免**。
-      实测 T10 前 8 天 20 笔卖腿：7 笔是止盈类，其中 **4 笔被误放行** ⇒ 这条闸几乎等于没开
-      （日志里 0 次收敛就是这么来的）。
-      正向列表 `wolf_base_hold.is_take_reason`（高抛/fib/profit_take/止盈）不会被这种文案骗到，
-      而且**与 0.5d 那道兄弟闸（方案③）同源**，两道闸的作用面天然一致。
-    语义：止盈类 ⇒ True（受 floor 约束）；止损/破位/减仓/未知/取不到判据 ⇒ False（**一律放行**，fail-safe）。
-    """
-    if is_stop_loss:
-        return False
-    txt = str(kind or reason or "")
-    if not txt:
-        return False
-    try:
-        from app.services import wolf_base_hold as _bh
-        return bool(_bh.is_take_reason(txt))
-    except Exception:
-        return False
-
-
-def sell_floor_cap(account_id: str, symbol: str, volume: int,
-                   sellable: Optional[int] = None,
-                   reason: str = "", is_stop_loss: bool = False,
-                   kind: str = "", force: bool = False) -> Tuple[int, str]:
-    """把**止盈类**卖腿量收敛到 T 仓空间。返回 (允许卖量, 归因)。默认关/非止盈类 ⇒ 原值。
-
-    `force=True`（账本 §9.718 ✓）：**趋势强**时对**减仓/离场类**也生效 ✓
-      —— 仍然**只收紧、不放大** ✓，且**止损腿永不 force** ✓（止血优先 ✓）。
-    """
-    v = int(volume or 0)
-    if v <= 0:
-        return v, "底仓floor未介入（无量）"
-    if not _SELL_FLOOR_ENFORCE:
-        return v, "底仓floor未介入（WOLF_SELL_FLOOR_ENFORCE=0）"
-    if is_stop_loss and force:
-        force = False          # ★ 止损腿永不 force ✓（「止血动作必须能执行」✓）
-    if not force and not sell_floor_applies(reason, is_stop_loss, kind):
-        return v, "底仓floor未介入（非止盈类：止损/破位/减仓/未知一律放行）"
-    try:
-        sel = int(sellable) if sellable is not None else \
-            int((ledger_item(get_sellable_ledger(account_id), symbol) or {}).get("sellable") or 0)
-        if sel <= 0:
-            return v, "底仓floor未介入（无券可卖）"
-        floor = int(base_floor_shares(account_id, symbol, volume=sel) or 0)
-        # ★ 2026-10-16 ✓（用户「世纪华通/三七互娱 也没做T」→ 「一起改」）：
-        #   病灶 ✗：**底仓认账记录是旧口径留下的**（NO_DOWN 只升不降 ⇒ 记成**整仓** ✓）
-        #     实测 SZ002602：`可卖 1500 − 底仓 1500 ⇒ 只放行 T 仓 0 股` ✗ ⇒ 物理上做不了 T ✓
-        #     （我的 B 修法只影响**新计算** ✓，旧记录仍在 ✗）
-        #   修法 ✓：`WOLF_FLOOR_RECOMPUTE=1` ⇒ 若 底仓 ≥ 持仓×95%（整仓锁死 ✗）
-        #     ⇒ 按 **持仓 × 底仓目标%** 重算 ✓（80% ⇒ 留 20% 做T ✓，且至少 1 手 ✓）
-        try:
-            if str(os.getenv("WOLF_FLOOR_RECOMPUTE", "0")).strip().lower() in ("1", "true", "yes", "on"):
-                if sel > 0 and floor >= int(sel * 0.95):
-                    from app.services import t_capacity as _capR
-                    _pctR = float(_capR.base_floor_pct()) / 100.0
-                    _newR = int(int(sel * _pctR) // 100 * 100)
-                    _newR = min(_newR, max(sel - 100, 0))
-                    if _newR != floor:
-                        print("[gateway] 底仓重算(旧口径整仓锁死) %s：%d → %d 股（持仓 %d × %.0f%%）"
-                              % (symbol, floor, _newR, sel, _pctR * 100), flush=True)
-                        floor = _newR
-        except Exception:
-            pass
-        room = max(sel - floor, 0)
-        room = (room // 100) * 100
-        if v > room:
-            return room, ("底仓floor：可卖 %d − 底仓 %d ⇒ 只放行 T 仓 %d 股（原报 %d）"
-                          % (sel, floor, room, v))
-        return v, "底仓floor：在 T 仓空间内（可卖 %d − 底仓 %d = %d ≥ %d）" % (sel, floor, room, v)
-    except Exception as e:
-        return v, "底仓floor取数失败(放行原值): %s" % str(e)[:60]
 
 
 def _is_build_cap_kind(kind: Optional[str]) -> bool:
@@ -1083,18 +964,6 @@ def ledger_item(ledger: Optional[Dict[str, Dict[str, Any]]], symbol: str) -> Opt
     return None
 
 
-def resolve_sell_cap(symbol: str, account_id: str = ACCOUNT_T) -> int:
-    """系统可卖上限（卖出 = 可卖 − 底仓 floor，2026-09-02 狼大口径：底仓不动）。"""
-    try:
-        ledger = get_sellable_ledger(account_id)
-        item = ledger_item(ledger, symbol) or {}
-        sellable = int(item.get("sellable") or 0)
-        floor = base_floor_shares(account_id, symbol, volume=sellable)
-        return max(sellable - floor, 0)
-    except Exception as e:
-        print(f"[t-gate] resolve_sell_cap 失败: {e}")
-        return 0
-
 
 # ────────────────────────────────────────────────────────────────
 # 三阶校验网关
@@ -1162,10 +1031,7 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
             item = ledger_item(ledger, symbol)
             # 持仓仅底仓（默认100股铁律 / ETF大底仓覆盖）时无T仓可卖 → 非裸空错误，
             # 做T卖腿量已在 TMonitor 推导为 0/跳过，这里直接跳过卖出检查（用户需求：持仓仅100股时跳过卖出检查）
-            _floor = base_floor_shares(account_id, symbol, volume=(item.get("volume") or item.get("sellable"))) if item else 0
-            if item and item["sellable"] <= _floor:
-                pass
-            elif not item or item["sellable"] < volume:
+            if not item or item["sellable"] < volume:
                 result["reason"] = "无足够可卖底仓（裸空拦截）"
                 return result
         elif side == "buy":
@@ -3320,28 +3186,6 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "blocked", reason=check["reason"])
         return {"status": "rejected", "reason": check["reason"], "level": check.get("level")}
-
-    # 1b) 卖腿「底仓 floor」执行（`WOLF_SELL_FLOOR_ENFORCE`，库内默认 0 ⇒ 逐字零变化）──────────
-    #   校验层只断言了"裸空"（volume ≤ 可卖），**不执行 floor** ⇒ AI 显式给量的止盈腿会把底仓
-    #   一起卖掉（详见模块顶部该开关的病灶说明）。这里把**止盈类**卖量收敛到 T 仓空间，只收紧、不放大；
-    #   ⚠️ 判据必须是**正向**的"是不是止盈腿"——用"豁免关键词"会被文案「未破止损」骗到（见 sell_floor_applies）。
-    if str(side).lower() in ("sell", "卖出"):
-        # ★ §9.718 ✓：趋势强 ⇒ **减仓/离场类也只动 T 仓**（"强的留" ✓）—— 只收紧、不放大 ✓
-        _force_floor = False
-        if _STRONG_T_ONLY and not is_stop_loss:
-            _force_floor = strong_trend(symbol)
-            if _force_floor:
-                print("[gateway] %s 趋势强 ⇒ 卖腿只动 T 仓（§9.718 ✓，不碰底仓）" % symbol, flush=True)
-        _capv, _capwhy = sell_floor_cap(account_id, symbol, volume,
-                                        reason=reason, is_stop_loss=is_stop_loss, force=_force_floor)
-        if _capv != int(volume or 0):
-            if _capv <= 0:
-                _m = "底仓floor：%s 止盈腿收敛为 0（%s）⇒ 拒绝（非止盈类不受此限）" % (symbol, _capwhy)
-                if trigger_id:
-                    t_db.update_trigger_status(trigger_id, "blocked", reason=_m)
-                return {"status": "rejected", "reason": _m, "level": "ledger"}
-            print("[gateway] %s 卖量 %d→%d：%s" % (symbol, int(volume or 0), _capv, _capwhy), flush=True)
-            volume = _capv
 
     # 2) 执行器撮合（按账户）
     engine = PaperTradingEngine(data_dir=str(DATA_DIR), account_id=account_id)
