@@ -14,6 +14,7 @@ import IndustryLeaderboardPage from './pages/IndustryLeaderboard'
 import GoldenPitPage from './pages/GoldenPitPage'
 import TAccountPage from './pages/TAccountPage'
 import TBacktestPage from './pages/TBacktestPage'
+import HoldingsSyncPage from './pages/HoldingsSyncPage'
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
           <Route path="industry-leaderboard" element={<IndustryLeaderboardPage />} />
           <Route path="golden-pit" element={<GoldenPitPage />} />
           <Route path="t-account" element={<TAccountPage />} />
+          <Route path="holdings-sync" element={<HoldingsSyncPage />} />
           <Route path="t-backtest" element={<TBacktestPage />} />
         </Route>
       </Routes>

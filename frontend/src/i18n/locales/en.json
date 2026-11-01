@@ -26,7 +26,7 @@
     "monitor": "Monitor Log",
     "leaderboard": "Leaderboard",
     "goldenPit": "Golden Pit",
-    "tAccount": "T-Account", "tBacktest": "T-Backtest"
+    "tAccount": "T-Account", "holdingsSync": "Holdings Sync", "tBacktest": "T-Backtest"
   },
   "goldenPit": {
     "title": "Index Golden Pit Detection",

@@ -225,3 +225,10 @@
 @media (max-width:414px){ .tac-kpi-grid{ grid-template-columns:1fr; } .tac-page{ padding:16px 10px 40px; } }
 @media (prefers-reduced-motion:reduce){ .tac-tab,.tac-card,.tac-btn,.tac-table tr,.tac-kpi,.tac-collapse-head,.tac-chevron{ transition:none; }
   .tac-tab:hover,.tac-card:hover,.tac-btn:hover,.tac-kpi:hover{ transform:none; } .tac-chevron.open{ transform:none; } }
+/* ── 持仓同步页（/holdings-sync）── */
+.hs-textarea { width:100%; box-sizing:border-box; min-height:180px; resize:vertical; line-height:1.6; }
+.hs-steps { margin:0; padding-left:20px; display:flex; flex-direction:column; gap:9px; font-size:13px; color:var(--bi-ink-soft); line-height:1.6; }
+.hs-steps b { color:var(--bi-ink); }
+.hs-steps code { font-size:12px; padding:1px 5px; border-radius:4px; background:var(--bi-paper-2); }
+.hs-rule-ok { color:var(--bi-ok); font-weight:700; }
+.hs-rule-warn { color:var(--bi-warn); font-weight:700; }
