@@ -72,6 +72,8 @@ class TradeState(TypedDict):
     portfolio_json: str
     pool_context: str
     stance_context: str
+    position_context: str
+    position_levels_context: str
     trade_mode_instruction: str
     regime_context: str           # 市场结构指令（趋势/震荡）
     market_regime: str            # "trend" / "oscillation"
@@ -481,9 +483,9 @@ def _get_trade_instruction(window: str, regime: str = "unknown") -> str:
     if window == 'morning':
         # ⑧ 开盘主线候选建仓/试仓：由 agent 按指令+上下文判断（不再用独立 9:31 规则脚本通道）
         return (
-            "【开盘(9:35)主线候选建仓/试仓——由你按指令+上下文判断】\n"
-            "· 开盘时段优先评估主线候选：main_line_state.candidates 主题 → THEME_CONCEPTS(主题概念) → get_component_stocks 枚举成分股，逐一评估是否建仓/试仓。\n"
-            "· 意图按浪型：build/side→new_base(新开底仓)；defense/exit→不新建；t_only→probe(≤3%)，confirmed 主线例外见上文(主基调层)；watch/reserve 仍只做T。\n"
+            "【开盘(9:50)主线候选建仓/试仓——由你按指令+上下文判断】\n"
+            "· 开盘优先读取「P3 盘后选股/仓位意图」块：watch/reject 不下单；只有 verdict=probe 且 position_all_pass=true 才建仓/试仓。\n"
+            "· 意图按浪型：build/side→new_base(新开底仓)；defense/exit→不新建；t_only→probe(≤3%)；watch/reserve 仍只做T。\n"
             "· 建仓/试仓时，check_entry_filters 与 calc_position 必须显式传 mainline_dir=True（否则 side 浪型下 P3 会硬拦 new_base）。\n"
             "· 仍须满足狼大买点（日内回撤≥2.5% 或 触前低+缩量+站回黄线；或 计划/关键位命中），不因开盘放宽；P2 Gate(浪型/宏观)与 P3 三仓档位硬门仍生效。\n"
             + _base
@@ -673,103 +675,121 @@ def _check_position_utilization(execution_id: str, position_limit: int, reason: 
 # ═══════════════════════════════════════════════════════════
 
 def _read_main_line_context() -> str:
-    """read main_line_state -> context block for trade prompt."""
+    """P3 盘后选股/仓位意图（取代旧 main_line_state）。
+
+    9:50 交易 agent 读上一交易日 15:25/15:32 的 selected/positions；
+    只把 probe + all_pass 当“可执行意图”，watch/reject 不建仓。
+    """
     try:
-        import json as _json
-        path = os.getenv("MAIN_LINE_STATE_FILE", __state_path("main_line_state.json"))
-        if not os.path.exists(path):
+        data_dir = os.environ.get("DATA_DIR", "data")
+        base = Path(data_dir) / "mainline"
+        if not base.is_dir():
             return ""
-        with open(path, encoding="utf-8") as f:
-            st = _json.load(f)
-        ml = st.get("main_line") or "未知"
-        cands = st.get("candidates") or []
-        # 2026-09-13 关闭研报线：**不再向提示词渲染 catalyst_score 与融合分**
-        # 依据：①研报催化从未进生产判据，且生产实测 9 个主题全为 0.0（等于无信息）；
-        #      ②融合分 0.3fund+0.2rel+0.5conc 的 conc 成分有已知方向缺陷（净流出大户高分），
-        #        实测其第一名(AI/算力, conc=1.0)与池判定主线(半导体/芯片)不符；
-        #      ③wolf_match 网格搜索里研报最优权重 = 0；④语料侧他也不靠研报选方向（"研报都是他们发的"）。
-        # 保留这两项**计算**供 position_class / stock_confirm_judge 等内部使用，只是不再进交易提示词。
-        block = ("## 主线判定（main_line_state）" + chr(10)
-                 + "- 当前主线：" + str(ml) + chr(10)
-                 + "- 候选集（观察不建仓）：" + (", ".join(cands) if cands else "无") + chr(10))
-        # ── 2026-09-13 方向层主线（**权威**）：池 = 量能占比 topK ∩ 近5日相对强度>0，再 ∩ gate 资格 → 池内 r5 top1 ──
-        # 依据：gate 单独命中他的方向仅 ≈ 随机（75% vs 77%），而池判定在"他股票主线层"口径下 recall 75%、
-        #      top1 命中 54%（随机 7.7%）、top3 85%；跨 2025/2026 两年收益一致（docs/wolf-structural-pool.md）。
-        try:
-            from app.services import wolf_mainline_select as _MS
-            _ms = _MS.load() if _MS.enabled() else {}
-        except Exception:
-            _ms = {}
-        if isinstance(_ms, dict) and _ms.get("mainline"):
-            _pool = _ms.get("pool") or []
-            # 浪型文本（主题自身浪）：随方向层主线一起注入（原挂在 gate 摘要里，2026-09-13 搬迁）
-            _wv_lines = []
-            for _t in (_ms.get("themes") or []):
-                if _t.get("wave_structure"):
-                    _tag = "主线" if _t.get("is_mainline") else ("池内" if _t.get("in_pool") else "相关")
-                    _wv_lines.append("- [%s] %s：%s" % (_tag, _t.get("theme"), _t.get("wave_structure")))
-            _wave_txt = (("⚠️ **主线/池内主题自身浪型**（不同于上方大盘 wave_context）：" + chr(10)
-                          + chr(10).join(_wv_lines[:4]) + chr(10)
-                          + "→ 若主线为主题主升浪运行中，不因大盘 t_only 一刀切禁建；按回调低吸(254 dip_prev_low)在其回调位建底仓，不追高。" + chr(10))
-                         if _wv_lines else "")
-            _sh = _ms.get("pool_share5") or {}
-            _r5 = _ms.get("r5") or {}
-            _ord = _ms.get("rank_in_gate") or []
-            block += ("## 主线判定（方向层·**主线方向以此为准**）：池 = 量能占比 top%d ∩ 近5日相对强度>0，再 ∩ 结构资格闸 → 池内 r5 top1"
-                      % _ms.get("pool_k", 3) + chr(10)
-                      + "- **当日主线：" + str(_ms.get("mainline")) + "**（次选 " + str(_ms.get("second") or "—") + "）" + chr(10)
-                      + "- 当期池（当期主线所在）：" + ("、".join("%s(量能占比%.1f%%)" % (t, 100 * (_sh.get(t) or 0))
-                                                       for t in _pool) or "—") + chr(10)
-                      + "- 候选前三（池内按近5日相对强度）："
-                      + ("、".join("%s(%+.2f%%)" % (t, 100 * (_r5.get(t) or 0)) for t in _ord[:3]) or "—") + chr(10)
-                      + _wave_txt
-                      + "- 口径与验收：与他**股票主线层**对齐 recall 75% / top1 54% / top3 85%；"
-                      + "2026 超额 +1.03%(t=3.37)、2025 +0.34%(t=3.01)；详见 docs/wolf-structural-pool.md" + chr(10)
-                      + "- 说明：他在**期货/商品**（油/金）与**超短题材**（军工打短）上的动作不属于本层对照集。" + chr(10) + chr(10))
-        # 2026-09-09 主线门(gate)结构资格闸摘要 + 主线浪型 + 农业全子概念确认(防前5截断)
-        # ★ 2026-10-20 清理：直接读字段 ✓（mainline_gate 仅在 WOLF_INJECT_GATE=1 时存在；原来走退役告警会把它也挡掉 ✗）
-        g = (st or {}).get("mainline_gate") or {}
-        if g:
-            gth = g.get("themes") or []
-            conf_l = g.get("confirmed_candidate") or []
-            lines = []
-            for t in gth:
-                wv = t.get("wave_structure")
-                lines.append("- " + str(t.get("theme")) + " [" + str(t.get("verdict")) + " gate=" + str(t.get("gate"))
-                             + " 结构比例=" + str(t.get("structure_ratio")) + "]" + ((" ｜ " + wv) if wv else ""))
-            _wave_lines = [t.get("wave_structure") for t in gth if t.get("wave_structure")]
-            if conf_l and _wave_lines:
-                block += ("⚠️ **主线自身浪型（重要: 主题浪, 不同于上方大盘 wave_context）**：" + chr(10)
-                          + chr(10).join("- " + str(wv) for wv in _wave_lines[:2]) + chr(10)
-                          + "→ 该主线为主升 3 浪运行中(已确认), 不因大盘 t_only(4-2) 一刀切禁建; 按回调低吸模式(254 dip_prev_low/253)在其回调位建底仓, 不追高。" + chr(10) + chr(10))
-            block += ("## 主线门（mainline_gate **结构资格闸**——自 2026-09-13 起**不再是主线权威**，保留为诊断）" + chr(10)
-                      + "- confirmed_candidate(gate 确认)：" + (", ".join(conf_l) if conf_l else "无") + chr(10)
-                      + chr(10).join(lines) + chr(10) + chr(10))
-            # 农业全子概念个股确认概览(读 stock_confirm_result 全部子概念, 不截断前5)
-            try:
-                scp = __state_path("stock_confirm_result.json")
-                if os.path.exists(scp):
-                    sc = _json.load(open(scp, encoding="utf-8"))
-                    sc_ok = []
-                    for k, v in sc.items():
-                        if isinstance(v, dict) and v.get("theme") in conf_l and (v.get("confirm") or 0) > 0:
-                            sc_ok.append(k + "=" + str(v.get("confirm")) + "/" + str(v.get("n")))
-                    if sc_ok:
-                        block += ("- 主线内个股已确认(突破/站稳)子概念: " + ", ".join(sc_ok) + chr(10))
-                    else:
-                        block += ("- 主线内个股确认: 当前 0 只突破站稳(成分多在回调/止跌中) —— 属买点未触发, 不否定主线方向, "
-                                  + "启用已确认主线回调低吸模式(254 等 dip_prev_low), 非放弃建仓。" + chr(10) + chr(10))
-            except Exception as _e_sil9:
-                print("[silent:trade_graph.py:740] %s: %s" % (type(_e_sil9).__name__, str(_e_sil9)[:110]), flush=True)
-        block += ("- 【狼大主线准则③·产业链形态】判断某方向是否为狼大主线：须能拆上中下游/软硬、构成完整产业链。"
-                  "请用 get_concept_mapping(主题) 拉全成分股，检查其是否覆盖 上游(材料/芯片/设备)→中游(制造/集成)→下游(应用/终端/服务) 或 软硬两端；"
-                  "只覆盖单一环节(如仅下游应用) → 产业链形态不完备，主线可信度下调；覆盖完整上中下游 → 才按主线看待。"
-                  "该判断用于主线判定与“去弱留强”，由你(交易agent)用工具自行分析，无需依赖外部产业链数据。" + chr(10))
-        block += ("- 决策：候选->观察(等确认)；候选+当日动量/资金转强(RS转正/突破前高/fund_acc>0/均线多头)->确认->可对主线方向建仓；"
-                  + "周判主线为方向参考，日内执行仍以实时概念TOP10双榜+浪型gate为准。" + chr(10) + chr(10))
-        return block
-    except Exception:
+        today = datetime.now().strftime("%Y%m%d")
+        dirs = sorted([d for d in base.iterdir() if d.is_dir() and (d / "stock_agent_selected.json").exists()],
+                      key=lambda d: d.name)
+        if not dirs:
+            return ""
+        prev = [d for d in dirs if d.name < today]
+        pick = prev[-1] if prev else dirs[-1]
+        sel = json.loads((pick / "stock_agent_selected.json").read_text(encoding="utf-8"))
+        pos = {}
+        pp = pick / "stock_agent_positions.json"
+        if pp.exists():
+            for x in (json.loads(pp.read_text(encoding="utf-8")).get("positions") or []):
+                pos[x.get("symbol")] = x
+        ml = {}
+        mp = pick / "mainline.json"
+        if mp.exists():
+            ml = json.loads(mp.read_text(encoding="utf-8"))
+        lines = [f"## P3 盘后选股/仓位意图（{pick.name}）",
+                 f"- 数据日：{pick.name}（上一交易日盘后）",
+                 f"- 主线：{ml.get('mainline') or '-'} | exists={ml.get('mainline_exists')} | active={ml.get('mainline_active')} | tradeable={ml.get('tradeable')} | status={ml.get('status')}",
+                 "- 执行规则：watch/reject 不下单；只有 verdict=probe 且 position_all_pass=true 才可在开盘重新 calc_position/check_entry_filters 后建仓/试仓；开盘价/浪型/主线变化则放弃。",
+                 ]
+        for t in sel.get("themes") or []:
+            lines.append(f"### {t.get('theme_id')} {t.get('name') or ''}（{t.get('verdict')}）")
+            for x in t.get("selected") or []:
+                sym = x.get("symbol")
+                p = pos.get(sym) or {}
+                pm = p.get("mainline") or {}
+                lines.append(
+                    f"- {sym} {x.get('name')}: verdict={x.get('verdict')} class={x.get('classification')} "
+                    f"old_leader={x.get('old_leader')} position_all_pass={p.get('all_pass')} "
+                    f"rec_shares={p.get('rec_shares')} tradeable={pm.get('tradeable')} status={pm.get('status')} "
+                    f"warnings={(p.get('warnings') or [])[:2]}"
+                )
+        return chr(10).join(lines) + chr(10)
+    except Exception as e:
+        print(f"[silent:trade_graph.py:_read_main_line_context] {type(e).__name__}: {str(e)[:110]}", flush=True)
         return ""
+
+
+def _read_position_levels_context(account: str = "stock", portfolio_json: Optional[str] = None) -> str:
+    """agent 算出的持仓上下位（position_levels 表）：给交易 agent 做点位参考。
+
+    down = break_trigger（跌破才止损/减仓）；up = rebound_zone 上沿（到附近减半/高抛）。
+    """
+    try:
+        from app.services.position_levels_store import load as _load_levels
+        lv = _load_levels(account) or {}
+        if not lv:
+            return ("## 持仓点位（agent 算出的 down/up）" + chr(10)
+                    + "- 未生成（position_levels_daily 19:10 更新）；本次以 portfolio 成本/既有止损线为准，勿自造点位。" + chr(10) + chr(10))
+        # 现价与成本：从 portfolio 取；现价取不到就留空
+        import json as _json
+        try:
+            pf = _json.loads((portfolio_json if portfolio_json is not None else _read_portfolio()) or "{}")
+        except Exception:
+            pf = {}
+        pos = {str(p.get("symbol")): p for p in (pf.get("positions") or [])}
+        price_map = {}
+        try:
+            from app.services.t_data_sources import fetch_quote_one
+            for sym in list(pos.keys())[:12]:
+                q = fetch_quote_one(sym) or {}
+                px = float(q.get("current") or 0)
+                if px > 0:
+                    price_map[sym] = px
+        except Exception:
+            pass
+        from datetime import datetime as _dt
+        now = _dt.now()
+        lines = ["## 持仓点位（agent 算出的 down/up，供参考，不替代纪律）"]
+        for sym, v in list(lv.items())[:12]:
+            down = v.get("down"); up = v.get("up"); status = str(v.get("status") or "")
+            p = pos.get(str(sym)) or {}
+            px = price_map.get(str(sym)) or 0
+            cost = float(p.get("avg_cost") or 0)
+            vol = int(p.get("volume") or 0)
+            seg = "- %s" % sym
+            if vol: seg += " 持%d股" % vol
+            if cost: seg += " 成本%.2f" % cost
+            if px: seg += " 现价%.2f" % px
+            if down: seg += " ｜down=%.2f" % float(down)
+            if up: seg += " ｜up=%.2f" % float(up)
+            if px and down:
+                seg += "（距down %+.1f%%）" % ((px / float(down) - 1) * 100)
+            if px and up:
+                seg += "（距up %+.1f%%）" % ((px / float(up) - 1) * 100)
+            if status: seg += " ｜%s" % status[:80]
+            ua = v.get("updated_at")
+            if ua:
+                try:
+                    _age = (now - ua).days if hasattr(ua, "year") else None
+                    if _age is not None and _age > 3:
+                        seg += " ｜⚠️点位已%d天未更新" % _age
+                    else:
+                        seg += " ｜更新%s" % ua.strftime("%m-%d %H:%M")
+                except Exception:
+                    pass
+            lines.append(seg)
+        lines.append("- 用法：跌破 down 且收盘确认 → 止损/减仓；到 up 附近且放量滞涨 → 减半/高抛；未到不动。")
+        lines.append("- 这些是参考位，不替代浪型/主线/纪律门；勿把 down/up 当 guaranteed 目标。")
+        return chr(10).join(lines) + chr(10) + chr(10)
+    except Exception as e:
+        return ("## 持仓点位（agent 算出的 down/up）" + chr(10)
+                + "- 读取失败(%s)；本次以 portfolio 成本/既有止损线为准。" % str(e)[:80] + chr(10) + chr(10))
 
 
 def _read_position_context() -> str:
@@ -873,6 +893,33 @@ def _read_stock_confirm_context() -> str:
                           + chr(10) + chr(10))
         except Exception as _e_sil11:
             print("[silent:trade_graph.py:852] %s: %s" % (type(_e_sil11).__name__, str(_e_sil11)[:110]), flush=True)
+        # B4/B5：主线响应 / 避险抢戏（数据层 breakout_context；失败静默）
+        try:
+            import sys as _sys2
+            _sys2.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps", "main_line"))
+            import breakout_context as _bc45
+            _mlp = __state_path("main_line_state.json")
+            _mst = _json2.load(open(_mlp, encoding="utf-8")) if os.path.exists(_mlp) else {}
+            _th = (_mst or {}).get("main_line") or ""
+            if _th and _bc45.b4b5_enabled():
+                _g = _bc45.gate(_th, _bc45.prev_trade_day())
+                block += ("## B4/B5 主线响应/避险抢戏（2026-10-30）" + chr(10)
+                          + "- 主线：" + str(_th) + " ｜ 主线代理收益：" + str(_g.get("mainline_ret"))
+                          + "（" + str(_g.get("mainline_proxies")) + "）" + chr(10)
+                          + "- 银行：" + str(_g.get("bank_ret")) + " ｜ 黄金：" + str(_g.get("gold_ret")) + chr(10)
+                          + "- B4 主线响应=" + str(_g.get("mainline_ok")) + " ｜ B5 避险抢戏=" + str(_g.get("hedge_flag"))
+                          + " ｜ action=" + str(_g.get("action")) + chr(10)
+                          + "- 决策：B4=false→新开降级/不追；B5=true→新开不接（诱多）；unknown→fail-open。" + chr(10))
+                try:
+                    _b8 = _bc45.b8_state("sh512480", _bc45.prev_trade_day())
+                    block += ("- B8 主线ETF(512480)：" + str(_b8.get("state"))
+                              + " ｜ level=" + str(_b8.get("level"))
+                              + " ｜ breakout=" + str(_b8.get("breakout"))
+                              + " ｜ retest=" + str(_b8.get("retest")) + chr(10) + chr(10))
+                except Exception:
+                    block += chr(10)
+        except Exception as _e_b45:
+            print("[silent:trade_graph.py:b4b5] %s: %s" % (type(_e_b45).__name__, str(_e_b45)[:110]), flush=True)
         return block
     except Exception:
         return ""
@@ -1369,9 +1416,10 @@ def node_fetch_context(state: TradeState) -> dict:
     regime, label, suggestion = _read_market_regime()
     style_info = _read_style_regime()
 
+    _pf = _read_portfolio()
     return {
         "scan_report_text": _read_scan_report(),
-        "portfolio_json": _read_portfolio(),
+        "portfolio_json": _pf,
         "pool_context": "",   # 2026-09-09: CandidatePool 非 Wolf 体系(工程自创入场队列), 不再注入 Pi 决策(避免"候选池为空"误导)
         "stance_context": _read_stance_context(),
         "regime_context": "",   # 2026-09-03: 不再注入震荡/趋势市场状态(该状态错误且与狼大浪型/主线打架)，大级别以 wave_context 为准
@@ -1381,6 +1429,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "trade_mode_instruction": _get_trade_instruction(state['window'], regime),
         "main_line_context": _read_main_line_context(),
         "position_context": _read_position_context(),
+        "position_levels_context": _read_position_levels_context(portfolio_json=_pf),
         "confirm_context": _read_confirm_context(),
         "stock_confirm_context": _read_stock_confirm_context(),
         "wave_context": _read_wave_context(),
@@ -1499,6 +1548,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('three_tier_context', chr(39)+chr(39))}"
         f"{state.get('main_line_context', chr(39)+chr(39))}"
         f"{state.get('position_context', chr(39)+chr(39))}"
+        f"{state.get('position_levels_context', chr(39)+chr(39))}"
         f"{state.get('confirm_context', chr(39)+chr(39))}"
         f"{state.get('stock_confirm_context', chr(39)+chr(39))}"
         f"{state.get('rotation_gate_context', chr(39)+chr(39))}"
@@ -1513,14 +1563,57 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"\n━━━ 系统已预获取的数据（无需重复调用工具）━━━\n\n"
         f"## 最新扫描报告\n```json\n{scan}\n```\n\n"
         f"## 当前账户持仓\n```json\n{state['portfolio_json']}\n```\n\n"
-        f"请立即执行以下操作：\n"
-        f"1. 分析上方已提供的扫描报告和持仓数据\n"
-        f"2. 按当前市场结构对应的策略参数选股分析"
-        f"（可调用 check_entry_filters / calc_position / get_quote / "
-        f"get_concept_fund_flow / get_realtime_indicators / get_technical / get_intraday_min 等）\n"
-        f"3. 执行交易（买入/卖出/调仓）\n"
-        f"4. 输出完整交易报告（含 SIGNAL 行）\n\n"
-        f"你是 Marcus 右侧交易专家。基础数据已就绪，请直接分析和决策。\n"
+        f"\n━━━ 狼大交易策略（必须遵守）━━━\n\n"
+        f"你是狼大体系的交易 agent，不是通用趋势/震荡策略机器人。\n"
+        f"先判断‘能不能做’，再判断‘做什么’，最后才用 calc_position 算‘买多少’。\n\n"
+        f"【1. 只做主线】\n"
+        f"- 只在 main_line_context 给出的主线/主题里选股；主线不存在、mainline_active=false、tradeable=false 时，不新开底仓。\n"
+        f"- 浪型 defense/exit 或 P3 防御门关闭时，只做T/减仓/观察，不追主升。\n"
+        f"- 一票否决：没有主线、没有逻辑、没有辨识度，不因为‘跌得多’就买。\n\n"
+        f"【2. 选股顺序：主线→赛道→主题→个股】\n"
+        f"- 主线决定方向；赛道决定强弱；主题决定催化；个股只选核心/风向标/龙头/龙2/二供。\n"
+        f"- 杂毛、纯概念映射、无资金记忆的票，不买。\n"
+        f"- 同主题最多按 caps.max_names 建 2-3 条腿，不铺开。\n\n"
+        f"【3. 角色与辨识度】\n"
+        f"- 核心：逻辑最正、资金最认；风向标：看它判断方向；龙头：领涨且带动；龙2/二供：龙头买不到时的替代。\n"
+        f"- 老龙头/辨识度必须看历史领涨、涨停、成交额排名、龙虎榜席位，不用单一动量代替。\n"
+        f"- 高位不追：接近前高、放量滞涨、加速末端，只减不加。\n\n"
+        f"【4. 两套位置规则】\n"
+        f"- 低位：看逻辑/催化 + 老龙头/辨识度 + 不再创新低/企稳确认 + 量能确认；缺确认只观察。\n"
+        f"- 高位：看量价/辨识度，防兑现；不在高位补仓，不把高位当低位。\n"
+        f"- 低位不等于见底；没有 mainline_active 和 P3 放行，不因为‘位置低’埋伏。\n\n"
+        f"【5. P3 盘后意图】\n"
+        f"- main_line_context 里的 P3 selected/positions 是上一交易日盘后意图，不是当日买入指令。\n"
+        f"- 只执行 verdict=probe 且 position_all_pass=true 的标的；watch/reject 一律不下单。\n"
+        f"- 开盘必须重新 check_entry_filters + calc_position；价格、浪型、主线、防御任一变化，放弃。\n"
+        f"- rec_shares=0、all_pass=false、单票上限=0、总仓不足，都不买。\n\n"
+        f"【6. 买点】\n"
+        f"- 狼大低吸：日内回撤≥2.5%，或触前低 + 缩量 + 站回黄线；或计划/关键位命中。\n"
+        f"- 不追突破、不追高、不在开盘直接扫单；等回踩/确认。\n"
+        f"- 买入前必须过 check_entry_filters 和 calc_position；P2/P3/防御门不过，不下单。\n\n"
+        f"【7. 仓位】\n"
+        f"- 只用现有 calc_position 三档（试探/确认/冲刺）和 caps，不自己发明仓位公式。\n"
+        f"- 单票、总仓、现金底线、单笔最大亏损，以 calc_position 返回为准；它说 0 就 0。\n"
+        f"- 先试探后确认；不一次性打满。\n\n"
+        f"【8. 卖出】\n"
+        f"- 破黄线/破前低/高位放量滞涨/逻辑失效/触发止损，减仓或退出。\n"
+        f"- 做T只卖T仓，底仓不卖；止损按现有纪律块执行，不因为‘看好’硬扛。\n\n"
+        f"【9. 时间窗口】\n"
+        f"- 狼大窗口：9:45-10:00、14:00-14:30；本任务 9:50 / 14:20 就在窗口内。\n"
+        f"- 窗口外不新开日内T腿；有消息刺激的个股例外目前没有可靠数据，不擅自放宽。\n\n"
+        f"【10. 禁止】\n"
+        f"- 禁止单因子选股（只看涨幅/涨停/成交额/筹码之一）。\n"
+        f"- 禁止无主线、无逻辑、无辨识度的杂毛。\n"
+        f"- 禁止追高、开盘直接买、窗口外交易、把 watch 当 probe。\n"
+        f"- 禁止绕过 calc_position / check_entry_filters 直接下单。\n\n"
+        f"【11. 工具】\n"
+        f"可调用 check_entry_filters / calc_position / get_quote / get_concept_fund_flow / "
+        f"get_realtime_indicators / get_technical / get_intraday_min / get_express 等；"
+        f"数据已预取的部分不用重复调用。\n\n"
+        f"【12. 输出】\n"
+        f"- 先给结论：做/不做、买/卖/观察、几条腿、每只角色和理由。\n"
+        f"- 再给证据：主线、位置、逻辑、量价、筹码/席位、P3 状态、calc_position 结果。\n"
+        f"- 最后一行必须是：SIGNAL: <按浪型> POSITION:<当前仓位> REASON:<一句话>\n\n"
         f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
@@ -1743,6 +1836,7 @@ def run_trade_decision(task_id: str, execution_id: str, pi_prompt: str) -> Trade
         "block_reason": "",
         "regime_violation": False,
         "regime_violation_reason": "",
+        "position_levels_context": "",
         "pi_raw_reply": "",
         "pi_stance": "yellow",
         "pi_position_limit": 60,

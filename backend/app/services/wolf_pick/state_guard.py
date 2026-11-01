@@ -66,13 +66,12 @@ def load_json(path: str) -> Dict[str, Any]:
 
 
 def latest_market_day(data_dir: str) -> Optional[str]:
-    """读本地上证日线的最后一个交易日（用于“状态比行情旧”的检查）。"""
-    obj = load_json(os.path.join(data_dir, "index_daily_000001_SH.json"))
-    rows = obj.get("rows") or []
-    if not rows:
+    """读 PG index_daily 的最后一个交易日。"""
+    try:
+        from app.services.index_daily_store import latest_date
+        return latest_date("000001.SH")
+    except Exception:
         return None
-    d = "".join(ch for ch in str(rows[-1][0]) if ch.isdigit())[:8]
-    return d if len(d) == 8 else None
 
 
 def check_files(data_dir: str, as_of: Any, max_stale_days: int = 3) -> Dict[str, Any]:

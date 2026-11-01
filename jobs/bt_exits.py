@@ -173,18 +173,6 @@ def exits_for_bar(symbol: str, bars_up_to, day: str, avg_cost: float, daily_rows
                 sp = float(_sp2)
     except Exception as e:
         print("[exits] early_stop 解析失败 %s: %s" % (symbol, str(e)[:60]), file=sys.stderr)
-    try:
-        TS = _mod("app.services.wolf_trend_stop")
-        if TS is not None and hasattr(TS, "evaluate"):
-            _bars90 = [{"date": str(r.get("trade_date")), "high": r.get("high"), "low": r.get("low"),
-                        "close": r.get("close"), "vol": r.get("vol")}
-                       for r in daily_rows if str(r.get("trade_date")) <= day][-90:]
-            _st = TS.evaluate(_bars90)
-            _act, _rw = (TS.decision(_st) if hasattr(TS, "decision") else (None, ""))
-            if _act in ("stop", "sell", "exit") or (_st or {}).get("action") in ("stop", "sell"):
-                hits.append(("stop_loss", "趋势线止损：%s" % str(_rw or _act)[:70]))
-    except Exception as e:
-        print("[exits] trend_stop 失败 %s: %s" % (symbol, str(e)[:60]), file=sys.stderr)
     if cur > 0 and cur <= sp:
         # 卖量分级（生产 `_stop_exit_volume`）：≥14:55 收盘确认 → **清仓**；盘中 → 减半
         _hm_min = int(str(today[-1]["time"])[11:13]) * 60 + int(str(today[-1]["time"])[14:16])

@@ -1,6 +1,7 @@
 /** Persisted by scripts/persist-cordis-plugin.mjs — host half of "marcus-dsh-bridge". */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
+import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { readdir, rm, stat } from 'node:fs/promises';
@@ -75,7 +76,11 @@ function apply(ctx) {
       //   ⇒ 允许清单从**文件**读（卷内 /root/.dsh/bt_tools_allow.txt，一行一个名 ✓）
       //     ⇒ 不用重建容器 ✓；**文件不存在 ⇒ 全量注册** ✓ ⇒ 生产逐位不变 ✓
       let TOOL_ALLOW = null;
-      try {
+      const _envAllow = process.env.MARCUS_TOOLS_ALLOW;
+      if (_envAllow && _envAllow.trim()) {
+        TOOL_ALLOW = new Set(_envAllow.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean));
+        console.log('[Bridge] MARCUS_TOOLS_ALLOW 生效 ✓ 只注册 ' + TOOL_ALLOW.size + ' 个（其余跳过 ✓）');
+      } else try {
         const _raw = readFileSync('/root/.dsh/bt_tools_allow.txt', 'utf8');
         // ★★ 账本 §9.728 ✓（用户 2026-10-07「全屏蔽，改成直接置入数据」）：
         //   原写法 `if (_raw && _raw.trim())` ✗ —— **空文件**时条件不成立 ⇒ TOOL_ALLOW 留 null ✗
@@ -138,10 +143,12 @@ function apply(ctx) {
           price: { type: 'number', required: true, description: '当前价格（元）' },
           total_assets: { type: 'number', required: true, description: '总资产（元）' },
           risk_pct: { type: 'number', description: '单笔风险比例（默认2%）' },
+          theme_id: { type: 'string', description: '主线主题 id（如 storage）' },
+          track_id: { type: 'string', description: '赛道 id（如 semiconductor）' },
         },
         output: textOut(),
         async execute(args) {
-          const data = await apiFetch('/indicator/calc-position', { method: 'POST', body: JSON.stringify({ symbol: args.symbol, price: args.price, total_assets: args.total_assets, risk_pct: args.risk_pct }) });
+          const data = await apiFetch('/indicator/calc-position', { method: 'POST', body: JSON.stringify({ symbol: args.symbol, price: args.price, total_assets: args.total_assets, risk_pct: args.risk_pct, theme_id: args.theme_id, track_id: args.track_id }) });
           return { ok: !data.error, text: typeof data === 'string' ? data : JSON.stringify(data) };
         },
       }));
@@ -608,8 +615,340 @@ function apply(ctx) {
       }));
 
       
+
+      // ═══ 狼大选股上下文（本地 data，只读）═══
+      const DATA_ROOT = process.env.MARCUS_DATA_DIR || '/app/data';
+      function _rd(rel) {
+        try { return JSON.parse(readFileSync(join(DATA_ROOT, rel), 'utf8')); } catch (_) { return null; }
+      }
+      function _latestMlDate() {
+        try {
+          const dirs = readdirSync(join(DATA_ROOT, 'mainline'), { withFileTypes: true })
+            .filter((d) => d.isDirectory()).map((d) => d.name).sort();
+          for (let i = dirs.length - 1; i >= 0; i--) {
+            if (existsSync(join(DATA_ROOT, 'mainline', dirs[i], 'mainline.json'))) return dirs[i];
+          }
+        } catch (_) {}
+        return '';
+      }
+      function _factsText(args) {
+        const date = args.date || _latestMlDate();
+        const f = _rd(join('mainline', date, 'stock_agent_facts.json'));
+        if (!f) return '📭 无 P3 facts: ' + date;
+        const lines = ['🧩 P3 候选事实 ' + date + '（' + (f.themes || []).length + ' 主题）'];
+        for (const t of (f.themes || [])) {
+          const cs = (t.candidates || []).filter((c) => !args.symbol || c.symbol === args.symbol || c.name === args.symbol);
+          if (!cs.length) continue;
+          lines.push('## ' + (t.theme_id || '') + ' ' + (t.name || '') + ' verdict=' + (t.verdict || '') + ' members=' + (t.members || ''));
+          for (const c of cs.slice(0, 40)) {
+            const ch = c.chip || {}, ho = c.holders || {}, se = c.seats || {}, bl = c.block_trade || {}, ea = c.earnings || {}, ld = c.leader || {}, po = c.position || {};
+            lines.push('- ' + c.symbol + ' ' + (c.name || '') +
+              ' | ret20=' + (c.ret20 ?? '-') + ' ret60=' + (c.ret60 ?? '-') + ' ret120=' + (c.ret120 ?? '-') +
+              ' | pos120=' + (c.range_pos_120 ?? '-') + ' distH120=' + (c.dist_high120 ?? '-') +
+              ' | chip winner=' + (ch.winner_rate ?? '-') + ' conc=' + (ch.concentration ?? '-') + ' vs50=' + (ch.price_vs_cost50 ?? '-') +
+              ' | holders=' + (ho.trend ?? '-') + '/' + (ho.holder_num ?? '-') +
+              ' | seats=' + (se.list_days ?? '-') + 'd inst=' + (se.inst_net ?? '-') + ' hot=' + (se.hot_money_net ?? '-') +
+              ' | block=' + (bl.count ?? '-') + ' avgVsClose=' + (bl.avg_price_vs_close ?? '-') +
+              ' | earn=' + (ea.end_date || 'missing') + ' yoyRev=' + (ea.yoy_revenue ?? '-') + ' yoyNet=' + (ea.yoy_n_income ?? '-') +
+              ' | leader=' + (ld.seed_role || '-') + ' top3=' + (ld.top3_days_120_pool ?? '-') + ' lu120=' + (ld.limit_up_120d ?? '-') +
+              ' | state=' + (po.state || '-') + ' entry=' + (po.entry_mode || '-') + ' wave=' + ((po.wave || {}).operation || '-'));
+          }
+        }
+        return lines.join('\n');
+      }
+      function _selectedText(args) {
+        const date = args.date || _latestMlDate();
+        const sel = _rd(join('mainline', date, 'stock_agent_selected.json'));
+        const pos = _rd(join('mainline', date, 'stock_agent_positions.json'));
+        if (!sel) return '📭 无 P3 selected: ' + date;
+        const pm = {};
+        for (const p of ((pos || {}).positions || [])) pm[p.symbol] = p;
+        const lines = ['🎯 P3 selected ' + date + '（盘后意图，非当日买入指令）'];
+        for (const t of (sel.themes || [])) {
+          lines.push('## ' + (t.theme_id || '') + ' ' + (t.theme_view || ''));
+          for (const x of (t.selected || [])) {
+            const p = pm[x.symbol] || {};
+            lines.push('- ' + x.symbol + ' ' + (x.name || '') + ' | ' + (x.verdict || '') + ' | ' + (x.classification || '') +
+              ' | old_leader=' + (x.old_leader ?? '-') + ' | all_pass=' + (p.all_pass ?? '-') + ' rec=' + (p.rec_shares ?? '-') +
+              ' | ' + ((x.evidence || []).slice(0, 2).join('；')));
+          }
+        }
+        return lines.join('\n');
+      }
+
+      // ═══ 主线/选股工具（只读）：广度/资金/核心/催化/业绩 ═══
+      register(defineTool({
+        name: 'get_concept_fund_flow',
+        description: '概念板块行情：涨幅/主力净流入/涨跌家数/领涨股。看广度、资金方向用。',
+        parameters: {
+          limit: { type: 'number', description: '返回数量，默认15' },
+          sort_by: { type: 'string', description: 'pct_change(涨幅) / main_net(主力净流入)' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams();
+          if (args.limit) q.set('limit', String(args.limit));
+          if (args.sort_by) q.set('sort_by', args.sort_by);
+          const d = await apiFetch('/market/concept-fund-flow' + (q.toString() ? '?' + q.toString() : ''));
+          const lines = ['📊 概念板块 ' + (d.trade_date || ''), ''];
+          (d.sectors || []).forEach((x, i) => {
+            lines.push((i + 1) + '. ' + x.name + ' | ' + (x.pct_change ?? '-') + '% | 成交' + ((x.amount || 0) / 1e8).toFixed(2) + '亿' +
+              (x.main_net_fmt ? ' | 主力' + x.main_net_fmt : '') +
+              (x.advancing !== undefined ? ' | ↑' + x.advancing + '/↓' + x.declining : '') +
+              (x.lead_stock_name ? ' | 领涨' + x.lead_stock_name : ''));
+          });
+          return { ok: true, text: lines.join('\n') || '无数据' };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_industry_fund_flow',
+        description: '行业板块行情：涨幅/主力净流入/涨跌家数/领涨股。看产业链轮动用。',
+        parameters: {
+          limit: { type: 'number', description: '返回数量，默认15' },
+          sort_by: { type: 'string', description: 'pct_change / main_net' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams({ type: 'industry' });
+          if (args.limit) q.set('limit', String(args.limit));
+          if (args.sort_by) q.set('sort_by', args.sort_by);
+          const d = await apiFetch('/market/sector-flow?' + q.toString());
+          if (!(d.sectors || []).length) {
+            // 东财 push2 在容器内常被限流/不可达；降级到概念资金流（Tushare 兜底），并明确标注
+            const fb = await apiFetch('/market/concept-fund-flow?limit=' + (args.limit || 15) + '&sort_by=' + encodeURIComponent(args.sort_by || 'main_net'));
+            const lines = ['⚠️ 行业实时为空（东财 push2 容器内不可达），以下为概念资金流降级：', ''];
+            (fb.sectors || []).forEach((x, i) => {
+              lines.push((i + 1) + '. ' + x.name + ' | ' + (x.pct_change ?? '-') + '% | 主力' + (x.main_net_fmt || x.main_net || '-') +
+                (x.lead_stock_name ? ' | 领涨' + x.lead_stock_name : ''));
+            });
+            return { ok: true, text: lines.join('\n') || '无数据' };
+          }
+          const lines = ['📊 行业板块', ''];
+          (d.sectors || []).forEach((x, i) => {
+            lines.push((i + 1) + '. ' + x.name + ' | ' + (x.pct_change ?? '-') + '% | 主力' + (x.main_net_fmt || x.main_net || '-') +
+              (x.advancing !== undefined ? ' | ↑' + x.advancing + '/↓' + x.declining : '') +
+              (x.lead_stock_name ? ' | 领涨' + x.lead_stock_name : ''));
+          });
+          return { ok: true, text: lines.join('\n') || '无数据' };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_concept_mapping',
+        description: '查概念成分股。传 concept_name 返回该概念股票；不传列出概念。看核心/风向标/龙头层级用。',
+        parameters: {
+          concept_name: { type: 'string', description: '概念名，如 人形机器人、AI芯片' },
+          limit: { type: 'number', description: '返回数量，默认30' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams();
+          if (args.concept_name) q.set('concept', args.concept_name);
+          if (args.limit) q.set('limit', String(args.limit));
+          const d = await apiFetch('/market/concept' + (q.toString() ? '?' + q.toString() : ''));
+          if (args.concept_name) {
+            const lines = ['📊 ' + args.concept_name + ' (' + (d.stocks || []).length + '只)'];
+            (d.stocks || []).slice(0, 80).forEach((x) => lines.push((x.ts_code || x.symbol) + ' ' + (x.name || '')));
+            return { ok: true, text: lines.join('\n') };
+          }
+          return { ok: true, text: '概念数: ' + (d.total || (d.concepts || []).length) + '\n' + (d.concepts || []).slice(0, 80).map((x) => (x.sector_name || x.name || '') + (x.stock_count ? '(' + x.stock_count + ')' : '')).join('、') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_market_indices',
+        description: '大盘指数实时行情（上证/深证/创业板等）。判断市场环境用。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const d = await apiFetch('/market/indices');
+          const rows = Array.isArray(d) ? d : (d.indices || []);
+          return { ok: true, text: '🌐 指数\n' + rows.map((x) => (x.name || '') + ' ' + (x.current_price ?? '-') + ' ' + (x.change_pct ?? '-') + '%').join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_latest_scan_report',
+        description: '最新扫描报告（市场立场/热点/观察池/Pi分析）。看催化与市场情绪用。',
+        parameters: { date: { type: 'string', description: 'YYYY-MM-DD，默认今天' } },
+        output: textOut(),
+        async execute(args) {
+          const q = args.date ? '?date=' + encodeURIComponent(args.date) : '';
+          const d = await apiFetch('/scan/latest' + q);
+          const stance = d.market_stance || d.scan_stance || '-';
+          const limit = d.position_limit ?? d.scan_position_limit ?? '-';
+          return { ok: true, text: '📰 ' + (d.timestamp || '') + '\nstance=' + stance + ' limit=' + limit +
+            '\n热点: ' + ((d.hot_concepts || []).join('、')) +
+            '\n' + String(d.report || d.summary || '').slice(0, 1800) +
+            '\nPi: ' + String((d.pi_analysis && (d.pi_analysis.reason || d.pi_analysis.report)) || '').slice(0, 800) };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_pi_analysis_history',
+        description: 'Pi/SYSTEM 分析历史（按日期范围），看 stance/reason/催化。',
+        parameters: {
+          start_date: { type: 'string', description: 'YYYY-MM-DD' },
+          end_date: { type: 'string', description: 'YYYY-MM-DD' },
+        },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams();
+          if (args.start_date) q.set('start_date', args.start_date);
+          if (args.end_date) q.set('end_date', args.end_date);
+          const d = await apiFetch('/scan/pi-analysis' + (q.toString() ? '?' + q.toString() : ''));
+          return { ok: true, text: '🧠 分析历史 ' + (d.days_count || 0) + ' 天\n' +
+            (d.records || []).slice(-8).map((r) => r.date + ' ' + (r.stance || '') + ' ' + String(r.reason || '').slice(0, 200)).join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_express',
+        description: '业绩快报（营收/利润/同比/ROE）。看营收拐点用。',
+        parameters: { symbol: { type: 'string', required: true, description: '如 SH600519' }, limit: { type: 'number', description: '默认5' } },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams();
+          if (args.limit) q.set('limit', String(args.limit));
+          const d = await apiFetch('/indicator/express/' + encodeURIComponent(args.symbol) + (q.toString() ? '?' + q.toString() : ''));
+          const recs = Array.isArray(d.records) ? d.records : [];
+          const lines = ['📑 ' + (d.symbol || args.symbol) + ' 业绩快报', 'end_date | revenue | n_income | yoy_rev | yoy_net | ann_date'];
+          for (const r of recs) {
+            lines.push([r.end_date, r.revenue, r.n_income,
+              (r.yoy_revenue ?? 'NA') + '%', (r.yoy_n_income ?? 'NA') + '%', r.announce_date || 'NA'].join(' | '));
+          }
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_fina_mainbz',
+        description: '主营业务构成（产品/行业/地区）。看业务绑定与收入结构用。',
+        parameters: { symbol: { type: 'string', required: true, description: '如 SH600519' }, limit: { type: 'number', description: '默认10' } },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams();
+          if (args.limit) q.set('limit', String(args.limit));
+          const d = await apiFetch('/indicator/fina-mainbz/' + encodeURIComponent(args.symbol) + (q.toString() ? '?' + q.toString() : ''));
+          const recs = Array.isArray(d.records) ? d.records : [];
+          const lines = ['🏭 ' + (d.symbol || args.symbol) + ' ' + (d.report_period || '') + ' 主营构成'];
+          for (const r of recs) {
+            lines.push([r.type || '', r.bz_item || '', r.bz_sales ?? '', r.bz_profit ?? '', r.bz_cost ?? ''].join(' | '));
+          }
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_daily_kline',
+        description: '个股前复权日K线（开高低收/量额）。',
+        parameters: { symbol: { type: 'string', required: true, description: '如 SH600519' }, limit: { type: 'number', description: '默认60' } },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams({ adj: 'qfq', limit: String(args.limit || 60) });
+          const d = await apiFetch('/market/pro-bar/' + encodeURIComponent(args.symbol) + '?' + q.toString());
+          return { ok: true, text: '📉 ' + (d.symbol || args.symbol) + '\n' + JSON.stringify(d.bars || d, null, 1).slice(0, 1800) };
+        },
+      }));
+
+      register(defineTool({
+        name: 'check_entry_filters',
+        description: '入场三层过滤（技术/主力/超买）。建仓前用。',
+        parameters: { symbol: { type: 'string', required: true, description: '如 SH600519' } },
+        output: textOut(),
+        async execute(args) {
+          const d = await apiFetch('/indicator/check-entry-filters', { method: 'POST', body: JSON.stringify(args) });
+          return { ok: true, text: JSON.stringify(d, null, 1).slice(0, 2200) };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_mainline_context',
+        description: '狼大主线上下文：L0 主线、L1 赛道、L2 主题（exists/active/tradeable/status/verdict）。做方向判断前先看。',
+        parameters: { date: { type: 'string', description: 'YYYYMMDD，默认最新' } },
+        output: textOut(),
+        async execute(args) {
+          const date = args.date || _latestMlDate();
+          const ml = _rd(join('mainline', date, 'mainline.json')) || {};
+          const tr = _rd(join('mainline', date, 'track.json')) || {};
+          const th = _rd(join('mainline', date, 'theme.json')) || {};
+          const lines = ['📌 ' + date + ' 狼大主线'];
+          lines.push('- L0: ' + (ml.mainline || '-') + ' / ' + (ml.sub_mainline || '-') + ' | exists=' + (ml.mainline_exists ?? '-') + ' active=' + (ml.mainline_active ?? '-') + ' tradeable=' + (ml.tradeable ?? '-') + ' status=' + (ml.status || '-'));
+          lines.push('- L1 ' + (tr.mainline_status || '') + ' 赛道:');
+          for (const x of (tr.tracks || tr.focus || []).slice(0, 12)) lines.push('  · ' + (x.track_id || x.id || x.name) + ' ' + (x.name || '') + ' score=' + (x.score ?? '-') + ' verdict=' + (x.verdict ?? '-'));
+          lines.push('- L2 主题:');
+          for (const x of (th.themes || []).slice(0, 15)) lines.push('  · ' + (x.theme_id || x.id) + ' ' + (x.name || '') + ' score=' + (x.score ?? '-') + ' verdict=' + (x.verdict ?? '-') + ' parent=' + (x.parent_track || x.track_id || '-'));
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_stock_agent_facts',
+        description: 'P3 候选事实：位置、筹码、股东、龙虎榜席位、大宗、业绩、老龙头组件、position。可按 symbol 过滤。',
+        parameters: { symbol: { type: 'string', description: '股票代码或名称，可不传' }, date: { type: 'string', description: 'YYYYMMDD，默认最新' } },
+        output: textOut(),
+        async execute(args) { return { ok: true, text: _factsText(args) }; },
+      }));
+
+      register(defineTool({
+        name: 'get_stock_agent_selected',
+        description: 'P3 盘后选股与仓位意图：watch/reject/probe、老龙头、all_pass、rec_shares。开盘执行前必看。',
+        parameters: { date: { type: 'string', description: 'YYYYMMDD，默认最新' } },
+        output: textOut(),
+        async execute(args) { return { ok: true, text: _selectedText(args) }; },
+      }));
+
+      register(defineTool({
+        name: 'get_limit_ladder',
+        description: 'B4 涨停梯队/连板结构：涨停/炸板/跌停、主题/行业梯队、毕业照/上板失败标签。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const d = _rd('wolf_limit_ladder.json');
+          if (!d) return { ok: true, text: '📭 无涨停梯队数据' };
+          const t = d.totals || {};
+          const lines = ['📈 ' + (d.date || '') + ' 涨停梯队 | 涨停' + (t.u ?? '-') + ' 炸板' + (t.z ?? '-') + ' 跌停' + (t.d ?? '-')];
+          const items = Object.entries(d.by_industry || {}).sort((a, b) => (b[1].u_n || 0) - (a[1].u_n || 0)).slice(0, 8);
+          for (const [k, v] of items) lines.push('- ' + k + ': ' + (v.u_n || 0) + '涨停 最高' + (v.max_times || 0) + '板 炸' + (v.z_n || 0) + ' → ' + (v.tag || ''));
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_wolf_review_context',
+        description: 'A3/C2/B1 复盘上下文：期指黄白线、跌得少弹得早、复盘打分。只作背景，不作硬门。',
+        parameters: {},
+        output: textOut(),
+        async execute() {
+          const a3 = _rd('wolf_index_futures.json') || {};
+          const c2 = _rd('wolf_theme_resilience.json') || {};
+          const b1 = _rd('wolf_review_score.json') || {};
+          const lines = ['🧭 复盘上下文'];
+          lines.push('- A3 期指: ' + JSON.stringify(a3).slice(0, 600));
+          lines.push('- C2 韧性: ' + JSON.stringify(c2).slice(0, 600));
+          lines.push('- B1 打分: ' + JSON.stringify(b1).slice(0, 800));
+          return { ok: true, text: lines.join('\n') };
+        },
+      }));
+
+      register(defineTool({
+        name: 'get_index_daily',
+        description: '指数日线（PG index_daily）：上证/深证/创业板/沪深300/中证1000。看浪型/市场环境用。',
+        parameters: { code: { type: 'string', description: '默认 000001.SH' }, days: { type: 'number', description: '默认 60' } },
+        output: textOut(),
+        async execute(args) {
+          const q = new URLSearchParams({ code: args.code || '000001.SH', days: String(args.days || 60) });
+          const d = await apiFetch('/wave/index-history?' + q.toString());
+          const bars = (d.bars || []).slice(-10);
+          return { ok: true, text: '📈 ' + (d.code || args.code || '000001.SH') + ' (' + (d.ohlc_source || '') + ')\n' +
+            bars.map((b) => b.date + ' O' + b.open + ' H' + b.high + ' L' + b.low + ' C' + b.close + ' amt=' + b.amount).join('\n') };
+        },
+      }));
+
       console.log('[Bridge] 做T底仓建仓工具注册完成（scan_t_candidates/build_t_position/auto_gen_conditions/rebalance_floors/get_floor_overview）');
       console.log('[Bridge] 只读查询工具注册完成（get_stock_quote/get_portfolio_positions/get_t_realtime_indicators/get_stock_moneyflow/get_market_state/get_stock_technical/get_intraday_minute/get_etf_kline）');
+      console.log('[Bridge] 主线/选股工具注册完成（mainline/P3 facts/selected/limit ladder/review/index + concept/industry flow, mapping, indices, scan, express, mainbz, daily kline, entry filters）');
     }
     registerWriteTools();
 
@@ -1026,6 +1365,132 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
 
     function getPrompt(name) {
       return promptCache.get(name) || FALLBACK_PROMPTS[name] || '';
+    }
+
+    // ═══ CLI 桥（方案 A）：chat 模式每条消息起一个 dsh --profile headless --json 子进程 ═══
+    // 与飞书桥同构：无共享 agent/inbox，避免 _runAgentTurnImpl 的 inbox.clear() 吞消息。
+    const CLI_CHAT = process.env.BRIDGE_CLI_CHAT !== '0';
+    const CLI_TIMEOUT_MS = parseInt(process.env.BRIDGE_CLI_TIMEOUT_MS || '900000', 10);
+    const CLI_SESSION_FILE = process.env.BRIDGE_CLI_SESSION_FILE || '/app/data/marcus_cli_sessions.json';
+    const CLI_DSH_BIN = process.env.BRIDGE_DSH_BIN || 'dsh';
+    const CLI_READONLY = [
+      'get_stock_quote', 'get_portfolio_positions', 'get_t_realtime_indicators',
+      'get_stock_moneyflow', 'get_market_state', 'get_stock_technical',
+      'get_intraday_minute', 'get_etf_kline', 'get_concept_fund_flow',
+      'get_industry_fund_flow', 'get_concept_mapping', 'get_market_indices',
+      'get_latest_scan_report', 'get_pi_analysis_history', 'get_express',
+      'get_fina_mainbz', 'get_daily_kline', 'check_entry_filters', 'calc_position',
+      'get_mainline_context', 'get_stock_agent_facts', 'get_stock_agent_selected',
+      'get_limit_ladder', 'get_wolf_review_context', 'get_index_daily',
+    ];
+
+    function _readCliSessions() {
+      try {
+        if (!existsSync(CLI_SESSION_FILE)) return {};
+        return JSON.parse(readFileSync(CLI_SESSION_FILE, 'utf8')) || {};
+      } catch (e) { return {}; }
+    }
+    function _saveCliSessions(m) {
+      try {
+        const dir = dirname(CLI_SESSION_FILE);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        writeFileSync(CLI_SESSION_FILE, JSON.stringify(m, null, 2), 'utf8');
+      } catch (e) { console.warn('[Bridge] CLI session 落盘失败: ' + (e && e.message ? e.message : e)); }
+    }
+
+    function _cliPatch(prompt) {
+      const path = '/tmp/marcus-cli-' + process.pid + '-' + Date.now() + '.yml';
+      const persona = String(prompt || 'You are Marcus, a short-term right-side trading assistant. Use tools for live data; be concise.');
+      const body = [
+        '- id: system-prompt',
+        '  config:',
+        '    persona: ' + JSON.stringify(persona),
+        '- insert:',
+        '    - id: webserver',
+        "      name: '@deepseek-ai/dsh-host-webserver'",
+        '      config:',
+        '        host: 127.0.0.1',
+        '        port: 0',
+        '    - id: dsh-marcus-bridge',
+        '      name: dsh-dsh-marcus-bridge',
+        '',
+      ].join('\n');
+      writeFileSync(path, body, 'utf8');
+      return path;
+    }
+
+    function runCliTurn(message, sessionId, mode) {
+      return new Promise((resolve) => {
+        const requested = String(sessionId || ('cli_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)));
+        const map = _readCliSessions();
+        let cliSid = map[requested] || null;
+        const patchPath = _cliPatch(getPrompt(mode === 'trade' ? 'TRADE_SYSTEM_PROMPT' : 'CHAT_SYSTEM_PROMPT'));
+        const args = ['--profile', 'headless', '--patch', patchPath, '--json'];
+        if (cliSid) args.push('--session-id', cliSid);
+        args.push(message);
+        const env = { ...process.env };
+        if (mode !== 'trade') env.MARCUS_TOOLS_ALLOW = CLI_READONLY.join(',');
+        const t0 = Date.now();
+        let out = '', err = '', newSid = null, final = null;
+        const texts = [];
+        let done = false;
+        const child = spawn(CLI_DSH_BIN, args, {
+          cwd: process.env.MARCUS_WORKSPACE || '/app',
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const timer = setTimeout(() => {
+          if (done) return;
+          done = true;
+          try { child.kill('SIGKILL'); } catch (e) {}
+          try { unlinkSync(patchPath); } catch (e) {}
+          resolve({ ok: false, reply: '⚠️ CLI 回合超过 ' + Math.round(CLI_TIMEOUT_MS / 1000) + 's，已中止', session_id: requested, cli_session_id: cliSid, elapsed_ms: Date.now() - t0 });
+        }, CLI_TIMEOUT_MS);
+        const finish = (code) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          try { unlinkSync(patchPath); } catch (e) {}
+          const reply = String(final || texts.join('') || '').trim();
+          if (newSid && newSid !== cliSid) {
+            cliSid = newSid;
+            map[requested] = cliSid;
+            _saveCliSessions(map);
+          }
+          if (!reply) console.warn('[Bridge] CLI 空结果 session=' + requested + ' exit=' + code + ' stderr=' + err.slice(-300));
+          resolve({
+            ok: !!reply,
+            reply: reply || ('(无回复)'),
+            session_id: requested,
+            cli_session_id: cliSid,
+            elapsed_ms: Date.now() - t0,
+          });
+        };
+        child.stdout.on('data', (chunk) => {
+          out += String(chunk);
+          let idx;
+          while ((idx = out.indexOf('\n')) >= 0) {
+            const line = out.slice(0, idx).trim();
+            out = out.slice(idx + 1);
+            if (!line.startsWith('{')) continue;
+            try {
+              const ev = JSON.parse(line);
+              if (ev.type === 'session' && ev.sessionId) newSid = ev.sessionId;
+              else if (ev.type === 'text' && ev.text) texts.push(ev.text);
+              else if (ev.type === 'final' && ev.text) { final = ev.text; setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) {} }, 50); }
+            } catch (e) {}
+          }
+        });
+        child.stderr.on('data', (chunk) => { err = (err + String(chunk)).slice(-4000); });
+        child.on('error', (e) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          try { unlinkSync(patchPath); } catch (e2) {}
+          resolve({ ok: false, reply: '⚠️ CLI 启动失败: ' + (e && e.message ? e.message : e), session_id: requested, cli_session_id: cliSid, elapsed_ms: Date.now() - t0 });
+        });
+        child.on('close', (code) => finish(code));
+      });
     }
 
     function readBody(req) {
@@ -1494,6 +1959,14 @@ function _sessionEvents(agent) {
               const lock = new Promise((r) => { release = r; });
               locks.set(lockKey, lock);
               try {
+                // 方案 A：chat 模式走 CLI 桥（一消息一进程，无共享 inbox）；trade/conditions/backtest 仍走常驻 agent
+                if ((chatMode === 'chat' || chatMode === 'trade') && CLI_CHAT) {
+                  const r = await runCliTurn(message, sessionId, chatMode);
+                  json(res, 200, { reply: r.reply, session_id: r.session_id, mode: chatMode,
+                                   elapsed_ms: Date.now() - startTime, migrated: false, cli: true,
+                                   cli_session_id: r.cli_session_id || null });
+                  return;
+                }
                 let agent = await getOrCreateAgent(sessionId, chatMode, model, thinking_level);
                 let reply = await runAgentTurn(agent, message);
                 if (!reply || reply === '(无回复)') {

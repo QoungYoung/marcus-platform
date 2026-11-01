@@ -23,12 +23,14 @@
 import os
 import sys
 
-for _p in ("/app", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
-    if _p and _p not in sys.path:
+for _p in ("/app", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+           os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "jobs")):
+    if _p and os.path.isdir(_p) and _p not in sys.path:
         sys.path.insert(0, _p)
 
 # (模块文件名, 展示名) —— 顺序即执行顺序（B1 最慢放最后，失败也不挡前面 ✓）
 STEPS = (
+    ("wolf_limit_ladder_scan", "B4 涨停梯队/连板结构"),
     ("wolf_index_futures", "A3 股指期货多空→次日黄白线"),
     ("wolf_theme_resilience", "C2 跌得少弹得早"),
     ("wolf_review_score", "B1 每日复盘打分表"),
@@ -58,8 +60,18 @@ def _run_step(mod_name, label, argv_extra):
 
 
 def main():
-    extra = list(sys.argv[1:])          # 透传 [YYYYMMDD] / [--dry-run] / [--days N]
-    print("[chain] 盘后复盘链开始 | 参数=%s" % (extra or "无"))
+    raw = list(sys.argv[1:])            # 透传 [YYYYMMDD] / [--dry-run] / [--days N]
+    explicit = next((a for a in raw if len(a) == 8 and a.isdigit()), None)
+    date8 = explicit
+    if not date8:
+        try:
+            from app.services.wolf_eod import prev_trade_day
+            date8 = prev_trade_day()
+        except Exception:
+            date8 = None
+    # 08:05 次日盘前：对象日=上一交易日；显式日期优先；flags 原样保留
+    extra = ([date8] if date8 else []) + [a for a in raw if a != date8]
+    print("[chain] 盘后复盘链开始 | 对象日=%s | 参数=%s" % (date8 or "今天", extra))
     results = [_run_step(m, lab, extra) for m, lab in STEPS]
     bad = [r for r in results if r[1] != 0]
     for lab, rc, secs in results:

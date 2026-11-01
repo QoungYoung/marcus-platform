@@ -411,6 +411,53 @@ def _timing_on() -> bool:
     return str(os.getenv("WOLF_STEP_TIMING", "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
+def b4b5_filter(buy_new, day=None):
+    """B4/B5：主线未响应/避险抢戏时，剔掉该主题的新买腿（不改持仓/不碰埋伏腿）。"""
+    try:
+        import breakout_context as _bc
+        if not _bc.b4b5_gate_enabled():
+            return buy_new, {}
+        _day = day or _bc.prev_trade_day()
+        _themes = {str(v[0]) for v in (buy_new or {}).values() if v and v[0]}
+        _blocked = {}
+        for _th in _themes:
+            _g = _bc.gate(_th, _day)
+            if _g.get("action") in ("block", "downgrade"):
+                _blocked[_th] = _g
+        if _blocked:
+            _drop = [k for k, v in buy_new.items() if v and v[0] in _blocked]
+            for k in _drop:
+                buy_new.pop(k, None)
+            print("[switch_builder] B4/B5 剔除新买腿 %d 只；主题=%s"
+                  % (len(_drop), {k: v.get("action") for k, v in _blocked.items()}), flush=True)
+        return buy_new, _blocked
+    except Exception as _e:
+        print("[switch_builder] B4/B5 过滤异常(fail-open): %s" % str(_e)[:80], flush=True)
+        return buy_new, {}
+
+
+def b8_filter(buy_new, day=None):
+    """B8：最近突破后「跌破确认/待确认」的票，不布新买腿；不破/假跌破/未回踩放行。"""
+    try:
+        import breakout_context as _bc
+        if not _bc.b8_gate_enabled():
+            return buy_new, {}
+        _day = day or _bc.prev_trade_day()
+        _blocked = {}
+        for _code in list(buy_new.keys()):
+            _g = _bc.b8_gate(_code, _day)
+            if _g.get("action") in ("block", "downgrade"):
+                _blocked[_code] = _g
+                buy_new.pop(_code, None)
+        if _blocked:
+            print("[switch_builder] B8 剔除新买腿 %d 只: %s"
+                  % (len(_blocked), {k: v.get("state") for k, v in _blocked.items()}), flush=True)
+        return buy_new, _blocked
+    except Exception as _e:
+        print("[switch_builder] B8 过滤异常(fail-open): %s" % str(_e)[:80], flush=True)
+        return buy_new, {}
+
+
 def build_plan():
     import time as _tt
     _T0 = _tt.time()
@@ -443,6 +490,8 @@ def build_plan():
             keep.append({"symbol": sym, "stage": stage or "主线内", "themes": ths})
     _tp("held/tiers")
     buy_new, _ = active_stocks_by(BASE_STAGES, stages_for=stages_for_theme)
+    buy_new, _b45_blocked = b4b5_filter(buy_new)
+    buy_new, _b8_blocked = b8_filter(buy_new)
     # 2026-09-26 用户「做掉」：把「**埋伏候选**」显式并入买入列表 ✓
     #   为什么必须显式并：它们的判级结果可能**不在 BASE_STAGES 内**（如"下跌中"✗）
     #     ⇒ `active_stocks_by` 会漏掉它们 ✗ —— 实测：埋伏候选文件每天都写 ✓ 但

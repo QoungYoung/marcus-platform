@@ -2706,6 +2706,33 @@ def _read_wolf_context(indices=None) -> str:
                     "用已确认主线回调低吸模式(254 dip_prev_low)等触发，不否定主线")
             parts.append("- **主线个股确认**（" + scope + "）：" + "；".join(txt) + " —— " + note)
 
+    # 4b. B4/B5：主线响应 / 避险抢戏（数据层 breakout_context；失败静默）
+    try:
+        import sys as _sys45
+        _p45 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "main_line")
+        if _p45 not in _sys45.path:
+            _sys45.path.insert(0, _p45)
+        import breakout_context as _bc45
+        _th45 = (ml2 or {}).get("main_line") or ""
+        if _th45 and _bc45.b4b5_enabled():
+            _g45 = _bc45.gate(_th45, _bc45.prev_trade_day())
+            parts.append("- **B4/B5**：主线=" + str(_th45)
+                         + " ｜ mainline_ret=" + str(_g45.get("mainline_ret"))
+                         + " ｜ bank=" + str(_g45.get("bank_ret"))
+                         + " ｜ gold=" + str(_g45.get("gold_ret"))
+                         + " ｜ B4=" + str(_g45.get("mainline_ok"))
+                         + " ｜ B5=" + str(_g45.get("hedge_flag"))
+                         + " ｜ action=" + str(_g45.get("action")))
+            try:
+                _b8 = _bc45.b8_state("sh512480", _bc45.prev_trade_day())
+                parts.append("- **B8**：主线ETF(512480) state=" + str(_b8.get("state"))
+                             + " ｜ level=" + str(_b8.get("level"))
+                             + " ｜ retest=" + str(_b8.get("retest")))
+            except Exception:
+                pass
+    except Exception as _e45:
+        print("[market_scan] B4/B5 异常(忽略): %s" % str(_e45)[:80], file=sys.stderr)
+
     # 5. 做T提示（指数盘中回撤 -> 正T窗口；盘中精确信号由 t_monitor 30s 监控）
     if indices:
         dd_lines = []

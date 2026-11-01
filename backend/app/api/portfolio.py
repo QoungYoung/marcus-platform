@@ -983,6 +983,7 @@ def get_equity_history(days: int = Query(60, ge=1, le=365),
         start_date = min_trade_date
 
     today_str = today.strftime("%Y-%m-%d")
+    latest_trade_date = sorted_dates[-1] if sorted_dates else today_str
     current_positions, _account, _realized, _winrate = calculate_positions_from_db(account)
     symbols = [p['symbol'] for p in current_positions]
     realtime_prices = get_realtime_prices(symbols) if symbols else {}
@@ -1011,9 +1012,10 @@ def get_equity_history(days: int = Query(60, ge=1, le=365),
         net_flow_today = adjustments_by_date.get(date_str, 0)
         adj_accum += net_flow_today
 
-        if date_str in snapshots:
+        if date_str in snapshots and date_str != latest_trade_date:
             equity = snapshots[date_str]
-        elif date_str == today_str:
+        elif date_str == today_str or date_str == latest_trade_date:
+            # 最新交易日即使不是自然日 today（周末/盘后），也要用实时价，不能用成本价
             position_value = 0.0
             for sym, lots in positions.items():
                 total_vol = sum(l['volume'] for l in lots)

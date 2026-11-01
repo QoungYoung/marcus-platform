@@ -287,35 +287,55 @@ def facts():
     # ★ 只取**紧凑投影**（原始 JSON 近 30KB ✗ 会把 prompt 挤爆 ⇒ 每层只留关键字段 ✓）
     f["layers"] = {}
     _D = os.environ.get("DATA_DIR", "").strip() or "data"
+    def _latest_p3():
+        try:
+            base = os.path.join(_D, "mainline")
+            for d in sorted(os.listdir(base), reverse=True):
+                ml = _rj(os.path.join("mainline", d, "mainline.json"))
+                if ml:
+                    return d, ml, (_rj(os.path.join("mainline", d, "track.json")) or {}), (_rj(os.path.join("mainline", d, "theme.json")) or {})
+        except Exception:
+            pass
+        return None, {}, {}, {}
+
+    p3d, p3ml, p3tr, p3th = _latest_p3()
     try:
-        ml = _rj("wolf_mainline_select.json") or {}
-        f["layers"]["mainline"] = {"date": ml.get("date"), "mainline": ml.get("mainline")}
+        f["layers"]["mainline"] = {
+            "date": p3d, "mainline": p3ml.get("name") or p3ml.get("mainline"),
+            "sub": p3ml.get("sub_mainline_name") or p3ml.get("sub_mainline"),
+            "active": p3ml.get("mainline_active"), "tradeable": p3ml.get("tradeable"),
+            "status": p3ml.get("status"),
+            "tracks": [x.get("name") or x.get("id") for x in ((p3tr.get("trial") or []) + (p3tr.get("watch") or []))[:6]],
+            "themes": [x.get("name") or x.get("id") for x in ((p3th.get("trial") or []) + (p3th.get("watch") or []))[:8]],
+        }
     except Exception:
         pass
     try:
-        sl = _rj(os.path.join("core_select", "latest.json")) or {}
-        items = sl.get("items") or []
-        top = []
-        for it in sorted(items, key=lambda x: -len(x.get("picks") or []))[:6]:
-            top.append({"sub": it.get("subtheme"), "rule": it.get("rule"),
-                        "picks": [p.get("symbol") or p.get("code") for p in (it.get("picks") or [])[:2]]})
-        f["layers"]["select"] = {"date": sl.get("date"), "n_subthemes": len(items),
-                                 "n_picks": sl.get("n_picks"), "top": top}
+        sel = (_rj(os.path.join("mainline", p3d, "stock_agent_selected.json")) or {}) if p3d else {}
+        items = []
+        for t in (sel.get("themes") or []):
+            items.append({"theme": t.get("theme_id"), "verdict": t.get("verdict"),
+                          "picks": [x.get("symbol") for x in (t.get("selected") or []) if x.get("verdict") != "reject"][:3]})
+        f["layers"]["select"] = {"date": sel.get("date") or p3d, "n_subthemes": len(items),
+                                 "n_picks": sum(len(x["picks"]) for x in items), "top": items[:6],
+                                 "state": ("ok" if items else "P3 selected 未生成")}
     except Exception:
         pass
     try:
-        bw = _rj(os.path.join("core_p1", "bellwether_state_latest.json")) or {}
-        its = bw.get("items") or []
-        f["layers"]["bellwether"] = {"date": bw.get("date"),
-                                     "top": [{"sub": x.get("subtheme"), "state": x.get("state"),
-                                              "code": x.get("bellwether_code")} for x in its[:6]]}
+        f["layers"]["bellwether"] = {
+            "date": p3d,
+            "top": [{"sub": x.get("name") or x.get("id"), "state": x.get("verdict") or "trial"}
+                    for x in ((p3th.get("trial") or []) + (p3th.get("watch") or []))[:6]],
+        }
     except Exception:
         pass
     try:
-        et = _rj("entry_timing.json")
-        f["layers"]["entry_timing"] = ({"open": (et or {}).get("open"),
-                                        "history": ((et or {}).get("history") or [])[-2:]}
-                                       if et else {"state": "无信号（今日未触发 ✓）"})
+        et = _rj("entry_timing.json") or {}
+        if et.get("open") or et.get("history"):
+            f["layers"]["entry_timing"] = {"open": et.get("open"),
+                                           "history": (et.get("history") or [])[-2:]}
+        else:
+            f["layers"]["entry_timing"] = {"state": "无信号（今日未触发 ✓）"}
     except Exception:
         pass
     try:
@@ -333,20 +353,27 @@ def facts():
 
 
 def wolf_recent(days=2, limit=8):
-    """读 `data/wolf_posts.json`（由 jobs/wolf_thread_sync.py 抓 ✓）→ 他最近几日发言 ✓。
+    """读 PG `wolf_posts`（由 jobs/wolf_thread_sync.py 抓）→ 他最近几日发言。
 
-    ★ 定位（用户 2026-10-21 ✓）：**只作参考** ✓ —— 纪律仍是 `config/wave_advice_policy.json`（我们自己的 ✓）；
-      他断更/帖子没了 ⇒ 这里返回空 ✓ **不影响任何东西** ✓（用户：「等他帖子什么时候没了再说」✓）。
+    只作参考；断更/帖子没了返回空，不影响任何东西。
     """
     try:
-        d = json.load(open(os.path.join(os.environ.get("DATA_DIR", "").strip() or "data",
-                                        "wolf_posts.json"), encoding="utf-8"))
-        floors = [f for f in (d.get("floors") or []) if f.get("is_op") and f.get("text")]
         import datetime as _dt
+        import psycopg2
         cut = (_dt.date.today() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
-        recent = [f for f in floors if (f.get("date") or "")[:10] >= cut]
-        recent = recent[-limit:]
-        return [{"date": (f.get("date") or "")[:16], "text": (f.get("text") or "")[:150]} for f in recent]
+        db = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        conn = psycopg2.connect(db)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT post_date, text FROM wolf_posts "
+                "WHERE tid=%s AND is_op AND COALESCE(text,'')<>'' AND post_date>=%s "
+                "ORDER BY post_date DESC, lou DESC LIMIT %s",
+                ("47288722", cut, int(limit)))
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+        return [{"date": str(d or "")[:16], "text": str(t or "")[:150]} for d, t in reversed(rows)]
     except Exception:
         return []
 

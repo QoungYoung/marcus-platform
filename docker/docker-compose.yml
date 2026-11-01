@@ -37,6 +37,7 @@ x-backend-common: &backend-common
     - ../core:/app/core
     # jobs 也 bind mount：market_scan 等任务脚本改动即时生效（镜像内 COPY jobs 会遮旧版）
     - ../jobs:/app/jobs
+    - ../scripts:/app/scripts:ro
     - /etc/localtime:/etc/localtime:ro
 
 services:
@@ -189,6 +190,8 @@ services:
       - ./dsh/service.cordis.patch.yml.020:/opt/dsh-plugins/cordis.patch.yml:ro
       # ★ 账本 §9.728 ✓：桥源码也走挂载（镜像里那份是旧的 ✗ ⇒ 空白名单会走"全量注册"✗）
       - ./dsh/bridge/lib/index.js:/opt/dsh-plugins/dsh-dsh-marcus-bridge/lib/index.js:ro
+      # CLI 桥：headless profile 的 bridge symlink 由 entrypoint 创建（镜像内 entrypoint 是旧版）
+      - ./dsh/entrypoint.sh:/opt/dsh-plugins/entrypoint.sh:ro
       - ../data:/app/data
       # 只持久化 DSH 会话状态；profile 代码（bridge/npm 依赖/patch）由镜像控制，
       # 避免旧卷里的代码覆盖镜像更新（卷不再覆盖代码）

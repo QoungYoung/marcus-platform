@@ -2,6 +2,7 @@
 """
 Trades API endpoints.
 """
+import os
 import sys
 import sqlite3
 from datetime import datetime
@@ -101,6 +102,56 @@ def _t_floor_shares(symbol: str, account: str = "stock", volume: Optional[int] =
         return 0
 
 
+def _pretrade_gate_for_trade(trade):
+    """下单边界的共享买入前门（P2 + B4/B5 + B8）。
+
+    - 只拦 buy；T 回补 t_buy/t_refill 不套 B8（走 t_gateway 的独立纪律）。
+    - WOLF_PRETRADE_ORDER_GATE=off|shadow|enforce（默认 enforce）。
+    - 失败 fail-open（不因门自身异常阻断交易）。
+    """
+    try:
+        mode = str(os.getenv("WOLF_PRETRADE_ORDER_GATE", "enforce")).strip().lower()
+        if str(trade.side).lower() != "buy" or mode in ("0", "off", "false", "no", ""):
+            return True, "", None
+        intent = str(trade.intent or "new_base").strip().lower()
+        if intent in ("t_buy", "t_refill", "t_add"):
+            return True, "", None
+        from app.services.pre_trade_gate import pre_trade_gate
+        g = pre_trade_gate(trade.symbol, intent=intent, source="trades_api")
+        reasons = "；".join(g.get("reasons") or [])
+        if not g.get("allow", True):
+            if mode == "shadow":
+                return True, "SHADOW would-block: " + (reasons or "pre_trade_gate"), g
+            return False, (reasons or "pre_trade_gate拒绝"), g
+        if float(g.get("multiplier") or 1.0) < 1.0:
+            return True, "降级 %.2f: %s" % (float(g.get("multiplier")), reasons), g
+        return True, "", g
+    except Exception as e:
+        return True, "pre_trade_gate异常(fail-open): " + str(e)[:120], None
+
+
+def _sell_gate_for_trade(trade):
+    """卖出前门：狼大止损/止盈口径 + 重复卖出拦截。"""
+    try:
+        mode = str(os.getenv("WOLF_SELL_GATE", "enforce")).strip().lower()
+        if str(trade.side).lower() not in ("sell", "卖出") or mode in ("0", "off", "false", "no", ""):
+            return True, "", None
+        from app.services.sell_gate import sell_gate
+        g = sell_gate(trade.symbol, trade.price, trade.volume,
+                      intent=getattr(trade, "intent", None), reason=trade.reason or "",
+                      account=trade.account, source="trades_api")
+        why = "；".join(g.get("reasons") or [])
+        if not g.get("allow", True):
+            if mode == "shadow":
+                return True, "SHADOW would-block: " + (why or "sell_gate"), g
+            return False, (why or "sell_gate拒绝"), g
+        if why:
+            return True, why, g
+        return True, "", g
+    except Exception as e:
+        return True, "sell_gate异常(fail-open): " + str(e)[:120], None
+
+
 @router.post("", response_model=TradeResponse)
 def execute_trade(trade: TradeRequest, request: Request):
     """
@@ -117,6 +168,32 @@ def execute_trade(trade: TradeRequest, request: Request):
     """
     try:
         _validate_account(trade.account)
+        # ── 共享买入前门：在“agent/调用方 → 交易接口”之间硬拦（P2 + B4/B5 + B8）──
+        _gate_ok, _gate_why, _gate_info = _pretrade_gate_for_trade(trade)
+        if not _gate_ok:
+            print(f"[交易] ❌ 买入 {trade.symbol} 被 pre_trade_gate 拒绝: {_gate_why}", flush=True)
+            return TradeResponse(
+                order_id="", status="rejected", symbol=trade.symbol,
+                direction="买入", price=trade.price, volume=trade.volume,
+                amount=trade.price * trade.volume, timestamp=datetime.now(),
+                reason="pre_trade_gate: " + _gate_why,
+                message="pre_trade_gate: " + _gate_why,
+            )
+        if _gate_why:
+            print(f"[交易] ⚠️ {trade.symbol} pre_trade_gate: {_gate_why}", flush=True)
+        # ── 卖出前门：狼大止损/止盈口径 + 重复卖出（在 agent → 执行器之间）──
+        _sell_ok, _sell_why, _sell_info = _sell_gate_for_trade(trade)
+        if not _sell_ok:
+            print(f"[交易] ❌ 卖出 {trade.symbol} 被 sell_gate 拒绝: {_sell_why}", flush=True)
+            return TradeResponse(
+                order_id="", status="rejected", symbol=trade.symbol,
+                direction="卖出", price=trade.price, volume=trade.volume,
+                amount=trade.price * trade.volume, timestamp=datetime.now(),
+                reason="sell_gate: " + _sell_why,
+                message="sell_gate: " + _sell_why,
+            )
+        if _sell_why:
+            print(f"[交易] ⚠️ {trade.symbol} sell_gate: {_sell_why}", flush=True)
         executor = _make_executor(request, trade.account)
 
         if trade.side.lower() == "buy":

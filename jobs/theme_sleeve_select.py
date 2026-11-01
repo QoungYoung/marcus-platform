@@ -35,7 +35,11 @@ def main():
             continue
         if (t.get("internal_linkage") or {}).get("state") != "linked":
             continue
-        if (t.get("b4") or {}).get("tag") in ("failed", "graduation"):
+        if (t.get("ret1") or 0) <= 0 or (t.get("breadth") or 0) < 0.35:
+            continue
+        if (t.get("b4") or {}).get("stale") or (t.get("b4") or {}).get("tag") in ("failed", "graduation"):
+            continue
+        if t.get("overhang") is None:
             continue
         roles = t.get("roles") or {}
         sym = roles.get("leader")

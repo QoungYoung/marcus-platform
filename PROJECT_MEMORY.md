@@ -3697,6 +3697,208 @@ end_date 用 as-of 日；开关 `STOCK_CONFIRM_LOOKBACK_DAYS`（默认200）。�
 - [2026-10-15 12:50] [工作记录] 跨链传导 chain_contagion：一半成立、一半自证伪（B 等级/腿标注另见 b4a5bf9b） — 承接「② 跨链陪葬/传导」（commit 318f3b52，未 push；前一条 B 等级+4-1..4-5 腿标注 = b4a5bf9b）。新增 apps/main_line/chain_contagion.py + jobs/eval_chain_contagion.py + backend/tests/test_chain_contagion.py（7 例，全绿）。链结构用 data/chain_map_<YYYYMMDD>.json ≤ as-of 最新快照（themes→segments→candidates 成员 + leading_verified 锚定），日线用本地 data/_bt_bars_gap.csv.gz 等 gz 库（无 DB 依赖）；触发＝「首次下穿 20 日低位」= 当日新低 ∧ 前一日非新低；开关 WOLF_CHAIN_CONTAGION 默认 0＝影子，risk_of() 关着恒 None；缺文件一律 fail-open。验收（2026-07-01~09-14，340 个锚定首次下穿事件、412 个有日线成员）：① 通用「同链连坐」**没有增量** ✗（同链未破成员 5 日中位 −0.26% vs 基线 −0.79% ⇒ 反而跑赢 +0.53pp；10 日 +0.83% vs +0.89% ⇒ −0.06pp；未破 vs 已破中位差 +0.81pp/−0.61pp 不稳定）⇒ 不当通用风控闸；② 他具体那条「大光(300308.SZ) 破位 ⇒ 国产半导体链」**成立** ✓（5 日中位 −2.99% vs 基线 −0.71% = −2.27pp；10 日 −7.10% vs +0.77% = −7.88pp），但基线事件仅 5~6 个（≈2~3 独立段）⇒ 只作观察项，需更长标的级数据再判；③ 提前量：成员自己首次下穿比链主晚**中位 7 个交易日** ⇒ 链主破位＝「同链两周内重点观察」触发器。同批还修掉两个自造信号的反例：用「收盘<MA60」当信号 ⇒ 全市场 256 只同时 high；用「20 日内新破」⇒ 单边下跌天天成立。
 - [2026-10-15 14:07] [工作记录] A：浪型链 operation 接入三个生产消费点（默认影子；A/B 一致率仅 37.6%） — commit 671a15a1（未 push）。新增 backend/app/services/wave_ladder_gate.py（backend 薄适配，sys.path 照wolf_theme_resilience.py:125 先例）；p2_entry_gate._wave_decision() / wolf_253_build._wave_op() / wave_alloc.read_wave_alloc() 各加一行 adopt 调用。入口 apps/main_line/wave_ladder.py::adopt_operation()：WOLF_WAVE_LADDER=0（默认）⇒ 原样返回生产 op（唯一新增行为＝写一行影子日志 logs/wave_ladder_ab.jsonl，logs/ 不可写时回落 LOG_DIR→data/→.；写失败也绝不抛）；=1 且算得出 ⇒ 接管；算不出/异常 ⇒ 回落 ✓。按需现算（ladder_operation 按 as-of 缓存），不依赖 artifact 新鲜度、不动调度器。影子双跑报告 jobs/ab_wave_ladder_vs_prod.py（对照 data/_bt_year 170 天生产 wave_state 快照，逐日因果）：① 一致率 64/170 = **37.6%** ⇒ 两套方法分歧大，**不能直接接管**；② 硬闸口（消费点真正看的一刀：defense/exit ⇒ 禁新建仓）：两边都禁 21 天 / **浪型链更严 24 天** /   **浪型链更松 7 天**（净更严 17 天）；③ 典型分歧：2026-08-12~18 生产 t_only、浪型链 side（止跌确认）；08-19 生产 t_only、浪型链 defense（跳空）。单测 backend/tests/test_wave_ladder_gate.py 5 例（默认透传/打开接管/算不出回落/异常兜底/影子日志去重/三处确实接线）。下一步（若要真接管）：先用影子日志攒够生产日的分歧样本，再按硬闸口那一刀评估净影响（多了 24 天拦截、少了 7 天）。
 - [2026-10-15 14:17] [工作记录] 切换完成：浪型链成为 wave_state 唯一写入方，旧 LLM agent 退役，历史 5070 份重生成 — commit b15b708d（未 push）。用户拍板「切换到新的浪型吧，旧的不用了，历史也重新生成」。① 写入方：apps/main_line/wave_ladder.py 新增 to_wave_state()/write_wave_state() + CLI（--write/--dated/--asof）；schema 与原 LLM 版完全兼容（level/sub_level/operation/confidence/reasons/date/features，消费方零改动），另加 source=wave_ladder/rung/levels/sub_legs。level 映射：4浪调整→d4、成功4-5→d5、失败4-5→d5、下跌1浪→down（wave_gate.py:14/t_monitor.py:2365/wolf_context.py:623 的指数大级别止损判据）；sub_level 用他的编号（4-3/4-4→4-5/失败5/C杀）。② 旧 agent 退役：wave_agent.main() 默认直接退出不写盘（WOLF_WAVE_LEGACY_AGENT=1 才恢复）。③ 调度：config/tasks.yaml 新增 wave_ladder_state（10 8 * * mon-fri → --write --dated）；表里原本没有 wave_agent 任务（旧 agent 是容器外 cron），所以只做加法；重启 worker 生效。④ 历史重生成：jobs/regen_wave_state_ladder.py --apply → 5070 份（live + 60 带日期 + 5011 回测快照），成功 5070/失败 0；备份 data/_waveagent_backup/wave_states_20261015_141337.tar.gz（3.0 MB）；87.8% 的 operation 被改写；新分布 d5/defense 2539、d5/side 1868、down/exit 428、d4/t_only 235；未动 26.7 万个 _bt_*/<day>/wave_state_<date>.json 归档副本（决策路径不读，加 --include-archives 才纳入）。⑤ ⚠️ 运维要点：data/*.json 在 .gitignore 里 ⇒ **重生成必须在生产机上再跑一次**（幂等），git 拉取不会带过去；旧容器外 cron 无需急着删（现在是 no-op）。⑥ 副作用（要盯）：失败5/defense 成为历史主档（≈50% 天数）⇒ 进门口（p2_entry_gate 的 defense/exit 硬拦、wolf_253_build.choose_intent 返回 None）在这半天数里禁新建仓；level=down 428 天会触发指数大级别止损。嫌紧就调 WOLF_WAVE_LADDER_NEAR/OFF_LOW/LOW_AGE/RESET/ZIGZAG。
+- [2026-10-15 14:47] [工作记录] 浪型链 golden set：用他的语料逐日打分（结构 4/6、相邻 5/6、操作同向 6/6） — commit 47934dac（已 push）。新增 jobs/eval_wave_ladder_vs_corpus.py（抽取+漏斗）、jobs/eval_wave_ladder_golden.py（人工标注 LABELS + 评分）、docs/wave-ladder-golden-set.md。漏斗：语料 25131 行 → 剥 [quote] 引用块后含浪型词 722 → 带指数语境（命中词 ±40 字内有大盘/指数/上证/科创/双创/市场）的显式级别候选 60 → 人工标注 21（可比 6 / 不可比 15，按「日×档位」去重）。结果：结构档严格一致 4/6=67%、相邻一致 5/6=83%；我们给的 operation = t_only×5 + side×1，与他实际做法（只做半导体 ETF 反抽 / 按 4 接 5 做）同向 6/6。唯一硬分歧 2026-07-24：他说「大盘走了完整 ABC…判断是转成下跌5浪级别」而我们 rung0 ⇒ 分歧在标签不在操作（他随后只做反抽）。关键局限：① 语料截止 2026-08-14，他 10 月词汇（下跌1浪/成功4-5/大B浪）在语料里 0 次（普查证实），10 月锚点只能取帖子本身；② 他 2025 用的是上一级（2浪/3浪、3-2/3-3/3-5）⇒ 全部 not_comparable，要给 2025 打分必须先扩等级维度到 3 浪族；③ 误命中（「4-5 天最多」里的 4-5 是**天数**）；④ 条件句不算状态（「一旦资金测试成功 4-4 就能走出来」已 skip）。公开资料结论：没有机器可读的 A 股历史数浪数据集（只有静态全景划分 / TradingView 自动计数指标 /非 A 股的 EW_Dataset）⇒ 他的语料是唯一带日期的金标准源。复跑两条命令见文档 §5。
+- [2026-10-15 15:09] [工作记录] 生产已切到浪型链（2026-10-15 当天完成）：wave_state 由 wave_ladder 写入、旧 LLM agent 变 no-op — 生产 = 81.70.44.68（ssh 别名 marcusrv，密钥 ~/.ssh/id_ed25519_marcus），仓库在 /opt/marcus-platform。**运行时是 Docker 容器**：marcus-worker(python -m app.worker_main) / marcus-backend(uvicorn) / marcus-frontend /marcus-dsh / marcus-postgres；容器挂载宿主机仓库目录（apps ro、backend/app、data、config、jobs、core、logs 均 rw）⇒ **宿主机 git pull 即对容器生效**（无需重建镜像）；容器内 python 3.11.15 + pandas ✓，而宿主机 python3 是 3.6（不认 from __future__ import annotations ✗）⇒ 一切 python 操作都要 docker exec 到容器里跑。切换步骤（已执行）：① 宿主机 git pull → HEAD 47934dac；② 容器内 python jobs/regen_wave_state_ladder.py --apply（51 份：live + 50 带日期件；8 份 2016-2022 回填件跳过＝生产指数数据只有 600 根、2024-04-22 起，窗口外）；③ docker restart marcus-worker（健康 ✓）⇒ 调度任务 wave_ladder_state(08:10) 注册成功（API 查到 ✓）。验证：生产 data/wave_state.json = wave_ladder / 2026-10-14 / d5 / 失败5 / defense ✓；容器内跑旧 agent ⇒ 打印退役提示、rc=0、不写盘 ✓。★ 生产口径的关键位比沙箱更贴他：因历史只有 2024-04 起，wave1_top＝**3674.4048(2024-10-08)**（＝他引用的数），origin 2704.09(2024-09-13)、prior_peak 4258.86(2026-05-14)；沙箱（2016+ CSV）算的是 3174.27 ⇒ 同一规则、不同数据窗口。今天(10-15)判定（生产口径、喂实时 bar）：prev 失败4-5 → **今日 下跌1浪 / exit / level=down**（跳空未收回 + 破前20日低 3767.23）⇒ 由明早 08:10 的 wave_ladder_state 落盘生效（16:30 index_daily_refresh 先把 10-15 写进 CSV）；也可 16:30 后手工docker exec marcus-worker python apps/main_line/wave_ladder.py --write --dated 提前落。SSH 通道不稳（大输出必断）：改为「生产上落文件 + 小批 cat 取回」+ 多次重试才稳定。
+- [2026-10-15 15:57] [工作记录] 浪型「档位→操作」权威表 + 语料挖掘：挖出下跌浪映射该改（应 defense+自救，不是 exit） — 用户问「每个浪型里原本有操作原则吗」⇒ 有，两张表：表A 浪型→操作 apps/main_line/wave_agent.py:311-327（d1..d5/down + 3-1..3-5 + 4-1..4-5 + ABC/B反/C杀/W底/双头M顶/衰竭，含每档操作原文）；表B 操作→总仓位 wolf_discipline.py:396（狼大 2026-01-17「主升 75%+/调整 50/有风险 30/下跌趋势就不做」，落配置 config/wolf_discipline.json tier_targets={build:75,t_only:50,side:50,defense:30,exit:50}）。新增 jobs/mine_wave_ops_from_corpus.py（档位关键词 × 附近操作词，按进行中/末段/转折确认分桶）+docs/wave-operation-table.md（原表出处/语料证据强度/新链覆盖/判据线索）。commit 已 push。语料证据量：3-2 回调 15+3+5 ｜ 3-3 最强主升 7+3+3 ｜ B反 7 ｜ C杀 6 ｜ ABC 6 ｜ W底 5 ｜ 双头 4 ｜ 下跌浪 3 ｜3-5 1+4 ｜ d2 2 ｜ d1/3-4 各 1（不可用）｜ **d5 衰竭 0（语料无）**。方法学教训：v2 单桶挖 ⇒ 同档极性自相矛盾（3-3 偏多4:偏空6）✗；必须按「档位×阶段（进行中/末段/转折确认）」分桶 ✓。★ 待拍板的映射修正：下跌浪他明说「熊市不做，什么都不做」(2025-09-09)、「最好的防守就是不做熊市和下跌浪」(2026-03-20) ⇒ 原表 down→defense（空仓防御，tier 30%）；我们给 exit（invest 0.70）✗（依据 2026-10-15「转为自救」）。建议：新建仓闸=defense ＋ 存量处置 mode=自救，拆开而不是压成一个 exit。改它会动 rung3 映射 ⇒ 需重跑 regen + 生产 live。缺口（旧 agent 退役后无人判）：d1/d2/d3/d5、3-1..3-5、ABC/B反/C杀/W底/双头/衰竭/下跌浪4反弹；补齐优先级：3-3/3-2 → B反/C杀 → 双头/W底 → d5/3-4/d1（语料不够，只能原表推断）。7 条可量化判据线索已写进表（3-2→3-3 站稳≥3日∧三大指数同步20日新高；C杀结束=放量站上黄白线≥1.5h；3-5 加速完成=缩圈到大票带指数∧小票跑输；双头=权重长上影+放量∧大盘缩量；3-2 后半段低点=区间∧极度缩量止跌 …）。
+- [2026-10-15 16:02] [工作记录] 下跌1浪 remap 完成（exit → defense + mode=自救）并已上生产（54b97c4c） — 用户拍板 A。原 down1→exit（invest 0.70）比原表松 ✗：原表 wave_agent.py:317 down=「空仓防御」、position_tier.CORPUS_PROFILE op_to_total exit=「下跌」=总仓 0%（「下跌趋势就不做」）、语料直证 2025-09-09「熊市不做，什么都不做」+2026-03-20「最好的防守就是不做熊市和下跌浪」；我们原给 exit 的依据是 2026-10-15「转为自救」—— 两件事被压成一个 op。改动：RUNGS[down1].operation exit→defense；新增 MODE_OF_RUNG/MODE_NOTE ⇒ to_wave_state 输出 mode=自救 + mode_note；schema 不变（消费方零改动）。逐消费点实测影响：新建仓闸不变（defense/exit 同黑名单）｜wave_alloc.invest 0.70→0.30 收紧 ✓｜t_base_floor.OP_BUCKET exit(0)→high(1/3)（卖腿留 1/3 底仓，止损/破位仍穿透；该文件自证 exit=0 会导致建仓→清仓循环）｜position_tier 总仓上限（默认 legacy 未启用）下跌 0%→有风险 30% ⚠️ 放宽，已标注，可用 mode=自救 分流（未做，留待拍板）｜level 映射不变 ⇒ 指数大级别止损照旧。单测 29 绿；docs/wave-operation-table.md §2.1 记了逐消费点影响；docs/PRODUCTION_PIPELINE.md §4 同步。生产：git pull → HEAD 54b97c4c；容器内 regen --apply（51 份成功）⇒ live = 2026-10-14/d5/失败5/**defense**/mode 空；带日期件 op 分布 {side23, defense28, t_only5, build1, exit1(窗口外老档未升级)}、mode 分布 {自救 1}。10-15 判定（喂实时 bar）= rung3 down1 / **defense + mode=自救** / level=down / sub=C杀 / invest 0.30 ⇒ 明早 08:10 落盘生效。
+- [2026-10-15 16:06] [工作记录] 补档 B：3-3 主升叠加档落地（7 段 32 天），3-2 被实测证明不可接管 — 用户拍板 B。设计：不插进 4 浪族单向链（3-x 时间上在链之前），做成**叠加档**（上锁 rung ≤ 成功4-5 才生效）。① 3-3：判据「连续 ≥3 日收盘 > 前 20 日最高」（他 2025-10-29「站稳 4006 三天」的量化）∧ 量能不缩 ⇒ level=d3/3-3/op=build；   实测 2016-2026 共 7 段 32 天（2018-01 / 2019-03 / 2019-09 / 2020-07 +11.6% / 2021-01 / 2024-09~10 +16.3% / 2025-07）；   其中 2018-01、2021-01 恰在顶部区 ⇒「3-3 确认」是追不是抄底（写进 expect）。② 3-2 不可接管（负结果）：与「4 浪调整」价格上不可区分 —— 2026-07-31 他叫「调整浪/4-2→4-3」，按 3-2 会给 side、链给 t_only ✗；   只留 main_up_pb_info 信息字段。要真做 3-2 必须先有等级模型。③ 首版用当日档(raw)判断叠加 ⇒ 2026-10-09（上锁 defense）被放宽成 side ✗；改为按上锁后 rung 判断 + 单测锁死。④ 未做到 ⛔：「三大指数同时化解顶背离」需要深证成指/创业板日线，本地只有 000001(+000852)。单测 32 绿；commit 已 push。**生产尚未重跑**（生产仍是 54b97c4c；本版会改写历史 32 天为 d3/build ⇒ 上生产需用户确认）。
+- [2026-10-15 16:11] [工作记录] datahub 有指数源：多指数日线同步 + 3-3 补上「三大指数同时化解顶背离」(sync3，滤掉 21%) — 用户提示「datahub里有指数数据源」→ 探明：core/tushare_relay.relay_query('index_daily') 对 399001.SZ/399006.SZ/000300.SH/000852.SH **有长历史**（创业板 3975 根到 2010-05、沪深300 5319 根到 2004-11）✓；但同日首轮指定start_date=20260801 只返回到 2026-08-03 ✗（疑似上游发布/缓存）⇒ 日线主源用东财 push2his（与上证同源、能到今天 ✓），中继作兜底。新增 jobs/sync_index_daily_multi.py（5 指数 → data/index_daily_<code>.json，格式与 wave_ladder 同 ✓）。wave_ladder 新增 sync3(asof, look=3)：上证/深证成指/创业板指**同日**收 > 各自前 20 日最高（他「三大指数同时化解顶背离」）；主升 3-3 要求 sync3 is not False（None=数据不全 ⇒ 退回单指数，不静默改语义）。实测同窗口（2004-11~2026-10，5319 交易日）3-3 天数 234 → **186（滤掉 21%）**。load_rows 加 (DATA,code) 缓存 + clear_rows_cache（walk 5000+ 天×3 指数必需）。单测 33 绿（+test_main_up_33_requires_sync3）。commit 19635b6a 已 push。⚠️ 副作用（已写进 docs §4.1）：同步脚本刷新 data/index_daily_000001_SH.json ⇒ 本机 walk 窗口 2016+ → 2004+，依赖该窗口的历史统计会变（引用须标窗口）；生产不受影响（生产用自己 16:30 刷新的 CSV，无该 JSON）。生产仍是 54b97c4c：3-3 叠加档 + sync3 **都还没上生产**（要上需 pull + 在生产跑 sync 脚本 + 容器内 regen）。
+- [2026-10-15 16:13] [工作记录] B 上线生产：3-3 主升叠加档 + sync3 三指数判据已生效（HEAD 49b75bc8） — 部署三步（生产 81.70.44.68）：① git pull → HEAD 49b75bc8（含 --skip-primary 修正）；② 容器内 python jobs/sync_index_daily_multi.py --skip-primary ⇒ 4 个指数（399001/399006/000300/000852）各 900 根、2023-01-30 → **2026-10-15** ✓，**主指数 JSON 未被创建**（生产主指数仍走 16:30 刷新的 CSV ✓ 未被污染）；③ 容器内 regen --apply ⇒ 51/51 成功（备份 wave_states_20261015_161301.tar.gz）。验证：live = 2026-10-14 / d5 / 失败5 / defense / mode 空（10-14 是 rung2，不带自救 ✓）；sync3 抽验 2024-09-26 True / 2025-07-22 True / **2026-05-13 True**（顶部日三指数也同步 ⇒ 印证「3-3 是追不是抄底」）/2026-10-14 False / 2026-10-15 False ✓；带日期件 level 分布 {d5:45, d4:8, down:2, d1:2, d3:1}（d1/d3 属窗口外老档未升级 ✓）。明早 08:10 的 wave_ladder_state 会写 10-15 = rung3 / defense + mode=自救 / level=down / sub=C杀（16:30 CSV 刷新后才有今天那根 K 线；也可 16:30 后手工 docker exec marcus-worker python apps/main_line/wave_ladder.py --write --dated 提前落）。遗留：① 8 份 2016-2022 窗口外老档（决策路径不读）；② position_tier 的 mode=自救 → 「下跌 0%」分流未做（该表默认 legacy 未启用）。
+- [2026-10-15 16:34] [工作记录] portfolio 页「上证指数 · 浪型链」卡片上线（K线+浪型色带+悬停操作建议），含三处容器坑 — 产物：backend/app/api/wave.py（GET /api/v1/wave/index-history?days&code）＋ frontend/src/components/IndexWaveCard.tsx（echarts 蜡烛 + 浪型档位色带 markArea + 十字准线 tooltip：开高低收/涨跌幅 → 浪型名/级别/子级别 → 操作建议+投入系数+模式 → 预期 → 依据）＋ PortfolioPage 主列顶部挂载 ＋ client.ts 的 waveApi；dist 已重建并提交。commit 72087a7a / 8f5145b6 / 635dfa7b。★ 三处容器坑（都在生产暴露、本地不复现）：  ① **生产 backend 容器 DATA_DIR 被设为空串**（DATA_DIR= ✗）⇒ os.environ.get("DATA_DIR","data") 不取默认值 ✗，     路径全变成 './xxx' ⇒ 接口空返回。修：empty-safe 回落 + _data_dir() 把解析结果**写回环境变量**再 import 浪型链     （它 module 级读 DATA_DIR）✓。**通用教训：容器里用空串环境变量当"未设置"会静默跑偏**。  ② **backend 容器无外网**（东财 RemoteDisconnected ✗，worker 容器也无、宿主也无 ⇒ 该环境只有中继可用 ✓）。     修：取数顺序 = 东财 → 本地 K线缓存 index_kline_<code>.json（worker 侧同步 ✓）→ 本地 CSV（近月只有收盘 ⛔ 合成并标注）。  ③ **marcus-frontend 是镜像内烘焙 dist**（无挂载 ✗）⇒ git pull 不更新前端；本次用 docker cp frontend/dist/. 容器:/usr/share/nginx/html/ ✓     （durable 做法仍是重建前端镜像；已验证容器 index.html 引用新 bundle hash ✓）。配套：新增调度任务 index_kline_sync（15:05 工作日，走 worker 容器 ✓，日志 logs/index_kline_sync_{date}.log）；jobs/sync_index_daily_multi.py：行格式 6 字段（前 4 项与浪型链 load_rows 兼容 ✓）；主指数写 index_kline_000001_SH.json（**绝不写浪型链的 index_daily_000001_SH.json** ✗ 否则改主指数数据窗口 ⇒ 可能挪动 3674.40 结构位）；中继分支也存开/低 ✓。生产实测（HEAD 635dfa7b）：接口 ohlc_source=local_kline_cache / bars 30 / waves 522 /last bar(2026-10-15) O 3710.70 H 3724.56 L **3674.82** C 3707.48 ✓（与实时报价一致）；last wave = 下跌1浪 / down / C杀 / **defense + mode=自救** / invest 0.30 ✓；页面 HTTP 200 ✓；任务已注册 ✓。
+- [2026-10-15 18:13] [工作记录] 补档 C 完成：防顶 d5/末段+双头(exit)、4-1(defense)、C杀语义修正；ABC 放弃、B反只作标签 — 用户拍板「能补的都补上」。照原表 operation 不自己编 ✓。commit 1a8068f5 已 push。已补：① d5 末段/衰竭 ⇒ exit（高位区 ∧ ≥2 个顶部信号：缩量新高/长上影/滞涨/双头）命中 67 天，   含 **2026-05-14 = 4258 那个顶 ✓**（此前该日是 d5/4-5/side=可参与 ✗ 语义错位）；   ② 双头/M顶 ⇒ exit（两相近高点 ≤3% ∧ 第二个未创新高）11 天；③ 4-1 回调初 ⇒ defense（rung0 ∧ 距高≤5% ∧ 近5日≤−2%）12 天；   ④ C杀 语义修正：只标放量急杀当日（日跌≥2% ∧ 放量≥1.2×）11 天，其余 down1 标「下跌1浪」（原来整段都叫 C杀 ✗）。放弃/未做（诚实）：ABC 判据太宽（实测 1614 天 ≈ 整段下跌 ⇒ 无信息量 ✗ 删除）；B反 只作 down_tag 标签   （原表给 t_only，而 down1 已是 defense+自救 更严 ⇒ 覆盖即放松 ✗）；下跌浪4反弹 需子级计数 ✗（等级问题）。仍缺（需等级模型）：d2 / 3-1 / 3-2 / 3-4 / 3-5 ＋ 下跌浪4反弹。验证：单测 39 绿；未来函数检验 42 天 0 不一致 ✓；锚点未变（07-31 t_only / 08-05 side / 08-19 defense / 10-09、10-14 defense）✓。全档分布（5240 天）：d5/4-5/side 2183 ｜ d5/失败5/defense 1297 ｜ down/下跌1浪/defense 797 ｜ d3/3-3/build 179 ｜   d4 各子腿 t_only 561 ｜ d5/末段/exit 67 ｜ d5/双头/exit 11 ｜ d1/W底/build 50 ｜ d4/4-3/side 33 ｜ d4/4-1/defense 12 ｜ down/C杀/defense 11。⚠️ 生产仍是上一版（未 regen）：这批会把 79 天改成 exit（防顶）+ 12 天 defense + 50 天 d1/build ⇒ 需用户确认再上 ✓。
+- [2026-10-15 20:29] [工作记录] B/C 补档 + 卡片染色已上生产（HEAD b5e5ec94）；GitHub 不通 → 用 git bundle+scp 绕过 — 用户确认后上生产 ✓。**GitHub 从沙箱端不通** ✗（ghfast.top hang、ghdirect 也不通）⇒ 用 `git bundle create 40f99d0f..HEAD` + scp 到 /tmp，生产上 `git fetch -f /tmp/deploy.bundle HEAD && git merge --ff-only FETCH_HEAD` ✓（**同 commit hash ⇒ 之后 push 恢复再 pull 不冲突** ✓）。⚠️ bundle 里含**别的会话的 3 个做T提交**（b5e5ec94/f33d074e/a40ef152，均注明开关默认 0 ✓）—— 本仓约定 main=部署分支，故一并带上（需回退可单独 revert ✓）。部署动作：pull（40f99d0f→b5e5ec94）→ docker restart marcus-backend → docker cp frontend/dist/. marcus-frontend:/usr/share/nginx/html/→ 容器内 regen --apply（51/51 ✓）→ 验证。验证：live = 2026-10-15 / down / **下跌1浪** / defense / 自救 ✓（C杀 语义修正后不再是整段 C杀 ✓）；接口近 250 天分布 = {4-5:115, **末段:4**, 失败5:100, 3-3:5, **下跌1浪:13**, **4-1:1**, 4-2→4-3:12} ✓；**2026-05-14（4258 顶）= d5/末段/exit ✓✓**（此前是 d5/4-5/side=可参与 ✗）；页面 HTTP 200 ✓、前端 bundle = index-C1qvEPRy.js ✓。卡片同时升级：色带按 operation 五色（建仓绿/观望蓝/只做T琥珀/防御紫/兑现红 ✓ 原来按档位序号 ⇒ 新档串色 ✗）+ 图例 + 悬停新增「当日许可」行。遗留：GitHub push 仍在后台重试（job bash-218 ✓）；⛔ 仍缺 d2/3-1/3-2/3-4/3-5 + 下跌浪4反弹（需等级模型）。
+- [2026-10-15 21:06] [工作记录] W底/双头 图内标注上线（生产已有 2024-09-30 W底）；显示层独立算，绝不动链的数据窗口 — 用户问「W底确认和双头能直接在图里标注出来吗」⇒ 做并上线 ✓（commit 015449d4，生产 HEAD 同）。画法：W底 = 两低点打点(W1/W2) + 颈线虚线(带数值) + 确认日 pin「W底确认」（绿）；双头 = 两高点(顶1/顶2) + 颈线(中间低点) + 确认日 pin「双头」（红）；同形态按指纹( kind+两端点日期 )去重 ⇒ 只画一次 ✓。★ 最关键的设计决定：**形态标注在显示层单独算**（backend/app/api/wave.py::_display_patterns + display_patterns 字段），  **绝不动浪型链的数据窗口** —— 实测：把生产的链序列从 600 根接到 954 根会把 **1浪顶 3674.40 → 3174.27** ✗✗  （那是铁律②的失效线，他引用的也正是 3674 ✓）⇒ 链继续用 600 根 CSV，画图用 K线缓存(~950 根) ✓。踩到的两个算法坑（都已修 ✓）：  ① 只看「最后两个端点」会错过真正配对 —— 最近两个低点是 2024-09-13 + 2025-04-07（差 14% 不成形 ✗），     真正成对的是 2024-02-05 + 2024-09-13 ✓ ⇒ 改成**全配对扫描** ✓；  ② 确认判据不能用**今天**的量价（今天量比 1.1 < WB_VOL 1.2 ⇒ 历史形态全判不成立 ✗）⇒ 改成**按历史当日**扫出确认日 ✓。另加：显示专用回看窗 WOLF_WAVE_LADDER_MARKS_WIN（默认 900 ✓）与状态判据的 WB_WIN=180 分开（状态要新鲜才有操作意义 ✓）。生产实测：接口 display_patterns = [w_bottom 颈线 3174.27 确认日 20240930 端点(20240205@2702.19 / 20240913@2704.09)] ✓  = 发动这波行情的那次双底 ✓；卡片窗口默认 250→750 天（250 天内通常一个形态都没有 ✗）。部署：正常 git pull（GitHub 恢复 ✓）；前端 bundle index-DoPHbEO_.js ✓。
+- [2026-10-15 21:44] [工作记录] 卡片再升级：稀有档在色带打标签（末段·兑现 / 3-3建仓 / 4-3筑底 / W底）—— 生产已上 e7f421f8 — 用户「可以」⇒ 给稀有档加区间标签 ✓（纯前端，从 waves 的 sub_level 推导，无需改后端 ✓）。规则：RARE_LABEL 映射（末段→末段·兑现降仓 红｜4-3→4-3筑底·可分批接 蓝｜4-1→4-1回调初·观望降仓 紫｜W底→W底确认·建仓 绿｜3-3→主升3-3·建仓 绿｜双头→双头/M顶·见顶防跌 红 ✓）；带长 ≥3 天才显示（防碎片化 ✗）；取带内第一个命中 ✓。生产实测（750 天窗口）：稀有档天数 {3-3:18, 末段:6, 4-1:1}；末段日 = 20250827/20250918/20251114/**20260114/20260303/20260514** ✓（2026-05-14 = 4258 那个顶 ✓ 现在图上有明显红带标签 ✓）；display_patterns 仍有 2024-09-30 W底（点位+颈线+确认 pin ✓）。页面 HTTP 200 ✓；bundle index-reKEYaZy.js ✓（宿主/容器一致 ✓）；commit e7f421f8 已 push ✓。小限制：生产链窗口短（600 根）⇒ 状态里没有 W底 ⇒ W底的**带标签**不显示（但点位/颈线/pin 来自显示层 ✓ 正常显示 ✓）。
+- [2026-10-15 21:59] [工作记录] 等级模型第一实验：datahub 有周K（1000 根/2007 起）；周线档能分开「上升未破」与「已失败」 — 用户提示「我们是有周K的，你查查 datahub」⇒ 确认 relay_query(index_weekly) 可用 ✓（000001.SH/399001.SZ 各 1000 根2007-03-30 起、399006.SZ 838 根/2010 起，均带 amount ✓、最新 2026-10-09 ✓）。新增 jobs/sync_index_weekly.py → data/index_weekly_<code>.json（与浪型链同 4 字段格式 ✓）；★ 刻意**不让链的生产口径读它** —— 免得把 1浪顶 3674.40 挪走 ✗（实测接长日线就会挪 ✗）。第一实验（jobs/eval_degree_weekly.py，纯测量）：同一套链跑在周线上，对照他**明确说看周线图**的那段：  · 2025-10-17 他「主升级别大3浪（内部=最强3-2）」→ 周线档 rung1 成功4-5 / d5 / side ✓（上升结构未破 ✓）  · 2026-07-31 他「整波为调整浪（4-2→4-3）」→ 周线档 rung2 失败4-5 / d5 / defense ✓（上升结构已失败 ✓）  ⇒ 方向成立：周线档把「主升中的回调」与「大级别调整」分开了 ✓✓（正是日线做不到的那件事）。落地还差三样：① 参数按度重标（现在 HI_WIN=60/RALLY_WIN=20 跑周线 = 60/20 周 ≈ 14/5 个月 ⇒ 只到中级，   2025-06 还在 rung2↔rung1 反复切 ✗）⇒ 大级别应放到 ~100 周量级；② 命名映射层（周线用 4 浪族词汇，   要映射到他的 大1/大2/大3/3-2 口径）；③ 高一级天生滞后（2026-05 他喊 B反 时周线仍 side ✓，07-31 才转 defense ✗）   ⇒ 高一级适合定仓位与「度」，不适合定时点 ✓（时点继续交给日线链 ✓）。另：2026-03-23 他说下跌1浪 时周线档是 rung1/side ✓ —— 不矛盾：那是**日线级别**的下跌1浪 ✓（周线上只是回调 ✓）。
+- [2026-10-16 08:37] [工作记录] E1b 负面结论：换成「他的操作」做 ground truth，日线×周线（度）仍未通过验收 — E1b（等级模型第二轮）做完了，结论仍是**负面** ✗，但不是白跑。
+
+做法：新增 jobs/mine_wave_ops_golden.py（从 25131 行语料挖「他明确动手」候选，三道门：指数/账户语境 ∧ 第一人称动作 ∧ 非条件句；方向靠人工标注）+ jobs/eval_wave_ladder_ops_degree.py（人工 golden set + 三组打分 + 基线 + McNemar）。每条标注带日期+原话，写在脚本 LABELS 里可逐条复核 ✓。
+样本：集 A 严格 25 条（多 6/空 19，多数类 76%）、集 B 含 3 条「条件已用数据核实成立」28 条（多 8/空 20，71%）；hold 4 条不进二分类；不可比 10 条逐条写原因。
+
+数字（A/B）：
+① 日线档 36%/36%；② R2 回调豁免（日线说空∧周线未破⇒读作3-2⇒多）**20%/25%**（反而更差）；R2b 40%/43%；R1 度优先 48%/50%；R3 一致才看多 68%/64%（最好）；③ 基线 多数类=全给空 **76%/71%**、全给多 24%/29%。
+McNemar ①vs②：0/4（p=0.125）、1/4（p=0.375）⇒ 四条预设规则没一条打赢 ①，也没一条打赢基线 ⇒ 未通过 ✗。
+
+三条原因：① 他的操作轴是**仓位管理/择时**，不是浪型方向 —— 他指数级动作里 76%/71% 是减仓/不参与（E1 的选择性偏差原样重现）；② 我们 `defense` 对他「真在减」**4/4 精确**，而 `side`(可参与) 只有 5/17=29% —— `side` 是「结构没坏、可参与」**不是买信号**（他在 side 期间照样减仓，如 2026-04-23「大盘BOLL中轨我减仓了」）；③ 周线「度」在这里反而反相关：日线说空时周线「未破」的样本他一次没买（A 4/4 空、B 5 中 4 空）⇒ R2 把这 4 条正确的空全翻成多，就是 20% 的直接原因。
+
+按卡上条件执行：② 未通过 ⇒ **没有**给 wave_state.json 加 degree 字段、**没有**做影子接入（没证据的字段就是包装）；operation 映射与 data/ 主指数数据一行未动 ✓；新加 1 个守护测试（test_window_defaults_unchanged 钉死 MIN_BARS/HI/RALLY/ORIGIN_BARS 默认值 = 80/60/20/900，防顺手改默认值挪生产档位）；doc 增补 §4.3。下一步建议（E1c）：别再评方向吻合率，改做条件分布 —— 只看我们 side 的日子，从他减仓日的共同点（阻力位/BOLL 中轨、股指交割日 2026-01-14、节前 2025-04-29、周末风险 2025-06-13、量化抛压 2026-03-22）找**择时**判据，天然是影子（在 side 上加「减仓窗口」标记，不动 operation）。
+- [2026-10-16 08:57] [工作记录] 「4-3 怎么不见了」排查：链没坏，是显示层漏了「进行中」写法 + 叠加档卡在自设缩量门槛 — 排查「4-3 怎么不见了」（用户问：上一个浪型脚本不是能做 4-3 吗）⇒ 确认链**没坏**，是三层缺口叠在一起，只修了显示层 ✓（commit da824098）。
+
+三层实测数字：
+① 结构判定**一直有效** ✓：2026-07-20~08-04 链在 rung0「4浪调整」，sub_legs 的 4-3 = 20260717 → 确认 20260810，逐日 sub_stage = 「4-2→4-3」。全历史 rung0 共 650 天。
+② **显示层漏匹配** ✗（本次修）：卡片 IndexWaveCard.tsx 的 RARE_LABEL 只做精确匹配 '4-3'，而那段 sub_level 是「4-2→4-3」（进行中/未确认）⇒ 命不中；全历史 sub_level=="4-3" 精确命中 104 天（2016+ 52 天：2021/2022/2023/2024），**最近一次 2024-04-25** ⇒ 2025/2026 两年一次没打标。修法：加 RARE_FORMING（'4' + 拆分 '→' 兜底），「4-2→4-3」⇒「4-3筑底中（未确认）」；用链里真实出现过的 10 种 sub_level 取值逐个验证 ✓（4-4→4-5 仍不打标 ✓）。已 npm run build 更新 dist（vendor chunk 只换 hash、大小一致 ✓）。
+③ **操作叠加档 basis_43 2016 年后从未触发** ✗（未动，待拍板）：全历史 33 天全在 2005–2015；卡在自设代理 BASE43_VOL=0.8（2026-07 那段其它 4 条全中、只差缩量：vol60 0.99→0.87）。离线 A/B：0.8 → 2016+ 0 天｜0.9 → 67 天/2016+ 17 天｜1.0（量能在缩）→ 111 天/2016+ 53 天（含 2026-07-24~08-04 与 2026-03-30~04-07）。
+④ 顺带修语义不符：标签原写「4-3筑底·可分批接」（原表 side 口径），但本链 4-3 的日子**全部**是 operation=t_only（精确 104 天 + 进行中 27 天，无一例外 ✓）⇒ 改为「4-3筑底·只做T」（纯前端，operation 一行未动 ✓）。
+
+红线（写进 docs §4.4）：要让 4-3 真出 side 就得放 BASE43_VOL，但理由只能用他原表的定性依据（4-3 筑底=side、地量止跌），**不能用**「这样能让 E1b 里 2026-04-02 那条从错变对」✗ —— 那就是按标注集调参。
+- [2026-10-16 10:09] [工作记录] E1c 负面结果：side 日「减仓窗口」六类线索 lift 全不过闸（precision/基础率/lift 全部报出） — E1c（条件分布）做完了，结论**负面** ✗：只看我们链 operation=side 的日子，用他的原话当 ground truth，六类他反复讲过的择时线索没有一条能验收。
+做法：新增 jobs/eval_side_trim_windows.py（冻结复用 E1b 的 golden set，只留 side 日，三道门一道未放宽 ✓）→ data/_side_trim_windows.json。
+样本与基础率：集 A side 20 条（二分类 17 = 多5/空12）⇒ 基础率 0.706；集 B side 22 条（二分类 19 = 多6/空13）⇒ **基础率 0.684**；集 C 敏感性 21 条 ⇒ 0.714。A/B 均 ≥15 条 ⇒ 未扩挖 ✓。
+结果（集 B，precision / lift / 标记天数 / 召回 / 单侧 Fisher p）：P1 站上中轨 0.750/1.096/16/0.923/0.222；P2 收破中轨 0.500/0.731/2/0.077/0.912；P3 贴中轨±1σ 0.667/0.974/9/0.462/0.741；P4 逼近压力位 0.769/1.124/13/0.769/0.257；E1 交割日±1 0.500/0.731/4/0.154/0.929；E2 交割周 0.600/0.877/5/0.231/0.849；E3 节前1~2日 1.000/**1.462**/1/0.077/0.684；E4 周五 0.667/0.974/3/0.154/0.778；E4b 周五(发帖日) 1.000/1.462/2/0.154/0.485；V1 放量未涨(分位) 0.778/1.137/9/0.538/0.370；V2 放量未涨(1.2×) 1.000/1.462/3/0.231/0.295；V0 当日收跌(无出处对照) 0.733/1.072/15/0.846/0.373 —— 全部 ✗；最好组合 E3∨V2 4天4/4 lift 1.462 p=0.184 ✗。验收闸（先声明）：标记≥6 ∧ p<0.05 ∧ A/B 同向。
+关键机制数字：基础率 0.684 时，100% 精确的线索也需 **≥8 个标记日**才可能 p<0.05（A 集 0.706⇒≥9），实际只有 1~3 天 ⇒ 是「无证据」不是「已证伪」。
+正面副产品 ✓：① 事件窗口的**后果**（全部 253 个 side 日，2025 起）——E1 交割日±1 前瞻5日 **+0.78%** vs 未标记 **+0.07%**（Welch p=0.020）、E2 交割周 +0.56% vs +0.05%（p=0.034）⇒ 他减仓日不是指数高点，是**在反抽里减仓、过了交割日再买回**（印证 2026-01-14 原话）；② 可复用零件：交易日历（每月第三个周五±1/交割周、长假闸 = 相邻交易日相隔 ≥4 自然日）+ precision/lift/召回/Fisher 模板。
+未做（硬约束 ✓）：不改 operation 映射、不动 data/ 主指数（未给 000001.SH 接长日线）、**不加影子开关**（负面结论 ⇒ 无开关可加，同 §4.3 处置）、未部署；证据 = 运行前后 wave_state.json/index_daily_000001_SH.json/wave_ladder.py 的 md5 逐字节相同 + `git diff HEAD -- apps/ data/` 为空；`pytest -k wave` 58 passed/10 skipped。文档已增补 docs/wave-operation-table.md §4.5（含全部 precision/基础率/lift/标记天数/召回）+ §5 复跑命令。
+- [2026-10-16 10:48] [工作记录] E1d：他的「减仓窗口」是加仓窗口 —— 仓位序列换载体后事件线索方向相反，减仓线索四种度量全败收线 — E1d 完成（换 ground truth 载体）：把他报出的**仓位数字**抽成时间序列，再检验 §4.5 的六类「减仓窗口」线索 —— 结论**方向相反** ✗：事件类线索在他的仓位上是**加仓窗口**，不是减仓窗口。
+产物：jobs/mine_wolf_pos_series.py（三道门不放宽：裸仓位词/子仓剔除/期货杠杆剔除/第一人称/条件+**计划**句入 COND 桶不观测；层·成 ×10；半仓满仓空仓不给数字，只进漏斗；同日优先「收盘」口径否则当日最后一条，全部候选留档）→ data/_wolf_pos_series.json；jobs/eval_pos_events.py（T1 日度水平 / T2 区间 Δ / T3 precision·lift）→ data/_pos_event_eval.json。
+序列规模：语料 25131 行 → 进序列 252 条 → **181 观测日**（2016-01-05~2026-08-14）｜中位仓位 40%（最低 5%/最高 100%）｜相邻变动 180 次（加仓 80/减仓 69）｜跨期中位 5 交易日｜逐年 2016:66 / 2021:25 / 2022:23 / 2025:48 / 2026:19；可行性闸（≥60 观测日 ∧ ≥25 次变动）过闸 ✓。
+结果（全样本 123 个 gap≤5 短区间，基础率 P(Δ≤−5pp)=**0.358**）：Δ均值全为**正** —— 交割日±1 **+2.58**（lift 0.812, n=31）、交割周 **+4.49**（0.773, 47）、节前 **+3.00**（1.271, 11）、周五 **+2.15**（1.021, 52）、放量未涨(分位) **+10.76**（0.822, 17）、逼近压力位 +0.10、贴中轨 +0.96、收破中轨 +1.36；**无一显著**。2025+（67 观测日/46 短区间，基础率 0.370）：节前水平中位 **73% vs 50%**（n=3, p=0.000 ⇒ 节前他仓位**更高**）✗；**唯一符号正确的是他自己写下的规则**「收破中轨就减仓」（2026-02-13 原话）Δ **−16.25pp**、lift 1.353（n=4, p=0.201）⇒ 仍不可验收 ✗。
+与 §4.5 互相印证 ✓：交割日±1 前瞻 5 日 +0.78% vs +0.07%（p=0.020）+ 本卡 Δ +2.58pp ⇒ 与 2026-03-22 原话「一旦放量回到我卖出位置，我就买回」一致。
+正面副产品 ✓：① 仓位序列成为**可用锚点**（最高/最低清单可逐条复核）；② 他报出的**实际暴露**与我们链的档方向一致但**不显著**（side 中位 50% vs defense 40%，Welch p=0.361；vs t_only 40%，p=0.086）⇒ 再次印证「档是状态、不是仓位预测」；③ 反例逐条不藏（2025-04-09 链=下跌1浪 他 100%；2026-02-12 链=失败4-5 他 80%）。
+收线建议：减仓线索这条线在**四种度量**下全败（§4.2 极性吻合 / §4.3 操作吻合 / §4.5 条件分布 lift / §4.6 仓位序列 Δ）⇒ 不再找他本人发言里的择时线索；保留资产 = 仓位序列(181 日) + 交易日历（交割日±1/交割周/长假闸）+ 度量模板。
+硬约束 ✓：不改 operation 映射、不动 data/ 主指数（未接长日线）、**不加影子开关**（方向相反更不该加）、未部署；运行前后 wave_state.json/index_daily_000001_SH.json/wave_ladder.py 的 md5 逐字节相同，git diff HEAD -- apps/ data/ 为空。文档 §4.6 已增补（含全部数字）+ §5 补 2 条复跑命令。
+- [2026-10-16 12:11] [工作记录] 宏观事件晨报上线：agent（08:20，调面板工具+持仓）→ 落盘 → 平台 08:35 推 QQ（端到端已验） — 用户 2026-10-16 要求：每交易日早上推送「距下一个会议还有多久 / 有什么影响 / 有什么建议」，且**是一个 agent**、只交易日触发、**结合当前持仓**、**去 dsh 调各数据工具**分析。实现（刻意分工 ✓）：  · **分析侧 = DSH agent 卡**「宏观事件晨报」id 7e53e11f-cb58-4499-8182-419991131ba8，**cron 20 8 * * 1-5** ✓；    它先过交易日闸（relay trade_cal is_open ✓，非交易日直接结束、不写文件 ✓）→ 读 data/macro_calendar.json 算    距下一个 tier≥3 事件的自然日/交易日 → 加载 marcus-panel-tools 技能（21 个只读工具，base http://81.70.44.68/api/v1/ ✓）    只挑 3~5 个调（省配额 ✓）→ 读 data/wave_state.json → 产出固定结构晨报（≤800 字）→ 落盘 data/macro_briefing_<date>.md ✓。  · **投递侧 = 平台 job** jobs/push_macro_briefing.py（**08:35** 任务 macro_briefing_push ✓）：读晨报 → core.qq_notifier.send_c2c_message ✓    （先例 jobs/gate_failure_report.py:110 ✓）；无文件 ⇒ exit 0（fail-open ✓ 节假日/agent 未跑都走这条 ✓）；    data/_macro_briefing_pushed.json 去重 ✓（同日重复跑不重推 ✓）。为什么分开：DSH 侧没有推送端点 ✗；平台侧有现成 QQ 通道 ✓。**硬约束（写进卡里）**：只读、不下单、不改 wave_state/operation、**禁止编造未验证的统计数字** ✗ ——  目前「事件前减仓」的效果确实还没回测（需 FXMACRODATA_API_KEY 拉历史 ✗）⇒ 它如实写「历史影响未验证」✓。端到端验证（2026-10-16 试跑 ✓）：晨报内容 = 距 FOMC 13 自然日/9 交易日 ｜ 未来 7 天表含时区→A股冲击换算 ✓ ｜  影响（含数据缺口：指数技术接口返回空 ✗、黄金坑 as_of 滞后 1 个月 ✗）｜ 建议 4 条（结合持仓 SH600299 资金背离 + 浪型 defense +  与 scan green 的分歧登记 ✓）；手动实推成功 ✓（用户 QQ 应已收到 ✓）＋ 去重验证通过 ✓。配套：FXMacroData 日历同步（macro_calendar_sync 06:30 ✓，免 key USD 415 条到 2027-12 ✓ + 政策会议规则 63 条 ✓，  478 条合并、68 条 tier≥3 ✓）；prod HEAD 8c2da2a3 ✓；worker 已重启 ✓（新任务 + 其他会话修复同时生效 ✓）。待办：① 用户给 FXMACRODATA_API_KEY ⇒ 回测事件前减仓是否有效（基线+安慰剂 ✓）；② 查两个数据缺口（指数技术接口/黄金坑滞后）；  ③ 可选：与既有 macro_state_collector(15:06) 合并口径。
+- [2026-10-16 15:53] [工作记录] 多因子风险面板落地（jobs/risk_panel.py + 每日双文件） — 实现了「多因子风险面板」（影子面板：只输出状态+约束，不做方向判断、不下单、不改 operation/config）。
+落盘：jobs/risk_panel.py（可复用生成器，含交易日闸：非交易日直接退出不写文件；--force 补跑）。
+产出：data/risk_panel_<YYYYMMDD>.json + .md（md 脚本内断言 <=600 字，超出打警告）。
+6 因子（各 0~3 分，合计 18）：①浪型档位（down/defense⇒3）②事件窗口（距下一 tier>=3 事件交易日数，<=2⇒3）③美股位置（纳指距 60 日高/近 5 日/20 日实际波动；明示「新高不预示下跌，只提高传导速度」）④A股量能（成交额/20 日均值，<0.9⇒2；缩量双解不单解）⑤板块资金（科技/半导体主力净流入流出）⑥持仓暴露（实际仓位 vs 档位目标）。
+档位分带：0-4 normal / 5-9 elevated / 10-18 high。仓位上限＝基准 ÷ β（科创50 1.69、半导体ETF 1.62、创业板指 1.72、科技 ≈基准×0.6），适用窗口＝事件前 2 交易日~后 1 交易日。
+2026-10-16 首次产出：elevated 7/18（结构 defense 3、事件窗口 1、美股位置 2、量能 1、板块资金 0、持仓暴露 0）；FOMC 2026-10-28 为下一 tier>=3 事件，窗口 2026-10-26~10-29。
+关键读数修正：当日「纳指新高」的定性前提在数据上不成立——纳指 20261015 收 26713.03，低于 60 日高 27722.75（2026-10-06）3.64%。面板按读数如实记录并单列 divergence 字段。
+- [2026-10-16 15:55] [工作记录] 风险面板 1+3 落地：补齐红利/涨跌家数/拥挤度读数；v2 卡每交易日 08:15 积累可验收记录 — 用户 2026-10-16 决定「1+3」：① 补数据缺口 ② 暂不接仓位、先积累记录。① 数据缺口（已补 ✓，代码 jobs/risk_panel_inputs.py，commit 2fce2a6c ✓）：  · **红利相对强弱**（新接 中证红利 000922 / 上证红利 000015 / 红利ETF 510880 日线到 2026-10-16 ✓）：    近 20 日 红利/沪指 **+3.48%**，250 日分位 **82%** ✓ ⇒ **用户的前提「资金进红利」被数据确认** ✓。  · **涨跌家数**（relay daily 全市场 ✓）：2026-10-15 上涨 430 / 下跌 5108（占比 7.8%）✓ ⇒ 极端广度洗盘 ✓；    此前唯一来源平台 market_diagnosis 表末行 2026-07-13（过期 95 天 ✗）⇒ 现在由汇总器实时算 ✓。  · **科技拥挤度代理**（⛔ 自设）：半导体ETF 成交额/沪市 = 0.0145（250 日分位 82% = 拥挤 ✓）叠加 20 日超额 -8.37% ✓    ⇒ 形态 = 高拥挤 + 已走弱 ✓（与用户「高位出货」读法一致 ✓，但仍是代理 ⛔）。  · ⛔ 仍缺并如实记录：ETF 级资金流（平台 /market/moneyflow 对 ETF 返回 503 ✗，东财+Tushare 均无 ✗）、行业拥挤度权威口径（无 ✗）。② 积累记录：v2 卡 acb3249f-cfae-4a3d-96e9-fb164bb5ef26（cron 15 8 * * 1-5 ✓）—— 第一步强制跑汇总器 ✓，  8 因子打分 + 风险档 + 按 β 折算的仓位上限（科创50 ÷1.69 / 半导体 ÷1.62 / 创业板 ÷1.72 ⇒ ≈ 基准×0.6 ✓），  落盘 data/risk_panel_<date>.json（含 risk_grade / factors[score,reading,source,proxy] / caps / gaps / vintage ✓）；  v1 卡 9f5c716c 已归档 ✓（避免同日跑两遍 ✗）。3~6 个月后用它对照「风险档 vs 后续 5 日实际波动/最大回撤」✓（度量是波动 ✗ 不是方向 ✓）。★ 本轮最有价值的两个事实：  · 用户「纳指刚新高」前提**不成立** ✗ —— 纳指 60 日高在 2026-10-06，10-15 收 26713 距高 -3.21%~-3.64% ✓    ⇒ 更准确的说法：**10-06 起美股已在走弱，CPI 是加速器而非引爆点** ✓；  · 用户整体读法（缩量 ✓ + 红利占优 ✓ + 拥挤 ✓）**三项都被数据确认** ✓，只有「新高」这一项错 ✓。排期（每交易日）：08:10 浪型 → **08:15 风险面板 v2** → 08:20 宏观事件晨报 → 08:35 推 QQ ✓。
+- [2026-10-16 17:15] [工作记录] FOMC 事件提醒演练（T-7）：四段建议落盘 event_alert_20261016.md — 2026-10-16 演练完成（覆盖现有演练文本 ✓）。链路：① jobs/event_alert.py --force ⇒ data/event_alert_20261016.json（事件=政策利率/FOMC tier3，美东 10-28 14:00 ⇒ 北京 10-29 02:00；offset_trading_days=7＝T-7；trading_days_until=1016~1027 共 8 日）② 读 risk_panel_inputs/risk_panel_20261016.json/md + wave_state.json（d5·失败5·defense，invest 0.30）③ panel 4 只读接口：/scan/latest（2026-10-16T14:51:03，market_stance=yellow、position_limit=30、账户 251,571 元/持仓 4,025/1.6%）、/scan/trade-reports（5 条，持仓 500 股 成本 7.693、止损 7.65/7.70、wolf_ticket_ban ttl_td=13）、/market/moneyflow/SH600299（-556.36/-4108.34/-6346.82 万，效率 -1.17）、/portfolio/positions（500 股/市值 4,040）④ 落盘 md（823 字符/不计空格 747/中文字 150）。分析结论：风险档 elevated 15/24，距 high(16) 差 1 分（这是我 ④ 观察项的设计依据）。自算 MA20 3858.65 / MA60 3885.02（data/index_daily_000001_SH.json，MA60 与面板读数一致 ⇒ 交叉验证通过）。
+- [2026-10-18 22:15] [工作记录] Wolf T v5 最终审计 pass/100：补统计+7 tests；stop -400/no-stop +290 — 2026-10-19 v5 最终审计 pass/100（deepseek-v4-pro，100 分表，无 high/medium）：
+- v5 账本/半仓/T+1/方案 B/事件窗口已通过；补了统计（n_closed/wins/losses/win_rate/PF/avg_win/avg_loss/expectancy/max_dd/pnls）与 run() 快照测试。
+- 统计：match N=15 stop 4 笔平仓、2 胜 2 负、胜率 50%、PF 0.403、期望 -100/笔、maxDD -670；no-stop 3 胜 1 负、胜率 75%、PF 2.115、maxDD -260。
+- 测试：tests/test_wolf_t_ledger.py + tests/test_wolf_t_v5_run.py，7 passed；覆盖 C6 半仓、#12 plan_only、#13 base_reduce、确定性。
+- 遗留 low：maxDD 是离散 cycle 回撤（非逐 bar 权益曲线）；C6 转 base 的 10k 不计入统计/open_mark（方案 B 口径）。
+- 结论：v5 是审计通过的机械/账本回放；14 笔样本、stop 主导（-400 vs +290），不证明 alpha。产物：docs/wolf-t-v5-audit.md、docs/wolf-t-match20-v5-report.md、data/wolf_t_v5_audit.json、data/wolf_t_match20_v5_*.json、tests/test_wolf_t_v5_run.py。
+- [2026-10-19 08:55] [工作记录] Wolf T 两周 paper harness D-2：10 笔 dry run、两本账、12 tests — 2026-10-19 Wolf T 两周 paper harness D-2 完成：
+- 组件：jobs/paper_t_classifier.py（规则版 action/plan/view + 硬门控）、jobs/paper_t_broker.py（1min limit/market/stop/T+1/费用）、jobs/paper_t_runner.py（两本账 limit_post/market_post）、jobs/paper_t_feed.py（东财 push2 trends2 1min）、jobs/paper_t_report.py。
+- 历史 dry run：14 条帖子，执行 10 笔，全部 human confirmed；precision/recall 1.0/1.0；limit_post -410、market_post -390；各 4 笔平仓、2 胜 2 负。主要亏损 #11 4% 止损 -410；#6/#7/#9 半仓 -230/-240；#2/#3、#4/#5 为正。
+- 测试：tests/test_paper_t.py + v5 测试共 12 passed。
+- live feed：push2his kline 被断连；push2.eastmoney.com/api/qt/stock/trends2/get 可用，盘前 0 根，09:30 后更新。runbook 在 docs/wolf-t-paper-2w-runbook.md。
+- 限制：分类器是规则版不是 LLM；2 周预计 3-8 笔；D1 09:30 才开始 live paper。
+- [2026-10-19 10:42] [工作记录] Wolf T spec v0 回测审计：修两层问题后 train -28k / test -24k，无正 regime — 2026-10-19 Wolf T spec v0 跨期回测检查：任务 succeeded，但发现并修复两层问题。
+- 数据：512480/159995/515880 × 2021/2022/2025/2026 1min 全量（2026 仅 1–9 月，2021/2022/2025 零缺日）；1,507 条 T 帖 rule_v2 编码。
+- 第一层未来函数：regime_on 用当日日线收盘/MA、break20 含当日低点；原 train +2,284 / test +45,416 作废。
+- 第二层：E4_daylow 死代码；consec_stops 把任意亏损当止损；regime 切片按出场日而非入场日；跨日 pending 挂单不清理；recall 分母混入 quote/action_plan。均已修。
+- 最终：train P&L -28,401（PF 0.798，723 笔，胜率45.6%，maxDD -33,671）；test -23,724（PF 0.902，719 笔，胜率49.7%，maxDD -47,910）。
+- regime（按入场）：强 -48,130（685）、震荡 -3,995（757）、弱/破位 0；没有任何 regime 正收益。
+- signal recall 0.608/0.698，precision 0.081/0.107；rule_v2 quote/否定/黑话误判仍是最大噪声源。
+- 结论：spec v0 未通过跨期检验；下一步补反T/减仓、真实主线、逐笔对齐、Monte Carlo，不是调参。
+产物：docs/wolf-t-method-backtest.md（最终修正版）、plan §3.11、data/wolf_t_method/*、jobs/wolf_t_method_backtest.py、backtest_summary_pre_fix*.json 留档。
+- [2026-10-20 11:35] [工作记录] 生产三件套上线：session_date（判定→服务日）+ basis_43 放宽到 1.0（2016+ 0→53 天）+ 重启 worker — 用户「做吧」⇒ 三件一次做完 ✓（生产 HEAD 34481577，服务全 healthy，页面 200 ✓）。① **session_date**：新增字段 = 这份判定**服务于哪个交易日**。实时写入（08:10）取运行当天（最准 ✓）；   回填/历史取数据日的下一个工作日（只跳周末；节假日偏一天，下一根 K 线出现后自然对齐 ✓）。   live 实测：date=2026-10-19 / session_date=**20261020** ✓；接口逐日 10-15→10-16、10-16→10-19、10-19→10-20 ✓；   卡片标题显示「判定 MM-DD → 服务 MM-DD」✓ ⇒ 根治「为什么没有当天文件」的困惑 ✓。② **basis_43 缩量门槛 0.8 → 1.0**（用户已确认，属生产**放松** ✓）：原 0.8 是自设代理 ⛔，代价是 2016 年后 4-3 一天都不出 ✗；   改为「量能在缩（≤过去 60 日均量）」✓ —— 与他的定性口径一致 ✓。实测 2016+ 命中 **0 → 53 天**（2026 年 14 天 ✓ 含 2026-07 那段 ✓）；   含义：4-3 筑底日给 `side`（可分批接/买类需人工确认 ✓）而不是 t_only（买类拦 ✗）。已 regen 54 份 ✓（备份 wave_states_20261020_113538.tar.gz）。③ **重启 worker** ✓（healthy ✓）⇒ 今天 pull 带进来的其他会话修复（埋伏 3 个 + 杂毛门）从长驻进程里真正生效 ✓。部署踩坑提醒：**ssh 单次跑长脚本会 Broken pipe** ✗（本次一次脚本含 2 次重启 + sleep18 + regen ≈ 60s）⇒ 必须**拆成小步**分别执行 ✓。当前生产状态：2026-10-19 / down / 下跌1浪 / defense + 自救 / session_date=20261020 ✓（10-20 盘中有效 ✓）。
+- [2026-10-20 11:54] [工作记录] 修完两处：ensure_wave 现场补换浪型链回放 + 卖类豁免改前缀（high_sell_strong 原来被拦 ✗） — 用户「修复」⇒ 两件事都做完并上生产（d5b6c7a6 + 2ffa6942 ✓，backend 已重启 ✓）。① **ensure_wave 的「现场补」不再走退役判据** ✓：原来那段 import 的是 `wave_level.judge_wave`（旧 LLM 判据 ✗），   浪型链接管后是唯一残留 ✗ ⇒ 新增 `wave_ladder_gate.ladder_state(as_of)`（**带单向锁回放** ✓ 与 live/卡片同源 ✓；   **只读不写盘** ✓ 写权归 08:10 任务；60s 进程内缓存 ✓；任何异常 ⇒ None ⇒ 上层放行 ✓ fail-open）。   实测：`✅ 现场补（浪型链回放）：date=2026-10-19 level=down op=defense` ✓。② **顺带抓到的真 bug（比①重要）** ⚠️：`check_gate` 的「卖类永不拦」只豁免 `high_sell` / `high_sell_then_buy_back`   两个**精确名字** ✗，而全仓还在用 **`high_sell_strong`**（10 处 ✓）⇒ 它落进「指数大级别止损」分支被 **BLOCKED** ✗✗   = **破位时反而卖不出去** ✗（正是该函数注释里说已修过的那类事故 ✓，只是新 kind 又漏了一次 ✓）。   修：两处都改成 `_kind.startswith("high_sell")` 前缀匹配 ✓ + 单测锁死（含 4 个卖类名 ✓）。   生产实测：low_buy BLOCKED ✓；high_sell / **high_sell_strong** / high_sell_then_buy_back 全部 ALLOWED ✓。★ 教训：**枚举式的"白名单/豁免"必须用前缀或统一分类，别用精确名字列举** ✓ ——   新增 kind（本次 high_sell_strong）时不会有人记得回来加名字 ✗，而失败表现是"卖不出去"这种最危险的方向 ✗✗。   另一条：**冒烟测试要覆盖多态性的两端**（我这次只是顺手试了 high_sell_base 才发现 ✗）。
+- [2026-10-20 12:13] [工作记录] 浪型产物补齐完成：history 90 份 + dated 按交易日补齐（8/9/10 月各 21/21/8） — 用户「补」⇒ dated 回填件也补齐 ✓（commit 22dd7ab2 代码 + ccedc1f3 文档，均已 push/部署）。生产实测：
+· history：90 份，**四字段（session_date/family/stage/status）缺失 0** ✓
+· dated：129 份，缺失 8 —— 全是**数据窗口（2024-04 起）之前**的老档（2016-06-24/20161130/20210121/2022-10-31 等）⇒ 算不出来，不是漏跑 ✓
+· dated 覆盖：2026-08 **21** 天、09 **21** 天、10 **8** 天 = 每个交易日 ✓（9/25、10/1-7 为节假日 ✓）
+· dated 与 history 同日一致（抽查 8/3、9/30、10/16 三键全同 ✓）
+· live：2026-10-19 / session_date=20261020 / down / 下跌1浪 / defense / 自救 ✓
+实现：`regen` 新增 `--dated-days N`（与 `--history-days` 并列，去重已有目标 ✓；覆盖旧快照是用户明确同意 ✓）。
+运维踩坑：ssh 单次带 stdin 管道（`cat > file` / `bash -s`）经常 Broken pipe ✗ ⇒ 改用 **scp 传脚本 + 独立 ssh 执行** ✓ 稳定。
+- [2026-10-20 14:14] [工作记录] QQ 浪型行统一口径 + 补推成功（顺带修：诊断端点 78s > 60s 超时） — 用户「改+推」：QQ 推送的浪型行统一口径 ✓ + 手动补推 ✓（都已完成）。
+
+① 文案（commit 81a14e30 ✓）：两个 job 各加 `_wave_where(wv)` 同口径 helper ——
+   **family/sub_level 优先** ✓（旧写法打 level·sub_level ✗ ⇒ 4-5 失败会显示成「d5·失败5」✗，误读成大5浪衰竭）；
+   补 **mode（自救）** ✓ 与 **session_date（判定 X → 服务 Y）** ✓。
+   踩坑：文件里 date 是 "2026-10-19"（**带横杠** ✗）⇒ 必须 .replace("-","") 后再切片 ✓（第一版切出 `-1-0-` ✗）。
+   实测行：`浪型 down·下跌1浪｜defense（自救）｜判定 10-19 → 服务 10-20` ✓。
+
+② 推送：`POST /api/v1/scheduler/tasks/<id>/trigger` ✓。前两次**失败** ✗ —— 不是文案，是
+   `[morning_diagnosis] 调用诊断端点失败: timed out` ✗：实测 `/api/v1/market/market-diagnosis` 今天要 **78.3 秒**
+   （tushare_v2 取数慢）而 job 里写死 **60 秒** ✗ ⇒ 必超时 ⇒ 已提到 **240 秒** ✓（commit 91a8985f ✓）。
+   ★ 顺带发现：明早 09:10 若端点仍慢，原来会**静默失败**（只推失败通知）✗ ⇒ 现在不会 ✓。
+   第三次触发成功 ✓（记录 f762701c，14:10:46，status=success ✓），on_success=true ⇒ QQ 已推 ✓，内容与 live 一致 ✓。
+
+③ 教训：
+  · 推送文案里的**字段口径**要和文件 schema 一起演进（level·sub_level 是旧口径 ✗）；date 的格式在不同写入口不一致（带杠/不带杠 ✗）⇒ 一律先归一化 ✓；
+  · 定时任务失败先看**它自己依赖的端点耗时** ✗（本次 78s > 60s），别只看文案改动 ✓；
+  · 手动触发任务的接口 = `POST /api/v1/scheduler/tasks/{task_id}/trigger` ✓（写 command，worker 异步执行 ✓）。
+- [2026-10-20 16:24] [工作记录] 清完全仓 9 处退役字段读取（catalyst/fusion/mainline_gate），行为逐位不变 — 用户「都清理掉吧」⇒ 全仓最后 9 处读**已退役** state 字段（catalyst / fusion / mainline_gate）的死分支全部删除 ✓（commit c4d26a6d，已上生产 + 重启 backend/worker ✓）。
+
+清理清单：
+· catalyst（6 处）：wolf_match / leader_v2 / fusion_mainline / trend_channel / market_scan / low_logic_agent
+· fusion（3 处）：switch_builder ×2（fusion_top3 与 theme_top12 兜底）/ tranche_ladder
+· mainline_gate（2 处）：trade_graph —— **不是删**，改成 `(st or {}).get("mainline_gate")` **直接读** ✓
+  hmm：原因 —— get_retired 恒返回 {} ✗ ⇒ 即使 WOLF_INJECT_GATE=1 重新注入该字段，代码也永远读不到 ✗（潜在功能失效）
+· 删掉 trade_graph._retired() 兜底函数（已无调用方 ✓）
+· low_logic_agent：删 import + 去掉把 catalyst 拼进背景文本的那段 ✓
+净改动 -46/+19 行，**行为逐位不变**（这些分支本来永不执行 ✓）。
+
+验证：
+· 全仓 `get_retired(` 调用点 = **0** ✓（只剩 mstate_retired.py 自身）
+· 对照测试（在库相关测试 6 个文件）：基线 HEAD~1 = 9 failed / 87 passed ⇒ 现在 = 8 failed / 88 passed ⇒ **无新增失败，还修好 1 个** ✓
+· 其余 8 个失败 = 其他会话的 WIP（未跟踪的新测试 + 未提交改动）✗，与本改动无关 ✓
+· 生产：两容器 healthy ✓、模块导入冒烟 `imports ok` ✓
+
+★ 教训：
+1. `git add -A <dir>` 会**连带其他会话的未提交改动** ✗（本次误把 core_adapter/trend_core/trend_break_v2/yellow_white 加进来）⇒ 用 `git add <确切文件>` ✓，
+   事后可用 `git reset --soft HEAD~1` + `git restore --staged <别人的文件>` 纠正 ✓。
+2. 判断「测试失败是不是我造成的」最快办法：`git archive HEAD~1 | tar -x -C /tmp/base` 建**纯净基线副本** + 软链 data ✓，
+   同一批测试两树对跑 ✓（比 stash 安全 ✗ 不会动别人 WIP ✓）。
+3. 退役字段的"读"要么删（死分支）✓，要么改成**直接读** ✓ —— 别继续走 get_retired（它恒返回默认值 ✗，会把"重新注入"的功能也挡掉 ✗）。
+- [2026-10-21 11:56] [工作记录] 浪型状态入 PG：表 + 双写 + 回填 433 行（+ 修掉"无锁兜底"写脏生产的坑） — 用户「能放到 pgsql 里吗，其他接口也从 pgsql 读」⇒ 步 1+2 完成 ✓（建表 + 双写 + 回填 433 行 ✓）。
+
+表：`wave_state`（**session_date 主键** ✓ = 服务交易日 / data_date / level..status / payload JSONB / updated_at）；
+DDL 幂等，出现在两处：`apps/main_line/wave_pg.py:DDL`（写侧脚本用 ✓）+ `backend/app/database.py::_apply_wave_state_migration()`（后端启动用 ✓）。
+写侧：`apps/main_line/wave_ladder.write_wave_state()` 写完文件后 `wave_pg.upsert(ws)` ✓ —— **全程 fail-open** ✓（DB 异常只打印，不影响文件 ✓）；
+`ON CONFLICT ... WHERE wave_state.data_date <= EXCLUDED.data_date` ⇒ 旧数据不会覆盖新数据 ✓。
+回填：`jobs/wave_state_pg_backfill.py`（dry-run 默认 ✓，`--apply` ✓；默认**拒收老 agent 档**（无 session_date ✗）✓，`--allow-legacy` 可选）⇒ 生产 433 行 / 2025-01-03~2026-10-21 ✓ 4.9 秒 ✓。
+读回验证 ✓：`load_latest` ✓；`load_asof('20261021'/'20261020'/'20260803'/'20250605')` 全部正确 ✓（可**替代** wave_state_history/<sim8>.json ✓）。
+读侧**一行未改** ✓ ⇒ 文件仍是权威 ✓ 生产零行为变化 ✓。
+
+★ 踩坑三条（都记牢）：
+1. `psycopg2.extras.Json` 在容器里没生效 ✗（can't adapt type 'dict'）⇒ 改 **`json.dumps` + `%s::jsonb` 强转** ✓；
+2. `ws["rung"]` 是 **dict**（key/name/index/expect）✗ 不是 int ⇒ 写库只取 `.index` ✓；
+3. ⚠️ **最严重**：我在验证时**直接调 `write_wave_state()` 不带 ev** ✗ ⇒ 它内部走 `evaluate()`（单日、**无锁** ✗）
+   ⇒ 现场把**生产档从 defense 写成 t_only** ✗✗（文件 + PG 都被写脏）。
+   已修（commit 345e2de5 ✓）：兜底改为**带锁回放 walk** ✓ 取末档 ✓；补单测锁死 ✓；
+   已复原（重跑 CLI ✓ 现在 file 与 PG 都是 defense ✓）。
+   ★ 规则：**凡是写生产状态的函数，不允许存在"默认走降级/无锁路径"的兜底** ✗ —— 宁可报错也不静默降级 ✓。
+   ★ 教训：验证"双写"要用**只读**手段（查 updated_at / 行数 ✓），别为了测试而调用写函数 ✗。
+- [2026-10-21 14:02] [工作记录] 步3 完成：浪型状态统一从 PG 读（8 个读点 + /wave/state 接口 200） — 用户「继续」⇒ 步 3（读侧切 PG）完成 ✓。
+
+交付：
+· `backend/app/services/wave_store.py`（新 ✓）：`get_wave()` / `get_wave_asof(sim8)` / `clear_cache()` / `mode()`；
+  开关 `WOLF_WAVE_STORE=both|pg|file`（默认 both = **PG 优先 + 文件兜底** ✓）；30s TTL ✓（有 TTL 才敢缓存 ✓）。
+· 8 个后端读点全部改走它 ✓：p2_entry_gate / wolf_253_build / wolf_discipline / wolf_judge / position_tier /
+  wave_gate（`_load_wave` + 回测取档 `_find_archived` 也走 PG ✓）/ wolf_pick.card / wolf_pick.state_guard。
+· 新接口 `GET /api/v1/wave/state` 与 `?asof=YYYYMMDD` ✓（生产实测 **200/200** ✓，返回 `{ok, store:"both", state:{...}}`）。
+· 单测：wave 相关 63 例全绿 ✓（36 例 test_wave_ladder + gate 等）。
+· 文档：`docs/wave-state-consumer-guide.md` 新增 §3.5「统一读入口」✓。
+
+★ 这次部署的踩坑（排查了 20+ 分钟 ✗，值得记）：
+1. **`GET /api/v1/wave/state` 一直 404** ✗ —— 根因不是路由 ✗、不是容器路径 ✗（容器里代码在 `/app/app/...` ✓、
+   `main.py:216 app.include_router(wave.router, prefix="/api/v1")` ✓），而是 **prod 的 `git pull` 一直在 Abort** ✗：
+   `backend/app/api/wave.py` 有**别的会话未提交的生产侧改动**（`/wave/low-position-card` 新增 34 行 ✗）⇒ 挡住 merge ✗
+   ⇒ 我 git pull 的输出被 `tail -1` 吃掉了 ✗ 只看到 "Updating ..." 以为成功 ✗✗。
+   → **教训：部署校验必须看 `git log --oneline -1` 的实际 HEAD ×`，不能只看 `git pull` 的最后一行** ✗。
+2. 处理方式（可复用 ✓）：**`git stash push -- <文件>` → `git pull` → `git stash pop`** ✓（保住别人未提交的改动 ✓，
+   本次两边改动都追加在文件末尾 ✓ ⇒ pop 无冲突 ✓），再把合并后的文件 `docker cp` 进容器 + 重启 ✓，两个接口同时 200 ✓。
+3. **prod 工作区长期是脏的** ✗（`t_monitor.py` / `requirements.txt` / `frontend/dist` 删除 + 若干未跟踪目录 ✗）⇒
+   这会让**每次** pull 都可能被挡 ✗ ⇒ 需要有人（或我）定期把生产侧改动**归档提交** ✓，否则部署会反复失败 ✗。
+- [2026-10-21 14:12] [工作记录] 生产侧未提交改动全部归档 + gitignore 治噪（生产工作区恢复干净 ✓） — 用户「做吧」⇒ 生产侧未提交改动全部**归档提交** ✓，生产工作区恢复干净 ✓（`git status --short` 为空 ✓）。
+
+归档内容（commit 60eacfa ✓）：低位超额反弹线（`low_position_store.py` / `wolf_card/` / `wolf_low_position_line.py`）+
+`t_monitor.py`(+6) + `requirements.txt`(+1) + `frontend/dist` 重建（删旧 bundle 加新 bundle ✓）+ `jobs/eval_select_v0.py`。
+另加 `.gitignore`（commit 5cb84a2 ✓）：`data/_archive/`、`data/wave_state_history/`、`data/指数数据/`、`data/*.parquet`、
+`data/macro_briefing_*.md`、`data/strategy_summary_*.md`、`.deploy/`、`jobs/.diag_*.py` 等 ⇒ 状态不再变脏 ✓。
+
+★ 本次学到的两条硬招：
+1. **生产不能 push** ✗（`fatal: could not read Username for 'https://ghfast.top'` ✓）⇒ 用 **`git bundle create <base>..HEAD` + scp + 本地 fetch** ✓；
+2. 本地工作区被别的会话的 WIP 占着（tracked 改动 + 同名未跟踪文件 ✗）⇒ **不要动它** ✗，
+   改用 **`git clone <本地仓库> /tmp/pusher`**（干净树 ✓）+ `git fetch <bundle>` + `git merge FETCH_HEAD` + push ✓；
+   ⚠️ 临时克隆里要**手动设两样**才能推 ✓：`git config user.name/email`（否则 "empty ident name" ✗）+
+   `git config credential.helper "store --file=/home/fengx/.git-credentials"`（仓库级 helper 不会跟着克隆走 ✗）。
+3. 老坑复现：`git pull` 的输出被 `| tail -1` 吃掉 ⇒ 误判成功 ✗ ⇒ **一律看 `git log --oneline -1` 的实际 HEAD** ✓。
+
+收尾状态：生产 HEAD `5cb84a26` ✓；接口 `/wave/state` 200 ✓、`/wave/low-position-card` 200 ✓、
+`/wave/index-history`（慢 ✓ 需 >15s 超时 ✓）正常 ✓。
+⚠️ 本地工作区仍落后于 origin（`e04abd45`/`5cb84a26` 未合入 ✓）且有别的会话 WIP ✓ ⇒ 留给下次收拢 ✓（别硬 merge ✗）。
+- [2026-10-23 07:49] [工作记录] B反 独立复研：1.15=半分位汇合带、8/3 预期七部件、b_rebound 公式级不可用 — 2026-10-23 独立重做「B反识别」（不继承旧结论，只读原始材料）。产出 docs/b-rebound-reread-202610.md + scripts/research_brebound_cases.py（只读）+ data/research/*.csv。
+
+核验到的硬事实：① 588170 三比一折算：7/3 收 3.579 → 7/6 pre_close 1.193（比率 3.0008），7/6 是首个新价日；A 段高点 1.465（7/1 盘中 4.395÷3）、折算后首根前低 1.149（7/6）、B 起点低点 0.828（8/3 14:56）；8/4 09:33 低 0.824 才是本段最低（不是 8/3）；8/18 高 1.107、8/19 −7.43% 起 C 杀。② 1.15 = 50% 半分位 1.1465（(1.465+0.828)/2）与 7/6 前低 1.149 的汇合带，口语化；狼大 8/11 原话「一波打上去到半分位」为证。实际只到 1.107（回撤 43.8%，目标的 96.5%），他没改目标、按 8/18 预设卖点执行。③ b_rebound 公式 = (close/lo20−1)≥3% ∧ close<hi20 ∧ close<hi60_prev（wave_ladder.py:750）：低点当天恒 False（8/3=False），滞后翻真（8/5 才 True），且在 2026-03-30/04-20/05-11 三个他自己说 B反 的日子全 False、在 2025-09-04 非 B反日 True ⇒ 不可作标签。④ 8/3 的 B反 预期成型于 7/23–7/31（鱼大楼），比当天早 7 个交易日；当天只是执行+定价。
+
+最重要的两条独立发现：①「指数 C 杀 ⇒ 板块 ETF C 杀」是条件性的：2026-05 指数 5/13 见顶 −5%，588170 却一路新高到 7/1（+74%）；2026-08 则共振（ETF 8/18 见顶、8/19 起 ETF −19%，指数只 −3.5% 就横住）。② 等「指数 3 天站上 MA5」确认的代价量化 = 0.828→0.977 = 放弃 +17.9%，确认后只剩 +13.3% ⇒ 确认只能决定「加多少」，不能决定「做不做」。
+
+框架 v1 用五闸门（级别/结构/筹码/赔率/确认）+ 排除六条 + 阶段判 L1–L5，复算结果：8/3=9 分、3/30=6 分（但阶段是 L2 不是 L1）、2025-09-04=4 分（正确拒绝）、2025-08-01=2 分（拒绝，按结果看否掉是对的：C 没来、ETF 20 日 +16.7%）。样本 n≈5 段，只能案例验证，不能统计验收。
+- [2026-11-01 08:41] [工作记录] 持仓同步恢复独立页并部署（顶部菜单） — commit fcfaebf8「feat(持仓同步): 独立持仓同步页并加入顶部菜单」。
+① 新增 frontend/src/pages/HoldingsSyncPage.tsx（复用 tac-page/tac-panel/tac-table 样式，目标账户固定 t），路由 /holdings-sync、TopNav 菜单项（ClipboardCheck + nav.holdingsSync 中英词条），并从 TAccountPage「信号与建仓」页签移除原面板及 hs* 状态/处理函数。
+② dist：构建前把无关 WIP（ChatContainer.tsx/toolRegistry.ts）git stash，保证 dist 与提交源码一致，提交后 stash pop 恢复。
+③ 推送：origin(ghfast.top) 不可达；ghdirect 直连需 env -u http_proxy/https_proxy/all_proxy + git -c http.https://github.com.proxy=，实测 34d1653d→fcfaebf8 成功（credential lock 警告不影响）。生产裸库 srv(ssh://marcusrv/opt/git) 用 GIT_SSH_COMMAND 带 ControlPath 推送 df743d10→fcfaebf8。
+④ 生产部署（SSH 长连接：ssh -4 -o IPQoS=throughput -o ControlMaster/ControlPath=/tmp/ssh-marcus -o ControlPersist=12h）：生产 repo 有 16 个未提交热修复（与本地 worktree 字节一致）。做法：tar 备份 → 丢弃过期 dist/index.html → 还原其余文件使工作区干净 → git fetch bare + merge --ff-only → 解包恢复热修复。遇到未跟踪 backend/app/services/position_sizing.py 阻止 merge，确认与 fcfaebf8 版本 md5 一致后备份删除再 merge。最终 HEAD=fcfaebf8、10 个热修复保持 dirty 且 md5 与本地一致，5 个与提交重叠的文件内容不变 ⇒ **backend/worker 无需重启**。
+⑤ 前端 dist 是 COPY 进镜像（无 bind mount），git 拉取不等于上线：必须 docker build -f docker/Dockerfile.frontend -t docker-frontend . && cd docker && docker compose up -d --no-deps --force-recreate frontend。验证：/assets/index-B0V4xGx1.js 200、/holdings-sync 200、bundle 内「持仓同步」2 处、nginx 日志 200。
 
 ## 经验教训 Lessons Learned
 
@@ -6725,6 +6927,147 @@ Tunnels/监控 ✓：起臂脚本已一并拉起 dashboard(8800)/console_run.jso
 - [2026-10-15 12:50] [经验教训] 信号要做成「事件」不是「状态」；通用结论先证伪再上线（连坐=反例） — 教训（本轮两次踩同一个坑）：把**状态**当**信号** ⇒ 全市场一起亮灯，等于没有信号。实例：① chain_contagion 首版用「收盘 < MA60」判链主破位 ⇒ 2026-09-14 全市场 256 只同时 high ✗；改成「20 日内出现新破」⇒ 单边下跌里**天天都成立**，仍然不是事件 ✗；最后定为「**首次下穿** = 当日新低 ∧ 前一日非新低」✓。同源案例（wave_ladder）：跳空规则必须加幅度下限（0.08% 的『跳空』会误报主跌1浪）。教训 2：**先证伪再上线**——「链主破位 ⇒ 同链陪葬」在 340 个事件上量出来是**没有增量**（同链未破成员反而跑赢 +0.53pp），这一条比再写一个闸门更有价值：省得后面拿它拦腿。写进模块 docstring 的「离线验收」里，别只写成功的那半。教训 3：小样本大效应要警惕——「大光 ⇒ 国产链」10 日中位差 −7.88pp 很漂亮，但基线只有 5~6 个事件、成员同期高度重叠，≈2~3 个独立段 ⇒ 只能记成观察项；判断前先数**独立事件段**，不是数行数。
 - [2026-10-15 14:07] [经验教训] 接线前先量「分歧率」：两套方法一致率 37.6% 就不能互换着用 — 教训：把新逻辑接到生产之前，先用**历史快照**量两套方法的分歧率与**决策相关的那一刀**。本轮实测（浪型链 vs 生产 LLM 浪型档，170 天）：总体一致率只有 37.6%（106 天分歧），但消费点真正在意的是「defense/exit ⇒ 禁新建仓」——按这一刀切：两边都禁 21 天、浪型链更严 24 天、更松 7 天（净更严 17 天）。**总体 37.6% 的分歧听起来吓人，折算到决策面只有 ≈14% 的净差异** ✓，所以报告要按「消费点真正读的那个字段」统计，而不是按整条状态比。教训 2：消费点接线一律留**唯一入口**（backend 侧薄适配 + 任何异常原样返回），这样 3 处改动各 1 行、回滚只需把开关置 0；而且默认关时必须做到「唯一新增行为＝写一行日志」，其它逐字不变。教训 3：对账集优先用**已经存在的落盘快照**（data/_bt_year/<日>/wave_state.json 179 天）——不必先跑回测就能得到可判定的分歧矩阵。
 - [2026-10-15 14:37] [经验教训] 用户说「重跑生产」就别顺手铺到回测沙箱；默认范围要跟用户语言对齐 — 2026-10-15 教训：用户说「切换到新的浪型，旧的不用了，历史也重新生成」—— 我把「历史」理解成「所有历史落盘」（含 213 个回测沙箱的 5009 份 + 26.7 万归档副本），先把沙箱铺了一遍，而用户要的是**生产侧**：live + 60 份带日期回填件 + **data/wave_state_history/（15 份，我最初还漏了）**。用户原话反馈：「我不是让你重跑生产吗，怎么跑回测去了」→ 随后「回测别回退了」（不回退）。教训 1：**脚本默认范围＝用户语言的范围**。批处理脚本的默认目标要窄（生产-only），  破坏性/大范围的路径（_bt_* 沙箱、26.7 万归档）必须显式开关（现改为 --include-backtests /  --include-archives）——这比在文档里写注意事项可靠。教训 2：重生成生产历史时，先**列全生产侧的落盘位置**再用脚本，别只盯 data 根：  生产侧三处＝ live / wave_state_<date>.json / wave_state_history/<sim8>.json（后者被  wave_gate.py:101 按模拟日读，属于生产口径 ✓）。教训 3：用户否掉一次范围判断后，先问「要不要回退」再动手 —— 本次用户明确说「别回退」，  省了一次 5009 份的还原（备份 data/_waveagent_backup/wave_states_20261015_141337.tar.gz 仍在 ✓）。
+- [2026-10-15 16:36] [经验教训] 调度时间必须晚于数据源发布：K线同步定 15:05 会永远落后一天 — 踩坑：新加的 index_kline_sync 定在 15:05（收盘后 5 分钟）⇒ 上游（东财/tushare 中继）当天日线要收盘后一段时间才发布，15:05 只能拿到**昨天** ⇒ 卡片（读本地 K线缓存）会**永远落后一天**，而且不报错（数据看起来正常 ✗ 静默偏差）。改法：40 16,19 * * mon-fri（16:40 紧跟既有的 16:30 index_daily_refresh ✓；19:00 再跑一趟兜底晚发布；脚本幂等 ✓）。教训（可复用）：① 任何抓当日数据的任务，时间要定在**上游发布之后**，最好紧跟自己信任的刷新任务；  ② 幂等脚本可以一天跑两趟兜底（cron 小时字段用逗号列表 ✓ APScheduler 支持 40 16,19 * * mon-fri ✓）；  ③ 判断新鲜度**看数据本身**（接口 asof / 文件最后一行的日期 + mtime ✓），不要只看任务是否成功 —— 它会成功地抓到昨天 ✗。生产链路（2026-10-15 实测）：index_daily_refresh 16:30 → CSV mtime 10-15 16:30 ✓（浪型链用）｜index_kline_sync 16:40+19:00 → K线缓存 mtime 10-15 16:34 ✓（卡片用）｜wave_ladder_state 08:10 → wave_state（卡片色带不读它，是 walk 实时算的 ✓）｜接口 5 分钟进程内缓存 ⇒ 文件更新后最多 5 分钟可见 ✓。该环境东财不通（宿主/容器均 ✗）⇒ 实际走 tushare 中继（datahubco→promax ✓）。
+- [2026-10-15 18:13] [经验教训] 「突破」类比较不能用含当日的窗口（hi20 含当日 ⇒ 判断恒假/恒真） — 踩坑（2026-10-15 补档 C）：新加的顶部特征用 hi20 / hi20_prev 判断「收盘创新高」「最高价创新高」，但 features 里 hi20 = max(hist[-20:]) **含当日** ⇒ close > hi20 恒假、high >= hi20 恒真 ✗✗；表现是单测里出现自相矛盾的组合（长上影=True 而 缩量新高=False ✓）才发现。修法：新增 hi20_excl = max(hist[-21:-1])（不含当日 ✓），突破类一律用它，并加注释防复发。既有代码 new_high60 用的是 hi60_prev（已不含当日 ✓）所以没踩到。可复用规则：**「前 N 日」窗口必须排除当日** ✓；命名带 _prev/_excl 的才是「前」，裸 hi20/lo20 只当状态量 ✗。验证方式：单测里断言特征组合的**合理性**（不该同时出现「创新高=假」和「长上影=真」）✓。
+- [2026-10-16 08:14] [经验教训] 停用脚本 ≠ 停用任务：旧 wave_judge 任务每天空跑并推「波浪判定」通知 — 2026-10-16 用户反馈：定时任务「波浪判定」看起来失败了（08:10，错误里是退役提示）。诊断：**新任务没问题** ✓ —— wave_ladder_state 今早 08:10 成功（记录 status=success、耗时 0.09s），  data/wave_state.json + wave_state_2026-10-15.json 的 mtime = 10-16 08:10 ✓，内容 = 下跌1浪/defense+自救 ✓。  真正原因是**旧任务 wave_judge（波浪判定）还开着** ✗：它仍每天 08:10 调已退役的 wave_agent.py，  而退役守闸把提示打到 **stderr** ✗ ⇒ 调度器当错误；又因该任务 on_success: true ⇒ **成功也推通知** ✗，  且 pi_analysis: true 让它每天白烧一次 LLM 分析 ✗。修复：① config/tasks.yaml 里 wave_judge → enabled: false ✓（附停用说明 + 恢复方法）；  ② wave_agent.py 退役提示改打 **stdout** ✓（实测 rc=0 / stdout 有提示 / stderr 空 ✓）—— 退役是正常状态不是错误 ✓。生产验证：wave_judge enabled=False next=None ✓；wave_ladder_state enabled=True next=2026-10-19T08:10 ✓；  index_kline_sync next=2026-10-16T16:40 ✓。commit 067011fd 已 push ✓。★ 可复用教训：**退一个脚本时，必须同时关掉调度器里的那条任务**（脚本退出码为 0 ≠ 任务无副作用 ✗）；  排查任务失败先看三样：任务开关 / on_success 通知策略 / 任务实际调用的是哪个脚本 ✓。
+- [2026-10-16 08:22] [经验教训] E1 负面结果：拿他的命名当 ground truth 算极性吻合率，打不赢「全答调整」基线 — E1（等级模型第一轮）结论：**未通过** ✗。子级别标注 × 日线 62%、× 周线 50%，而多数类基线（他讲的时期几乎都是调整）= **78%** ✗；大级别标注只挖到 6 条（那类词带指数语境的很少）⇒ 无统计意义 ✗。三条原因（可复用）：  ① ground truth 错配：他的「4-3 筑底 / 4-4 反弹 / 震荡」是**位置/形态命名**（他跟踪的结构位置），不是方向预测；     我们用档位极性去比 ⇒ 指标选错 ✗。同一教训在 golden set 已出现过：结构档严格一致 4/6，但**操作同向 6/6** ✓     —— 他的语言 ≠ 方向，他怎么说和他怎么做是两码事 ✓。  ② 基线高达 78%：被标注时期绝大多数是调整（正是他爱讲的话题）⇒ 选择性偏差 ✓ 任何指标必须先跟基线比 ✓。  ③ 标注集太松（关键词表里「震荡」占 46 条 ✗）⇒ 需按度重挖 + 去掉弱标签 ✓。正面副产品（不因主结论失败而作废 ✓）：  · 周线数据源打通：datahub index_weekly（1000 根/2007 起 ✓）+ jobs/sync_index_weekly.py ✓；  · 更关键：**方向轴是有效的** ✓ —— 在他明确说看周线图的那段，周线档把「上升未破」（2025-10-17 → rung1/side）与    「上升已失败」（2026-07-31 → rung2/defense）分开了 ✓；错的只是拿命名去做极性吻合率这个度量 ✗。  · 窗口参数改为可覆盖（WOLF_WAVE_LADDER_HI/RALLY/MIN_BARS ✓ 默认值一字未改 ⇒ 生产零影响 ✓）⇒ 后续可做按度重标 ✓。下一步 E1b（建议）：度量换成**他的操作**（买/加 vs 减/不参与，即 golden set 方法论 ✓），  检验加入周线档是否提高操作吻合率 ✓ —— 那才是可决策的指标 ✓。commit 4ba8fa1c 已 push ✓。
+- [2026-10-16 08:38] [经验教训] 评测浪型链的度量陷阱：operation 是状态不是动作 ⇒ 方向吻合率必输多数类基线 — 教训（E1/E1b 两轮验证）：**我们的 operation 是「状态」，不是「动作」**——拿它去比他的买卖动作，必然被多数类基线压死 ✗。
+证据：① E1 用他的「命名」比极性 → 62%/50% vs 基线 78%；② E1b 用他的「操作」比方向 → ① 36% / ② 20~68% vs 基线 76%/71%。两轮都输在同一个地方：**被标注的时期几乎都是他在降风险的时期**（选择性偏差），而且 `side`=「可参与」≠ 买信号、`t_only`=未表态。
+
+可复用判据（下次做类似评测前先自查）：
+1. 先算**多数类基线**，再谈命中率；基线 >65% 时，任何「方向吻合率」都没有决策价值 ✗。
+2. 先确认 ground truth 与输出**同轴**：位置/形态命名 ≠ 方向；结构状态 ≠ 择时动作。
+3. 样本构成要报（多/空/hold 各几条 + 年份分布），并把**条件句、讲个股、多空混说**的排除项逐条写出来（防挑样本 ✗）；若排除规则偏向某一侧（如条件句里多方向更多），用「条件可用数据核实成立就计入」的第二样本集复核 ✓（E1b 的集 A/集 B 就是干这个）。
+4. 想提升时要用**先声明后看数**的规则（R2/R2b/R1/R3 四条一次全报），不许挑最好看的那条 ✗。
+5. 反面证据往往更有用：E1b 的真收获是「我们 defense 档 vs 他真在减仓 = 4/4 精确」——这一档的语义经得起检验 ✓；以及「周线说未破时他照样减仓」⇒「大级别未破」不能推出「可以买回调」✗。
+- [2026-10-16 09:49] [经验教训] 埋伏腿从未进过买入列表：三层被吞掉的 NameError + stage/tier 词表混用 — commit 123937d2 / 860aaf45 / c3891f8f（未 push）。**症状**：用户「埋伏腿完全不触发」＋对照发现 t35/t37 历史回测里 `wolf_ambush_buy` 是**成交过**的（`reason=条件命中自动执行（wolf_ambush_buy）`），而现在 t68/dec1 的 `legs_switch.jsonl` 里 **0 条 `stage=ambush`**。
+**根因（三层，逐层被 except 静默吞掉）**：
+① `switch_builder` 的"埋伏并入"块从 `_arm_legs()` 被搬进 **`build_plan()`**（§9.844「位置/涨幅前移到选股端」那次搬移）⇒ 连带引用原作用域的 `_sel_block` / `today` / `_sel_skipped` 三个变量 ⇒ 每次 `NameError` ⇒ 被本段 except 吞成一行 `埋伏候选并入失败: name '_sel_block' is not defined` ⇒ **`plan["ambush"]` 恒为空** ⇒ 埋伏腿从未进过买入列表。**定位手法**：直接在沙箱里跑 `switch_builder.build_plan()`（比读臂日志快），被吞的告警立刻现形；每个 NameError 修完就冒出下一个，共三个。
+② 即使并入成功，`stage` 字段也**只写确认阶段名**（缩量止跌/结构到位/…），而执行口埋伏分支的判据是 `stage=="ambush"` / `type=="wolf_ambush_buy"` ⇒ 认不出 ⇒ 退化成普通 253/254 低吸腿。修法（用户选 B′）：腿里**另立 `tier` 字段**（`stage`＝标的状态、`tier`＝我们的档位，**两套词表不混写**）＋ 执行口判据扩为 `stage=="ambush" or type=="wolf_ambush_buy" or tier=="ambush"`（开关 `WOLF_LEG_TIER_FIELD`）。取档位时注意：`plan["tiers"]` **只含持仓标的**（在 `held_positions()` 循环里赋值）⇒ 买入腿要直接调 `tranche_ladder.tier_for(sym)` 兜底。
+③ 埋伏候选取自「**名额之外**的池」（`_rest = _ordered[MAX_STOCKS-K:]`）⇒ **天然不在** `stock_confirm_result.json` 的 `stocks` 里 ⇒ 并入循环按"判级主题"查 `stocks` **必然查不到** ⇒ 静默 continue。修法（用户选 ①）：判级侧写名单时**同写一张 `themes`（代码→主题）表**（用 `wolf_context.theme_of_symbol`，合并累加），`switch_builder` 取不到判级主题时退到该表（开关 `WOLF_AMBUSH_THEME_FROM_FILE`）。
+**验证**：离线 `build_plan()` ⇒ `埋伏候选文件读到 67 只` ⇒ `埋伏候选并入买入列表 31 只`、`buy_new` 78 条中 `stage=ambush` 31 条、`plan["ambush"]=31`；臂内 20251208 的腿出现 **`stage="ambush": 6`** ✓。
+**另一条指令（用户）**：「**埋伏腿不需要过 agent**」⇒ 2026-10-13 那次拍板是"建仓类过 AI"（`WOLF_BUILD_VIA_AI`，库内默认 0、**臂里设 1**）⇒ 新增 `WOLF_AMBUSH_VIA_AI=0` 让埋伏档回到历史行为（条件命中自动执行）。实测代价：dec1 一天 **640 次** Agent 唤醒（≈21 分钟/天）⇒ 开例外后降到 **3 次** ✓。
+**通用教训**：①「有 except 的地方必须有可观测的失败信号」——本项目多处 `except: pass`/只打一行，导致同一功能静默失效数月（本例三层叠加）。②排查"以前能用、现在不能用"时，**先在沙箱里直接调用那个函数**（如 `build_plan()`），比翻臂日志快一个数量级。③代码搬移函数后，务必检查被搬代码引用的**局部变量是否随之搬走**（Python 的 NameError 只在运行时暴露）。④字段语义不要混用（`stage` vs `tier`），否则一处改名就会静默断链。
+- [2026-10-16 10:09] [经验教训] 评估他的操作：他的公开话是选择性样本 ⇒ 高基础率 + lift 噪声带（先算基础率，再谈线索） — 教训（E1b+E1c 两轮实证）：**他的公开发言是选择性样本 ⇒ 任何以「他的一句话 = 一个动作标签」为基础的评估都会被高基础率压死**，换度量也救不回来。
+证据链：E1（命名比极性）62%/50% vs 基线 78% ✗；E1b（操作比方向）36% vs 76%/71% ✗；E1c（只在 side 日内做条件分布）基础率仍 **0.684 / 0.706**，12 条线索 lift 全在 0.73~1.46，Fisher p 最小 0.184 ✗✗。对照：无出处的「当日收跌」线索 lift 1.072 —— 这就是噪声带量级，凡 lift ≲1.15 都不要当信号。
+三条可复用判断：① **先算基础率**：只要 ground truth 的多数类 ≥0.68，一条线索要验收就得有「≥8 个 100% 精确标记日」（base^k<0.05 反解），样本 n≈20 时几乎不可能 ⇒ 该先扩样本或换载体，别急着调阈值；② **lift>1 ≠ 有效**：必须同时报标记天数 + 单侧精确检验 p（1~3 天的 100% 精确是常态噪声）；③ **别在「他讲操作的日子」上找择时**：他讲的时候 68~71% 正在降风险，位置/事件线索（中轨/交割日/节前/周五/放量滞涨）与他减仓动因（结构/趋势）正交，天花板只有 ~1.1。
+反向有用的发现：这些「减仓窗口」的前瞻收益**反而偏正**（交割日 ±1 前瞻5日 +0.78% vs +0.07%，p=0.020）⇒ 减仓是**仓位管理**不是方向择时；若真要用，只能换成「他报出的仓位数字 ⇒ 仓位时间序列」这种载体，而不是二分类动作标签。
+- [2026-10-16 10:48] [经验教训] 抽「数字」不要判「方向」：事件类线索≠规则类线索（E1d 实证 + 5 条可复用抽取口径） — 教训（E1c→E1d 换载体才拿到信号）：**「事件」与「规则」要分开** —— 他反复讲的**事件**（交割日/节前/周五/放量未涨）在他的仓位序列上全是**加**（Δ +2~+11pp，无一显著），唯一符号正确的是他**写下的规则**（「收破中轨就减仓」，Δ −16.25pp，n=4 仍不可验收）⇒ 事件类线索别当择时信号，规则类才值得单独建。
+可复用方法（把「一句话=一个动作标签」升级成**连续量**）：① 抽**数字**而不是判方向 —— 「减仓事件」由序列客观算出（Δ ≤ −5pp），不引入我的读句偏差 ✓；② **归一化要预先声明**：「X层」×10、「半仓/满仓」不给数字（别把我编的值掺进 ground truth ✗）；③ **计划句闸**：除了「如果/一旦」，还要挡「预计/到时候/目标/以内/会减到」—— 「我预计周5前的低点就打满了 这周不出意外就100%仓位了」是计划不是观测，混进序列会污染整条曲线 ✗（实测挡掉 93 条）；④ **同日择优**要写死（含「收盘」优先，否则当日最后一条）并把全部候选留档可复核；⑤ 区间口径的**长度混淆**（区间越长越容易含事件日）用 **gap ≤5 交易日** 子集压住，并把两个口径都报出来 ✓。
+判据速查：如果一件事「事件日」与「规则日」的效应符号相反，先信**规则**；如果连规则类都 n<10，就别写策略，写成待验证假设入库。
+- [2026-10-16 14:25] [经验教训] 看板"到处都坏"的重构复盘 + 我反复弄坏代码的三个坏习惯 — commit f0606d62（未 push）。**症状**：用户连续三轮说"回测监控看板还是坏的/还是上一个回测"，而我补了 3~4 处都没修好。
+**结构性根因（用数字说话）**：`jobs/bt_dashboard.py`（3404 行）里「窗口/当前日/完成天数」有 **78 个引用点、19 处各自赋值、13 处回退取数** ⇒ 同一概念被推导 19 遍 ⇒ 修一处其余照旧 ⇒ 表现为"到处都坏"。三个具体病灶：① `day_progress()` 写死 `prod_2026*.json` 与 `*_2026*.log` ⇒ 跑 2025-12 的臂（dec1）"已完成的天"恒为空 ⇒ 进度永远显示 20260105/1/43；② `/api/progress` **绕过** `snapshot()` 直接调 `day_progress()` ⇒ 两种口径并存，页面自相矛盾；③ 曲线/持仓用 `curve_start/curve_end`（清单残留 `manifest_start_day()` 优先 + 日志回退）⇒ 与进度互相打架，曲线点数恒为 0、持仓现价全是 "—"。
+**修法（重构，不是补丁）**：① 新增 `DashboardStore.resolve_window()` 作为**唯一**解析器，优先级 = `<root>/_summary/prod_*.json`（产物事实）→ `.dsh-tmp/wolfbt/console_run.json`（臂自报，root 匹配才用）→ 日志（仅回退）；② 新增模块级 `canonical_progress()`，进度同样"产物优先"，`/api/progress` 与 `snapshot()` 共用；③ 两处写死年份改通用 glob；④ 落地 `.dsh-tmp/wolfbt/dash_selftest.sh`（5 条断言，当前 5/5 通过）。
+**验收**：进度 20251217/12/43 来源 products；曲线 12 点、日盈亏 12、持仓 12 只全有现价、成交 19。
+**方法论教训（我自己的，比代码重要）**：① 我在这轮里**自己弄坏过 4 次**（把"每日上限"代码块插在 `_leg_files` 定义之前 ⇒ UnboundLocalError ⇒ 臂 rc=3 终止年跑；`tier_for` 兜底把埋伏面从 2~4 只/天放大到 23 只；earlier 把 carried 腿按新一天 −2% 重挂 ⇒ 价格追低 0 成交）。② 病因三个：**锚点式字符串替换**（不看作用域/顺序）、**改完不跑冒烟**（直接重启真臂，一次 5 分钟的自检就能挡下 rc=3 事故）、**口径先改后量**（后来"杂毛门补层/排序键"改成先量化，效果完全不同）。③ 正确做法（本会话后半段验证有效）：改代码后**先在沙箱/临时端口跑一次那个函数**（例：直接调 `build_plan()` 让被 except 吞掉的 `NameError` 现形；在 8899 起临时面板验 API），再动真臂；大函数里禁止盲插；口径变更先量化（312 天/12742 候选那种样本）。④ 用户对"你最近写的代码很糟糕"的判断是**有据的**，不是情绪。
+**看板相关常识（避免下次重复踩）**：页面 `jobs/bt_dashboard.html`（2385 行 JS shell）只 fetch `/api/*`；进程必须带 `--root` 与 `--log`（否则 `live_run_log()` 会认错进程跟去别人的日志）；起臂脚本里 `TAG/START/END` 必须 `export`（否则 `console_run.json` 回落成 t68）；端口固定 8800，起臂脚本会按"root 是否匹配"复用或接管。
+- [2026-10-16 15:53] [经验教训] 沪指成交额数据源单位不一致陷阱（CSV/JSON 差 1000 倍） — 做「沪指量能/缩量分位」类指标时，000001.SH 的成交额有两个源且单位不同，混用会差 1000 倍：
+1) data/指数数据/index_daily/000001.SH.csv：2016-01-04~2024 年行是「元」，但 2026 年行的 amount 字段为空（load_rows 解析成 0.0），最后一个非零 amount 是 20260901。
+2) data/index_daily_000001_SH.json：覆盖 20041119~20261015 全序列，amount 单位为「千元」（2016-01-04 比值 csv/json=993、2020/2024 年比值=1000）。
+3) apps/main_line/wave_ladder.load_rows() 合并顺序是 CSV 先、JSON 后覆盖 ⇒ 同交易日以 JSON 为准；因 JSON 是超集，最终序列实际全部来自 JSON，单位一致（千元）。
+4) data/wave_state.json 的 features.amount 是 JSON 值 ×1000（单位「元」）：20261014 JSON=662491839.8437，wave_state=662491839843.7。
+结论：算成交额/20 日均值、分位时必须单源（用 index_daily_000001_SH.json，单位千元；除以 1e5 得亿元）。不要直接混用 CSV+JSON，否则近期行(JSON,千元)与历史行(CSV,元)相比会小 1000 倍。
+- [2026-10-16 15:58] [经验教训] 风险面板 2026-10-16 产出：数据源坑位 — 每日风险面板（jobs/risk_panel_inputs.py + data/risk_panel_<date>.json/md）实操坑位：①本地 PostgreSQL 127.0.0.1:18789 连接超时，取 paper 账户账本/持仓必须走 panel HTTP（http://81.70.44.68/api/v1/，只读）；②trades.db（panel /db/query）positions 更新止于 2026-07-22、daily_snapshot 止于 2026-07-30，已陈旧，持仓改用 GET /scan/latest 的账户状态 + GET /scan/trade-reports 的持仓明细；③汇总器 A股量能 reading 的绝对额单位显示异常（显示「8 亿」，与沪市量级不符），只引用比值 0.941 与 250 日分位 42%，不引用绝对额；④汇总器不提供事件窗口交易日数与纳指波动率分位，前者用 trade_cal(SSE) 自行计（10-16→10-28 = 8 交易日），后者标缺不重算。因子口径固定 8 项（结构/事件窗口/美股位置/A股量能/红利相对强弱/科技拥挤度代理/个股资金流/持仓暴露），分值带比值制 <1/3 normal、1/3~2/3 elevated、>2/3 high，便于 3~6 个月后对照后续 5 日波动与最大回撤。
+- [2026-10-16 17:15] [经验教训] 「提醒 ≤800 字」与「每个数字都要有来源」会互相挤压：先定字数口径再写 — 写事件提醒时踩到的约束冲突，复用口径如下：① 「≤800 字」对中文混排文本必须先明确度量 —— 同一份文件三种口径差 5 倍：中文字 150 / 中文字+数字词元 230 / 不计空格字符 747 / 含空格总字符 823。数字密集型提醒（本次约 60 个数字事实）在「总字符」口径下极易超标，而在「中文字」口径下远未达标 ⇒ 落盘前用 .venv/bin/python 三口径齐测，并在回复里声明。② 对照基线：仓库里上一版演练稿总字符 1000 / 中文字 375 ⇒ 新稿应「不更长」。③ 压缩顺序（先删重复、后删事实）：优先删两处重复出现的同一数字、删解释性形容、删来源复述；绝不能删 ①β 折算三分支、②解除条件阈值、③持仓定量、④观察阈值 —— 这四处是验收点。④ 自算指标要交叉验证：我本地算 MA60=3885.02 与风险面板读数逐位一致，才敢写进提醒；MA20=3858.65 即来自同一序列。
+- [2026-10-20 10:22] [经验教训] 写入路径绕过了单向锁：--write 用 evaluate（单日无锁）⇒ 上锁档位被静默解除 — 2026-10-20 用户观察「10-16 和 10-19 没有浪型」⇒ 挖出两个真 bug（都在我自己的代码里）：bug 1（显示层）：load_rows 的进程内缓存没有失效机制 ✗ ⇒ 长驻 backend（uvicorn）把数据永久冻在第一次读取（10-15）✗  ⇒ 卡片色带停在 10-15；直接证据：接口 waves 522 根而 bars 已到 10-19 ✓。  修复：缓存加 TTL（WOLF_WAVE_LADDER_ROWS_TTL 默认 60s ✓）。生产决策不受影响（读文件 ✓）。commit 81358357。bug 2（更严重，写入层）：CLI 的 --write 调 write_wave_state(...) 不带 ev ⇒ 内部走 evaluate()（单日、无锁）✗✗  而这条链的核心就是单向降级锁（只降不升 + 重定浪）⇒ 写入路径把它绕过了 ✗。  实证：10-15 上锁「下跌1浪」→ 10-16 被写成「4浪调整/t_only」，而 10-15~19 的反弹只有 +2.07% < RESET_RALLY 5%  ⇒ 期间没有任何重定浪事件 ⇒ 这是静默解锁 ✗（同一份数据：walk 说 rung3/defense、文件说 rung0/t_only ✗）。  修复：--write 改为带锁回放 walk(rows) 后取末档 ✓（与卡片/复盘完全同源 ✓）。commit ea36a0a9。  正面副作用：每天判定只取决于数据 ✓，不再受昨天那份文件影响（那是个隐藏输入 ✗）。★ 可复用教训：  ① 同一逻辑有两套入口（evaluate 无锁 / walk 带锁）时，写入与决策必须走带状态的那一套 ✓；  ② 排查文件与界面不一致，先看两个入口是不是同一个函数（本次就是 ✗）；  ③ 长驻进程里的任何缓存都要有失效机制（TTL 或 mtime ✓）；  ④ 生产校验手法：文件 mtime + 接口 asof + 同一容器内 evaluate/walk 逐日对照 ⇒ 一次定位 ✓。部署后实测：文件 = 2026-10-19 / down / 下跌1浪 / defense + 自救 ✓；接口 10-15/16/19 同值 ✓（完全一致 ✓）；运营影响：10-20 盘中由 t_only（允许做T/调仓）收紧到 defense（禁新建仓、存量自救）✓（安全侧 ✓，用户已确认重写 ✓）。
+- [2026-10-20 11:45] [经验教训] data/ 是 gitignore 的每环境一份：别拿工作区判断生产；history 缺失已用 --history-days 修好 — 2026-10-20 用户报「当前 wave_state.json 是旧 schema（date=10-14、session_date/family/stage/status 全 None）」  ⇒ 实测：这只在**工作区**成立 ✓（工作区那份是 10-15 14:37 的旧快照 ✓）；  **生产早就是新 schema** ✓：date=2026-10-19 / session_date=20261020 / family=down / stage=down-1 / status=confirmed ✓。根因：`data/` 被 .gitignore:40 忽略 ⇒ **每个环境各一份、从不互相同步** ✗ ⇒ 判断生产必须 ssh 读 /opt/marcus-platform/data  或调生产 API ✓（已写进 docs/wave-state-consumer-guide.md §1 的 ⚠️ 提示 ✓）。第二个问题是真的 ✓（两环境都成立，生产更严重）：`data/wave_state_history/` —— 工作区 15 份且缺 8-10 月 ✗；  **生产连目录都没有** ✗✗ ⇒ `wave_gate.py:101` 的回测取档（按模拟日 sim8 读）落空 ✗。  原因：2026-10-15 的首轮 regen 只**更新已存在**的文件 ✗，从不创建 ✓。  修复（commit bea1d392 ✓ 已上生产）：regen 新增 `--history-days N` ⇒ **主动生成**最近 N 个交易日  `data/wave_state_history/<YYYYMMDD>.json`（目录自动建 ✓）；再配新调度任务 `wave_ladder_history_regen`（08:20 每日，滚动 90 日 ✓）。  生产实测：**90 份** ✓ 覆盖 20260605~20261019 ✓（8-10 月补齐 ✓）；抽查 20260803 = d4/4-3/**side**（放宽后的 basis_43 ✓）  + family=4/stage=4-3/status=forming/session_date=20260804 ✓；live 未变（10-19/下跌1浪/defense/自救 ✓）；两任务均已注册 ✓。  口径选择：`--history-days` **只写 history**，不动 `data/wave_state_<date>.json` 回填件与 _bt_* 沙箱 ✓（尊重用户「回测别回退」✓）。顺手：`to_wave_state` 现在给**所有产物**都写 session_date ✓（live/dated/history 一致 ✓）。仍存缺口：`ensure_wave` 的现场补仍走旧 `wave_level.judge_wave` ✗（浪型链接管后唯一的旧逻辑残留 ✓ 待换）。
+- [2026-10-21 16:42] [经验教训] 「延伸/自救段」标签验收未通过 ✗：定位准、方向反（第三次撞"位置≠方向"） — 用户问「我们能真的识别出延伸浪吗」⇒ 答：不能 ✗（缺完整计数 / 缺度 / 缺 L2 盘口）。
+退一步做「**疑似延伸/自救段**」影子标签（不给浪号、只标"不像趋势"），**并已跑完验收** ✓（`jobs/eval_sideways_regime.py`，已 push）。
+
+**结论：未通过 ✗**（2024-01~2026-10，上证 676 根 / 银行 676 根，可比样本 641 天，标记 52 天 = 8.1%）：
+  · 5 日：标记命中 27%（14/52）vs **基线 39%** ⇒ lift **0.70** ✗
+  · 10 日：标记命中 4%（2/52）vs **基线 21%** ⇒ lift **0.18** ✗✗
+  ⇒ **被标记之后反而更容易走出趋势** ✗（不是"不趋势"✓）。
+
+为什么 ✗（三条）：
+1. 我的判据（20 日振幅 ≤6% ∧ 量能温和 ∧ 四结构全否）= **压缩的安静区间** ⇒ 在 A 股这是**蓄势** ✓，
+   随后多半**以破位/放量收场** ✗ —— 2026-09 那个区间之后就是 10 月的下跌 ✓；
+2. 验收口径太严 ✓：|涨跌| ≤3% ∧ 未创 20 日新高/新低 ⇒ 基线本身只有 39%/21% ✓ ⇒ "不趋势"在 A 股很罕见 ✗；
+3. **★ 但定位是准的** ✓：52 个标记日**全部落在他讲自救的那几段**（2026-02/03、2026-08/09、2026-09/18~22 ✓）
+   ⇒ **语义对齐 ✓、方向无效 ✗** —— 这已是**第三次**撞同一堵墙（E1 命名/E1b 操作/本次区间 ✓）：
+   **他的"位置命名"永远不等于"方向预测"** ✓。
+
+⇒ 处置：这个标签**只能进文案**（如 `phase="自救段（疑似）"` 提示"别当反转、别追" ✓），**绝不参与任何方向/闸门判断** ✗。
+⇒ 反面收获 ✓：命中率这么低本身就是**支持他的操作口径**的证据 ✓ —— 区间迟早会破 ✗ ⇒ 他说的
+  「要么别做、要么早做」「不追」「反抽到缺口+量萎靡就卖」✓ **正是因为不早做就来不及** ✓。
+- [2026-10-21 17:21] [经验教训] 底分型/低位顶分破位在指数/行业/个股三层全无效 ✗（个股层甚至反向 43%/45%） — 用户问「低位顶分破位和底分型是不是板块或者个股信号？」⇒ 直接检验 ✓ **答案：不是 ✗**（三层都不行）。
+
+方法（`jobs/eval_structure_levels.py` ✓ 已 push）：判据与线上一致 ✓；收益口径 = **10 日横截面超额**
+（减同日同层均值 ✓ 消掉大盘 beta ✓）；胜率基准 = 50%（横截面天然 ✓）。
+
+结果（2016 起 ✓）：
+| 层 | 底分型 | 低位顶分破位 |
+|---|---|---|
+| ① 指数（上证/创业板/科创50）| n=1056 超额 +0.047% 胜率 **49%** ≈随机 | n=1509 -0.028% **48%** ≈随机 |
+| ② 中证一级行业（5 个有效）| n=1964 -0.023% **48%** ≈随机 | n=2885 -0.114% **46%** ≈随机 |
+| ③ **个股**（60 只主板 10 年）| n=19364 -0.046% **43%** ✗反向 | n=35589 +0.033% **45%** ✗反向 |
+
+⇒ **个股层面最差** ✗（43%/45% 显著低于 50% ✓ n 近 2 万 ✓）—— 典型的 **A 股"形态陷阱"**：
+底分型多半出现在**下跌中继**（抄底的人多 ⇒ 反弹被卖 ✓），"低位顶分破位"也不是恐慌顶 ✓。
+⇒ 但**不可利用** ✗（A 股难做空 ✓ 反向优势吃不到 ✓）。
+
+★ 结论（第三/第四次同向验证）：**"结构"只提供"这一段结束了"的事件描述 ✓，不提供任何层级的超额收益** ✗。
+能用的优先级：**红三兵（指数级 10 日 +4.69pp 胜率优势 ✓ n=623）> 其余全部 ✗**。
+⇒ 若还要挖结构类信号 ✓，唯一有正向证据的是**红三兵**（建议下一步在**个股级 + 量能/位置过滤**上检验红三兵 ✓ 而不是这两个 ✗）。
+- [2026-10-22 15:03] [经验教训] 他的超额来自订单流/价差/成本口径，不是"信号" ✗ —— 我们只能复刻仓位纪律 ✓ — 对狼大"下跌里做T赚40~50点"做了完整证伪与归因（2026-10-22 ✓）。**结论：他的钱不是"信号"赚的 ✗，是"价差 + 流动性事件 + 成本口径"赚的 ✓。**
+
+证伪过程（都可复算 ✓ 脚本在 .dsh-tmp / jobs/）：
+1. **事后拟合**：按他 08 月原话+分钟线复盘 → +26.1%（vs 拿住 +23.3% ✓ 只多 2.8 点 ✓）
+2. **样本外**：同特征放到 5 个 B反 窗口 × 2 ETF ⇒ **全部跑输纯持有 ✗**（平均 -20 点 ✓ 最差 -55.3 点 ✓）
+3. **单一分钟信号**（放量砸盘 3x）⇒ 信号后到收盘 **170 -0.556% vs 随机 -0.080%**、**512480 -0.515% vs -0.210%** ⇒ **比随机还差 ✗**
+4. 加"当日跌≥3%"后转正（+0.97%/+0.10%，胜率 67%）但 **n=3** ✗ 无统计意义
+5. 均线下方接刀：170/512480 胜率 41~43% ✗；通富 44%/长电 36~50% ✗
+
+**深层归因（专业角度 ✓ 最重要）**：
+· 「有量就是有人接」= **order flow imbalance（主动买/卖占比）** ✓ 不是 volume ✗ —— 我们只有成交量，**维度就不够** ✓ 调参无解 ✗
+· 「每天挂几个量化单子做差价」= **market maker** ✓ 赚 spread，逆向选择成本靠**底仓+盘口**控制 ✓
+· 「测出公募止损位」「机构票的卖盘盘口」= **forced selling / 流动性真空** ✓ 他预测的是"谁必须卖" ✗ 我们无此数据
+· 「我成本已经做低」+「40 多点」= **持股成本口径** ✓ 不是净值 ✓ ⇒ 与"账户 +23%"同时成立 ✓
+· 他自己划清边界：「我能给你们的都是**避开大损失**的策略」✓ ⇒ 给散户的就是**仓位纪律** ✓
+
+**⇒ 能复刻的只有仓位/纪律层 ✓；信号层抄不到 ✗（缺逐笔+盘口数据）。**
+
+已落地：B反 标签进 wave_state（down_tag ✓ 条件放宽到 4-5 ✓）+ 闸门 T 仓比例（WOLF_BREB_T_RATIO ✓）+ 停用 wave_breb_watch（证否 ✗）。
+待办：换前复权（拆分陷阱 ✗ 512480 1:2 / 588170 1:3 已踩）+ vol targeting 替代固定 30%。
+- [2026-10-23 07:49] [经验教训] 语料研究的三个坑：否证式表述、同词反义、标签公式未读 — 做狼大语料研究时的三条可复用教训（本次 B反 复研踩出来的）：
+
+1. **别把「否证式表述」当成「定性」**。任务前提说「2025-09-04 狼大原话定性主线A杀」，原文其实是「还是那句话，主线A杀的话就不可能有指数新高。这不合理」——这是**反证**（若主线真 A 杀则指数不可能新高），不是对 9/4 的定性。9/4 的正确定性是「进入 3-2 + 当日低点 3732」。用 grep 抓关键词会把截断的整段话读成断言；必须把整条帖子打印出来读完（本次截断到 400 字符时正好切掉了后半句）。
+
+2. **同一个词在不同位置的含义相反**。「放量」在高位=出货/踩踏（「放量只有踩踏」），在恐慌低点=承接/割肉（「全场只有半导体尾盘放量，这不是纯割肉是什么」）。所以「放量」不能做独立特征，必须绑定位置（距高低点）与市场同步量（全市场缩量 + 单一方向放量）。
+
+3. **先查标签的公式，再决定能不能用**。`b_rebound` 看着像「B反」，实际是 (close/lo20−1)≥3% ∧ close<hi20 ∧ close<hi60_prev 的「已反弹但未新高」滞后标记：低点当天数学上必然 False，反弹第 2–3 天才翻真。不读公式就拿它当标签，会把「识别起点」的任务变成「识别已反弹」的任务，指标天然不可达。同理，任何现成 state 标签用之前都在代码里定位它的定义行。
+- [2026-10-23 08:01] [经验教训] 视觉子会话：模型钉 deepseek-official/ 前缀，llm-deepseek/ 会静默回退成文本模型 — 钉模型跑视觉子会话，provider 前缀必须是 `deepseek-official`，写 `llm-deepseek` 会**静默回退**成 deepseek-flash（纯文本），read_image 报「does not declare image input」。
+
+可复用的正确姿势（2026-10-23 实测）：
+1. `task_board_create(title, prompt, model="deepseek-official/deepseek-v4-flash-vision-exp", permission="read-only", goalRun=false, skipVerification=true)` → `task_board_run(taskId)`。
+2. 模型 id 从 `~/.dsh/dsh-usage/usage-ledger.json` 里查现有 provider→model 组合（本次得到 `deepseek-official`: deepseek-flash / deepseek-v4-flash / deepseek-v4-flash-vision-exp / deepseek-v4-pro；`jojo`: claude-opus-5-5）。`~/.dsh/profiles/web/cordis.patch.yml` 里 `- id: llm-deepseek` 是**插件 id**，不是 provider 名，拿它拼 `provider/model` 不生效。
+3. 进度看 `/home/fengx/.dsh/sessions/<cwd-slug>/session-<id>/session.v4.jsonl.zstd`（`zstd -dc`），里面 `"model"` 字段能确认到底用了哪个模型；`task_board_get` 只给 settled 状态，**不给最终输出**，最终 JSON 要自己从 session log 捞最后一条 assistant/message。
+4. 视觉模型经 `read_image` 读本地 jpg 正常，10 张 84x26~1264x185 的小截图全部读通；OCR 出的成交价与分钟/日线数据可逐一对上（0.839 落在 10:19 那根 1min K 的 [0.839,0.843]；0.865 = 8/5 开盘价）。
+5. 踩坑：prompt 里让子代理「先自报模型 id」会浪费 3-4 步（它去 grep 配置猜自己是谁）——别问它，自己从日志看。
+- [2026-10-30 08:21] [经验教训] 链脚本直跑时 `from app.…` 必炸（ModuleNotFoundError）——sys.path[0] 只有脚本目录 — 现象：2026-10-30 08:10「浪型状态+历史」链失败，`/app/apps/main_line/wave_ladder.py --write --dated` 报 `[silent:wave_ladder.py:db_load] ModuleNotFoundError: No module named 'app'` → load_rows()=[] → 写失败 fail-open → rc=1（同链第 2 步 regen 却正常，因为它自己 `sys.path.insert(0, ROOT)`）。
+
+根因：`python <path>/script.py` 时 sys.path[0] = **脚本所在目录**（不是 cwd），而 `app` 包在容器里是 `/app/app`（compose `../backend/app:/app/app`）、本地是 `backend/app` ⇒ 脚本以 `/app` 或 `backend` 为前提的绝对导入必然失败。
+
+修法（两处，均已验证）：
+1. 脚本自带 bootstrap（apps/main_line/wave_ladder.py 顶部）：`_ROOT = dirname(dirname(dirname(abspath(__file__))))`（= /app 或仓库根），依次 insert `backend`、`_ROOT`、`_HERE`（只加存在的目录）。
+2. jobs/chain_util.py::_child_env 给所有链步骤子进程塞 `PYTHONPATH=<ROOT>:<ROOT>/backend:<原值>` —— 仓库里还有约 50 个 jobs/apps 脚本 `from app.…` 且无 bootstrap，同一类雷。
+
+排查要点：`regen_wave_state_ladder.py` 用 `import wave_ladder as W` 后 `W.load_rows()` 能取到 3191 根，而 wave_ladder 自身直跑取不到 —— **同函数不同结果 ⇒ 一定是 sys.path 差异，不是数据问题**；index_daily_store.load_rows 内部 `except: return []` 会吞掉所有异常（包括表不存在），定位要先直接调它并让异常冒出来。
+- [2026-10-30 08:40] [经验教训] ssh marcusrv 报 Broken pipe → 强制 IPv4 + IPQoS=throughput；配 ControlMaster 长连接 — 问题：`ssh marcusrv`（81.70.44.68，Ubuntu/OpenCloudOS 云机）报 `client_loop: send disconnect: Broken pipe`，握手、公钥认证都成功，进 session 后立刻断 —— 看着像密钥/权限问题，其实不是。
+
+解法：强制 IPv4 + 关闭 QoS 打标即可：
+`ssh -4 -o IPQoS=throughput marcusrv 'echo OK'` → OK。
+
+长连接（跨多个 bash 工具调用复用，ControlPath 落在本机 /tmp，进程常驻）：
+```
+mkdir -p /tmp/ssh-marcus
+ssh -4 -o IPQoS=throughput -o ServerAliveInterval=20 -o BatchMode=yes \
+    -o ControlMaster=auto -o ControlPath=/tmp/ssh-marcus/%r@%h:%p -o ControlPersist=12h \
+    marcusrv 'echo OK'
+```
+之后每次调用带同一 ControlPath 即可秒连；关闭：`ssh -O exit -o ControlPath=/tmp/ssh-marcus/%r@%h:%p marcusrv`。
+
+生产仓库 = marcusrv:/opt/marcus-platform（git 与 GitHub 同步），容器 marcus-backend 把 `../apps` `../jobs` `../backend/app→/app/app` bind 进去 ⇒ 改代码后 `git pull` 即生效，**不用重启容器**；跑脚本用 `docker exec marcus-backend sh -c 'cd /app && /usr/local/bin/python <脚本>'`。
 
 ## 行动指南 Action Guide
 
@@ -7425,6 +7768,23 @@ y26 分桶（170 手）：0~2% 5手 −143 ｜ 2~5% 14手 −919 ｜ 5~10% 55手
 诚实标注：21 条里 13 条是天津普林 ⇒ 泛化性未知，本质是"用规则锁定一只已知坏票"，不是普适规律。
 - [2026-09-22 22:44] [行动指南] T10 跑完后的同口径对照 + 收敛行频次统计 — 下一轮（自动开发第 2 轮）按序做：①等 T10 跑完 75 天（现 7/75，约 4h），出同口径表 T10 vs T9 vs T5/T6/T8：重点看「清仓次数/持仓期/老仓占比/平均仓位/换手/腿型/退出结构」——判据是"底仓是否活过 4 个交易日、清仓次数是否从 3月10·4月16 降下来"；②顺手统计 T10 日志里 `[gateway] ... 卖量 A→B：底仓floor`（本轮新增的收敛行）出现频次与被收敛掉的卖量总额 ⇒ 直接量化这条闸的作用面；③若 T10 有效，下一轮再叠 WOLF_BASE_KEEP_MIN=0.5（底仓保留比例结构下限，实现+测试已完成、默认0未开），仍保持单变量；④仍待用户拍板的老项：D1 窗口/阈值放宽、挂线恢复（WOLF_BUY_LINE=1）、WOLF_BASE_EXEMPT_TAKE_MAX 节流值。
 - [2026-09-22 23:23] [行动指南] 回测臂崩溃续跑看门狗 armwatch（含双跑守卫） — 2026-09-22 自动化第 7 轮：给四个回测臂加"崩溃续跑"看门狗，保护 9~12 小时算力。背景：臂都是 systemd-run 的 transient unit、Restart=no，驱动一崩单元静默退出（本会话 T7 就因单元退出把 setsid 子进程带走白跑过）。处置两层：① 四个 `_run_t{9,10,11,12}_exec.sh` 加 `RESUME_FROM` —— 设了它就把 --start 改为该日并**去掉 --prod-reset-first**（不重置账户），配 `SKIP_SEED=1` 复用沙箱；② 看门狗 `.dsh-tmp/wolfbt/arm_watchdog.sh`（systemd 单元 armwatch，每 120s 一轮）：单元 inactive 且未跑满 75 天 ⇒ 用续跑方式拉起。**关键安全件：双跑守卫**——单元态与进程态不一致时以进程为准（pgrep "bt_days.py .*--root .*data/_bt_<tag>" 或 "_run_<tag>_exec.sh" 命中就不动），否则会起出同臂第二实例、两进程写同一沙箱+账户 ⇒ 数据报废。验证：bash -n 全 OK；next_missing 四臂起点算对（t9→20260224、t10/t11→20260109、t12→20260106）；双跑守卫实跑 FORCE+DRY 演练时以进程为准拒绝动作 (日志"单元 inactive 但仍有驱动进程在跑 ⇒ 不动")；资源 864G 磁盘空闲、13.6G 内存空闲。另含 WATCHDOG_DRY=1（只打印不做）/WATCHDOG_FORCE=1（演练用）。
+- [2026-10-16 09:59] [行动指南] 等级模型：两轮验收均未通过 ⇒ 收线；保留「链适合风控、不适合买入信号」的结论 — 决定（2026-10-16，基于 E1+E1b 两轮独立验收 ✗）：等级模型这条线收线/冻结，不再投入方向或操作吻合率类实验 ✗。依据：E1（用他的命名比极性）62%/50% vs 基线 78% ✗；E1b（用他的操作比方向）① 36%、② 20~68% vs 基线 76%/71% ✗，McNemar 显示合成规则还不如① ✗。失败原因是结构性的（他用语言标位置、用动作做择时；被标注期 76% 是他在降风险；operation 是状态不是动作 ✗）⇒ 再算吻合率无意义 ✓。★ 保留的可复用结论（勿忘）：  ① **我们的空和他的空很准**（defense/exit 命中 4/4 ✓），我们的多和他的买入不准（side 仅 29% ✓）     ⇒ **链适合做风控（拦买/降仓），不适合做买入信号** ✓ —— 这正是生产现状的用法（p2_entry_gate 拦买 + 主线/链决定买什么 ✓）     ⇒ **不需要改** ✓✓。  ② side 的语义（已写进文档/卡片）：结构没坏、可参与 ≠ 买信号 ✓ —— 这解释了为什么建仓点少 ✓。  ③ 工具箱保留：周线源（datahub index_weekly）+ 窗口参数可覆盖（HI/RALLY/MIN_BARS/ORIGIN_BARS ✓ 默认未改）。下一步候选（若要继续）：**E1c = 条件分布** —— 只看 side 的日子里他实际减仓的那些，找共同的择时线索  （BOLL 中轨/阻力位、股指交割日、节前、周末风险、量化抛压 ✓ 他反复讲过）；度量改用**他减仓日的召回率** ✓（避开基线问题 ✓），  产出是减仓窗口影子标记（不动 operation ✓）—— 与等级模型正交 ✓。另：E1b 会话顺带修了卡片的 4-3 标签 bug（三层缺口的第②层 ✓ 显示层精确匹配漏了 4-2→4-3 进行中写法 ✗）；已由本会话部署到生产（bundle index-BdcC2YHw.js ✓ 页面 200 ✓）。待用户拍板：basis_43 的缩量门槛是否从 0.8 放宽（离线 A/B：0.8→2016 后 0 天 / 0.9→17 / 1.0→53 ✓）—— 属生产 operation 放松 ⚠️。
+- [2026-10-23 08:55] [行动指南] B反 框架运行方式：agent 按人脑分析，禁止打分/阈值/公式触发 — 用户硬约束（2026-10-23 定）：**B反 框架今后由 agent 做决策，要模拟人类思维，禁止机械等式。**
+
+具体禁令：① 不用分数/阈值/公式当买卖触发；② 不把判据写成 `if X>Y then buy`；③ 不靠单一指标下结论；④ 不输出"胜率/概率"当理由。
+
+agent 必须做的（像狼大那样分析）：
+1. **四行预判先写**：级别（哪一级的反弹）/ 长度（几天到几周，先给数）/ 目标（先看浪型结构点：1浪顶、4-3低点、前一轮顶，人工标）/ 失效（B起点低点×(1−3~6%)）。每行都要带可核对的具体数字与日期。
+2. **读相位**：起点 / 中段 / 顶 / 结束 / 根本没有B反——五选一，并给"支持"与"反对"各一条证据。
+3. **读谁在买**：放量的形状 = 放量 × 收盘位置 × 次日有没有做上去。区分 割肉（放量收最低）/ 承接（放量收上半区）/ 自救（承接次日就散）。
+4. **读够不够得着**：目标（结构点）与现价的距离、失效位在哪；用"这笔记不值得做"回答，不算 R:R 阈值。
+5. **给预案 1/2/3**，包括"都不出现就不做"。
+6. **给反证条件**：什么情况出现就说明读错了。
+7. **允许"看不清"**：不做是合法输出，不是失败。
+
+防自欺的护栏：每个判断必须带**可核对的数字（日期+价位/量比/收位）**，并写一句**反证条件**。做不到这两点就退回"看不清"。
+
+关键教训来源：本轮研究里三次"好看→拆穿"（打分卡无超额、全连乘越连越差、五步链条样本截断），根因都是在 ~400 个独立事件、年份高度集中的样本里调参数。狼大自己的原话也指向同一处：「连我都没有（数浪）这个实力」「技术是保命用的」「B反 是一次性的」。
 
 ## 备注 Notes
 

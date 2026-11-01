@@ -7,7 +7,7 @@
 漏掉的一档：**字典型默认值的内部键** —— 例如
   · `t_build.BUILD_PARAMS_DEFAULT`（做T建仓参数 **50 键**：门槛/评分权重/时机/规模分档）
   · `trend_confirm.TREND_CFG`（10 键）、`position_class.CONFIG`（11 键）、`wave_alloc.WAVE_ALLOC`（5 键）、
-    `position_tier.CORPUS_PROFILE`（7 键）、`wolf_trend_stop.DEFAULTS`（5 键）
+    `position_tier.CORPUS_PROFILE`（7 键）
 大写常量扫描只能看到一个容器名，看不到里面**每一个都是可调旋钮**。
 
 用法::

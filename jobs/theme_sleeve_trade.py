@@ -51,6 +51,21 @@ def main():
                    "stance": "yellow", "intent": "new_base", "account_id": "stock",
                    "symbol_held": False, "t_universe": False, "rel_low": False, "mainline_dir": False,
                    "theme_id": x.get("theme_id"), "sleeve": "theme"}
+        # 共享买入前门：P2 + B4/B5 + B8（选股后、calc_position 前）
+        try:
+            _g = post("/api/v1/indicator/pre-trade-gate",
+                      {"symbol": sym, "intent": "new_base", "source": "theme_sleeve_trade"})
+        except Exception as _ge:
+            _g = {"allow": True, "multiplier": 1.0,
+                  "reasons": ["pre_trade_gate 调用失败(fail-open): " + str(_ge)[:120]]}
+        if not _g.get("allow", True):
+            results.append({"symbol": sym, "theme_id": x.get("theme_id"), "ok": False,
+                            "blocked": True, "reasons": _g.get("reasons") or [], "gate": _g})
+            continue
+        _mult = float(_g.get("multiplier") or 1.0)
+        if _mult < 1.0:
+            payload["signal_strength"] = "low"
+            payload["tier"] = "probe"
         try:
             pos = post("/api/v1/indicator/calc-position", payload)
         except Exception as e:
@@ -59,7 +74,8 @@ def main():
         shares = int(q.get("probe_shares") or 0)
         price = float(pos.get("current_price") or 0)
         rec = {"symbol": sym, "theme_id": x.get("theme_id"), "shares": shares, "price": price,
-               "all_pass": pos.get("all_pass"), "warnings": (pos.get("warnings") or [])[:4]}
+               "all_pass": pos.get("all_pass"), "warnings": (pos.get("warnings") or [])[:4],
+               "gate": {"allow": _g.get("allow"), "multiplier": _mult, "reasons": _g.get("reasons") or []}}
         if not a.execute:
             rec["ok"] = True; rec["dry_run"] = True; results.append(rec); continue
         if shares < 100 or price <= 0:
@@ -71,6 +87,15 @@ def main():
             rec["ok"] = bool(order.get("order_id")); rec["order"] = order
             if rec["ok"]:
                 done.add(sym)
+                try:
+                    pp = os.path.join(ROOT, "data", "theme_sleeve_positions.json")
+                    try: pdata = json.load(open(pp, encoding="utf-8"))
+                    except Exception: pdata = {}
+                    pdata[sym] = {"symbol": sym, "theme_id": x.get("theme_id"), "volume": shares,
+                                  "cost": price, "entry_date": today}
+                    json.dump(pdata, open(pp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+                except Exception as e:
+                    print("[theme] positions save fail:", str(e)[:100], flush=True)
         except Exception as e:
             rec["ok"] = False; rec["error"] = "trade:" + str(e)[:160]
         results.append(rec)
@@ -79,6 +104,11 @@ def main():
     out = {"date": today, "selected_date": d, "execute": a.execute, "results": results}
     q = os.path.join(ROOT, "data", "mainline", d, "theme_sleeve_trade.json")
     json.dump(out, open(q, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    try:
+        from theme_sleeve_store import save
+        save(d, "trade", out)
+    except Exception as e:
+        print("[theme] PG trade save fail:", str(e)[:120], flush=True)
     print(json.dumps(out, ensure_ascii=False, indent=1)[:4000])
     return 0
 

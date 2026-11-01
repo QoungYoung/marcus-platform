@@ -5,7 +5,7 @@
 阈值: >=0.72 allow(可出手) | 0.65~0.72 boundary(交LLM带计划/关键位/浪型语境复核) | <0.65 block(低分倾向观望)
 
 **召回安全设计**: 本模块只产出 score/gate/prompt(供 trade_graph 注入 Pi), 不做硬拦;
-真正的硬门由 wave_level_gate(operation=defense/exit->不建仓) 与 weekend_de_risk 承担。
+真正的硬门由 wave_level_gate(operation=defense/exit->不建仓) 与 defense_cash 承担。
 原因: 09-02(狼大买日) 3候选六因子均<0.65, 硬拦会掉召回(100%->75%)。
 """
 import os, json

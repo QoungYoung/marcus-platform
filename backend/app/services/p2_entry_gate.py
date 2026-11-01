@@ -88,11 +88,54 @@ def _candidate_dirs(ts_code):
             dirs.append(key)
     return dirs
 
+def _b4b5_gate(symbol=None, ts_code=None):
+    """B4 主线响应 / B5 避险抢戏（数据层 apps/main_line/breakout_context.py）。失败 fail-open。"""
+    try:
+        import sys as _sys
+        _root = os.environ.get("WORKSPACE_PATH") or os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        _p = os.path.join(_root, "apps", "main_line")
+        if _p not in _sys.path:
+            _sys.path.insert(0, _p)
+        import breakout_context as _bc
+        if not _bc.b4b5_gate_enabled():
+            return None
+        _theme = _bc.theme_of_symbol(ts_code) or _bc.theme_of_symbol(symbol)
+        if not _theme:
+            return {"action": "unknown", "allow": True, "reasons": ["B4/B5无主题"], "theme": None}
+        return _bc.gate(_theme, _bc.prev_trade_day())
+    except Exception as _e:
+        _silent_alert("p2_entry_gate.py:_b4b5_gate", _e)
+        return None
+
+
+def _b8_gate(symbol=None, ts_code=None):
+    """B8 回踩三态：跌破确认=block；跌破待确认=downgrade。失败 fail-open。"""
+    try:
+        import sys as _sys
+        _root = os.environ.get("WORKSPACE_PATH") or os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        _p = os.path.join(_root, "apps", "main_line")
+        if _p not in _sys.path:
+            _sys.path.insert(0, _p)
+        import breakout_context as _bc
+        if not _bc.b8_gate_enabled():
+            return None
+        _code = ts_code or symbol
+        if not _code:
+            return None
+        return _bc.b8_gate(_code, _bc.prev_trade_day())
+    except Exception as _e:
+        _silent_alert("p2_entry_gate.py:_b8_gate", _e)
+        return None
+
+
 def _log(symbol, ts_code, out):
     try:
         row={"at":_dt.datetime.now().isoformat(),"symbol":symbol or ts_code,"ts_code":ts_code,
              "hard_block":bool(out.get("hard_block")),"multiplier":round(float(out.get("multiplier") or 1.0),2),
-             "reasons":out.get("reasons") or []}
+             "reasons":out.get("reasons") or [], "b4b5":(out.get("b4b5") or {}).get("action"),
+             "b8":(out.get("b8") or {}).get("action")}
         p=_path("p2_gate_log.jsonl")
         with open(p,"a",encoding="utf-8") as f:
             f.write(json.dumps(row,ensure_ascii=False)+"\n")
@@ -133,6 +176,50 @@ def p2_gate_check(symbol=None, ts_code=None):
         if "us_yield_spike" in flags or "cn30_spike" in flags:
             out["reasons"].append("P2宏观债市异动(yield_spike): 降级0.5")
             out["multiplier"]=min(out["multiplier"],0.5)
+    # B8：突破后回踩三态（跌破确认=不买；跌破待确认=等次日）
+    try:
+        _g8 = _b8_gate(symbol, ts_code)
+        if _g8:
+            out["b8"] = {k: _g8.get(k) for k in ("state","level","breakout","retest",
+                                                 "retest_low","retest_close","confirm_close",
+                                                 "action","reasons")}
+            _a8 = _g8.get("action")
+            if _a8 == "block":
+                _hard8 = str(os.getenv("WOLF_B8_HARD", "1")).strip().lower() in ("1","true","yes","on")
+                if hard and _hard8:
+                    out["hard_block"] = True
+                else:
+                    out["multiplier"] = min(out["multiplier"], 0.5)
+                out["reasons"].append("B8门: " + "；".join(_g8.get("reasons") or []))
+            elif _a8 == "downgrade":
+                out["multiplier"] = min(out["multiplier"], 0.5)
+                out["reasons"].append("B8门: " + "；".join(_g8.get("reasons") or []))
+            elif _a8 == "unknown":
+                out["reasons"].append("B8门: 数据缺失(fail-open)")
+    except Exception as _e_b8:
+        _silent_alert("p2_entry_gate.py:b8", _e_b8)
+
+    # B4/B5：主线响应 / 避险抢戏（开关 WOLF_B4B5_GATE 默认 1；失败 fail-open）
+    try:
+        _g = _b4b5_gate(symbol, ts_code)
+        if _g:
+            out["b4b5"] = {k: _g.get(k) for k in ("theme","mainline_ret","bank_ret","gold_ret",
+                                                  "mainline_ok","hedge_flag","action","reasons")}
+            _act = _g.get("action")
+            if _act == "block":
+                _hard = str(os.getenv("WOLF_B4B5_HARD", "0")).strip().lower() in ("1","true","yes","on")
+                if hard and _hard:
+                    out["hard_block"] = True
+                else:
+                    out["multiplier"] = min(out["multiplier"], 0.5)
+                out["reasons"].append("B4/B5门: " + "；".join(_g.get("reasons") or []))
+            elif _act == "downgrade":
+                out["multiplier"] = min(out["multiplier"], 0.5)
+                out["reasons"].append("B4/B5门: " + "；".join(_g.get("reasons") or []))
+            elif _act == "unknown":
+                out["reasons"].append("B4/B5门: 数据缺失(fail-open)")
+    except Exception as _e_b45:
+        _silent_alert("p2_entry_gate.py:b4b5", _e_b45)
     if out["reasons"]:
         _log(symbol,ts_code,out)
     return out

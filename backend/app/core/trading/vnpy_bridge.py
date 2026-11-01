@@ -183,6 +183,11 @@ class VNPyBridge:
     def _normalize_symbol(symbol: str) -> str:
         """Marcus 代码 → 纯数字代码 (如 SH600519 → 600519)"""
         symbol = symbol.strip().upper()
+        # 兼容 Tushare 格式 002086.SZ / 600519.SH
+        if "." in symbol:
+            _code, _ex = symbol.split(".", 1)
+            if _code.isdigit() and len(_code) == 6 and _ex in ("SH", "SZ", "BJ"):
+                symbol = f"{_ex}{_code}"
         if symbol.startswith(("SH", "SZ", "BJ")) and len(symbol) == 8:
             return symbol[2:]
         return symbol
@@ -191,6 +196,11 @@ class VNPyBridge:
     def _get_exchange(symbol: str) -> Exchange:
         """从 Marcus 代码提取交易所"""
         symbol = symbol.strip().upper()
+        if "." in symbol:
+            _code, _ex = symbol.split(".", 1)
+            if _ex == "SH": return Exchange.SSE
+            if _ex == "SZ": return Exchange.SZSE
+            if _ex == "BJ": return Exchange.BSE
         if symbol.startswith("SH") or (
             symbol.isdigit() and symbol[:3] in ("600", "601", "603", "605", "688")
         ):

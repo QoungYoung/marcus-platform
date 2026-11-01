@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""抓狼大帖子（楼主 + 回复）→ data/wolf_posts.json（2026-10-21 ✓）。
+"""抓狼大帖子（楼主 + 回复）→ PG wolf_posts（2026-10-21；2026-10-29 起 PG 唯一存储）。
 
 背景：用户「NGA 插件里有访问 key ✓ 读他每天发言和回复，等他帖子什么时候没了再说」✓
   ⇒ 用同一套 Cookie（`ngaPassportUid` / `ngaPassportCid` ✓ 从环境变量 `NGA_UID` / `NGA_CID` 读 ✓）
      抓最后几页 ✓ 只保留**楼主发言**（`OP_UID`）与该页**回复**摘要 ✓。
-  · 产出 `data/wolf_posts.json`（**gitignore ✓ 不进仓库**）供 `wave_advice_agent` 当**参考** ✓；
+  · 产出 PG `wolf_posts` 供 `wave_advice_agent` 当**参考** ✓；
   · **纪律仍然是 `config/wave_advice_policy.json`（我们自己的 ✓）** —— 他断更/帖子没了 ⇒ 本任务自动失效 ✓
     不阻塞任何东西 ✓（用户 2026-10-21：「等他帖子什么时候没了再说」✓）。
 
@@ -21,10 +21,16 @@ import sys
 import time
 import urllib.request
 
+try:
+    import psycopg2
+except Exception:
+    psycopg2 = None
+
 TID = "47288722"
 OP_UID = "150058"          # 楼主 -阿狼-
 DATA_DIR = os.environ.get("DATA_DIR", "").strip() or "data"
 OUT = os.path.join(DATA_DIR, "wolf_posts.json")
+DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
 
@@ -104,6 +110,48 @@ def parse(html, all_op=False):
     return out
 
 
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS wolf_posts (
+  tid VARCHAR(16) NOT NULL,
+  lou INTEGER NOT NULL,
+  uid VARCHAR(32),
+  author VARCHAR(64),
+  post_date VARCHAR(32),
+  text TEXT,
+  is_op BOOLEAN DEFAULT TRUE,
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (tid, lou)
+)
+"""
+
+UPSERT = """
+INSERT INTO wolf_posts (tid, lou, uid, author, post_date, text, is_op)
+VALUES %s
+ON CONFLICT (tid, lou) DO UPDATE SET
+  uid=EXCLUDED.uid, author=EXCLUDED.author, post_date=EXCLUDED.post_date,
+  text=EXCLUDED.text, is_op=EXCLUDED.is_op, updated_at=now()
+"""
+
+
+def save_pg(floors):
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 不可用")
+    conn = psycopg2.connect(DB)
+    try:
+        cur = conn.cursor()
+        cur.execute(SCHEMA)
+        from psycopg2.extras import execute_values
+        vals = [(TID, int(f.get("lou") or 0), str(f.get("uid") or ""), str(f.get("author") or ""),
+                 str(f.get("date") or ""), str(f.get("text") or ""), bool(f.get("is_op")))
+                for f in floors if int(f.get("lou") or 0) > 0]
+        if vals:
+            execute_values(cur, UPSERT, vals)
+        conn.commit()
+        return len(vals)
+    finally:
+        conn.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pages", type=int, default=2)
@@ -137,25 +185,21 @@ def main():
         print("没抓到内容 ⇒ 不写文件 ✓")
         return 0
     if args.dry:
-        print("（--dry ✓ 不写文件）")
+        print("（--dry ✓ 不写 PG）")
         return 0
+    # 兼容旧文件：首次迁移把旧 wolf_posts.json 一并 upsert 后删除
     try:
-        old = json.load(open(OUT, encoding="utf-8")) if os.path.exists(OUT) else {"floors": []}
-    except Exception:
-        old = {"floors": []}
-    # ★ 去重键：pid 优先 ✓；解析器不产 pid 时用 `lou`（只看楼主视图的楼号 = 他的发言序号 ✓ 稳定 ✓）
-    def _key(f):
-        return f.get("pid") or ("lou:%s" % f.get("lou"))
-
-    bypid = {_key(f): f for f in (old.get("floors") or [])}
-    for f in floors:
-        bypid[_key(f)] = f
-    merged = sorted(bypid.values(), key=lambda x: x.get("lou") or 0)
-    os.makedirs(DATA_DIR, exist_ok=True)
-    json.dump({"tid": TID, "updated": time.strftime("%Y%m%d"), "op_uid": OP_UID,
-               "total": len(merged), "floors": merged[-400:]},
-              open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=0)
-    print("已写 %s（累计 %d 层，保留最近 400 ✓）" % (OUT, len(merged)))
+        if os.path.exists(OUT):
+            old = json.load(open(OUT, encoding="utf-8"))
+            old_floors = old.get("floors") or []
+            if old_floors:
+                n_old = save_pg(old_floors)
+                print("迁移旧文件 wolf_posts.json -> PG: %d 层" % n_old)
+            os.remove(OUT)
+    except Exception as e:
+        print("旧文件迁移失败(继续): %s" % str(e)[:120])
+    n = save_pg(floors)
+    print("UPSERT wolf_posts tid=%s floors=%d（PG 唯一存储）" % (TID, n))
     return 0
 
 

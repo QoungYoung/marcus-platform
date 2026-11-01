@@ -990,16 +990,17 @@ class SchedulerService:
                 if execution.output:
                     # golden_pit_dca: 从 JSON 中提取 summary_text 作为友好回退
                     output_preview = execution.output
+                    _cap = 4000 if task.id == "daily_strategy_summary" else 500
                     if task.type == 'golden_pit_dca':
                         try:
                             data = json.loads(execution.output)
-                            output_preview = data.get("summary_text", execution.output[:500])
+                            output_preview = data.get("summary_text", execution.output[:_cap])
                         except Exception:
-                            output_preview = execution.output[:500]
+                            output_preview = execution.output[:_cap]
                     else:
-                        output_preview = execution.output[:500]
-                    if len(output_preview) > 500:
-                        output_preview = output_preview[:500] + "\n... (已截断)"
+                        output_preview = execution.output[:_cap]
+                    if len(output_preview) > _cap:
+                        output_preview = output_preview[:_cap] + "\n... (已截断)"
                     lines.append(f"\n输出:\n{output_preview}")
                 if execution.error:
                     lines.append(f"\n错误: {self._error_summary(execution.error)}")

@@ -21,7 +21,7 @@ DSN = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433
 FAST = ["test_ambush_two_steps.py", "test_tier_state_path.py", "test_wolf_ticket_ban.py",
         "test_board_prefilter.py", "test_clock_source_consistency.py", "test_confirm_order.py",
         "test_stop_index_level.py", "test_sell_base_exempt.py", "test_protect_and_dedup.py",
-        "test_wolf_trend_stop.py", "test_sell_floor_enforce.py", "test_volume_gate_local.py",
+        "test_sell_floor_enforce.py", "test_volume_gate_local.py",
         "test_zhengt_size_cap.py", "test_build_size_floor.py", "test_zt_day_budget.py",
         "test_target_table.py", "test_index_quote_shim.py", "test_multi_account_paper_infra.py"]
 

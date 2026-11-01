@@ -23,6 +23,32 @@ for _ in range(5):
 
 logger = logging.getLogger(__name__)
 
+
+def _realtime_indicators_module():
+    """加载根目录 core/realtime_indicators.py。
+
+    容器里 `core` 可能先命中 `/app/app/core`，导致 `core.realtime_indicators` 不存在；
+    这里按文件路径兜底。
+    """
+    try:
+        from core import realtime_indicators as _ri
+        return _ri
+    except Exception:
+        import importlib.util
+        for parent in Path(__file__).resolve().parents:
+            cand = parent / "core" / "realtime_indicators.py"
+            if cand.exists():
+                spec = importlib.util.spec_from_file_location("_marcus_realtime_indicators", str(cand))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod
+        raise
+
+
+def _prev_indicators_cls():
+    return _realtime_indicators_module().PrevIndicators
+
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.models.indicator import (
@@ -32,6 +58,7 @@ from app.models.indicator import (
     CalcPositionRequest, CalcPositionResponse,
     CalcPositionQuantity, CalcPositionStopLoss, CalcPositionValidation,
     EntryCheckRequest, EntryCheckResponse,
+    PreTradeGateRequest,
     EntryCheckTechDetail, EntryCheckCapitalDetail,
     EntryBuyConfirmation, LayerResult,
 )
@@ -747,7 +774,7 @@ async def get_realtime_indicators(
             prev_macd_dif = float(latest_tech.get("macd_dif_qfq", 0) or 0) or 0.0
             prev_macd_dea = float(latest_tech.get("macd_dea_qfq", 0) or 0) or 0.0
 
-            from core.realtime_indicators import PrevIndicators
+            PrevIndicators = _prev_indicators_cls()
             # Reconstruct ema12/ema26 from DIF and close:
             # DIF = ema12 - ema26, and roughly ema26 ≈ close (当日)
             # So ema12 ≈ close + DIF, ema26 ≈ close
@@ -771,7 +798,9 @@ async def get_realtime_indicators(
         warning_msg = "⚠️ 腾讯实时行情不可用，无法计算盘中实时指标。以下仅为最近盘后确认数据。"
 
     if quote and daily_df is not None and not daily_df.empty:
-        from core.realtime_indicators import DailyBar, calculate_realtime_indicators
+        _ri = _realtime_indicators_module()
+        DailyBar = _ri.DailyBar
+        calculate_realtime_indicators = _ri.calculate_realtime_indicators
 
         bars = [
             DailyBar(
@@ -1548,6 +1577,14 @@ def calc_position(req: CalcPositionRequest):
     ts_code = _normalize_to_ts_code(symbol)
     xq_symbol = _make_xueqiu_symbol(ts_code)
 
+    # 主线/主题读取（只读；不改变旧行为，取不到就空）
+    _mainline_ctx = {}
+    try:
+        from app.services.mainline_read import load_position_context
+        _mainline_ctx = load_position_context(symbol=ts_code, theme_id=req.theme_id, track_id=req.track_id)
+    except Exception as _e_ml:
+        logger.warning(f"读取主线上下文失败(忽略): {_e_ml}")
+
     # ── Layer 1: 获取基础数据 ──
     warnings = []
 
@@ -1664,9 +1701,56 @@ def calc_position(req: CalcPositionRequest):
     single_cap_pct = _get_single_stock_cap(req.signal_strength)
     role_cap_pct = _get_role_cap(req.chain_role)
     total_cap_pct = _get_total_cap(req.stance)
+    # 主线/主题项目级 caps：只压单票/试探/加仓，不改总仓位
+    _mainline_blocked = False
+    if _mainline_ctx.get("available"):
+        _mname = _mainline_ctx.get("theme_name") or _mainline_ctx.get("track_name") or "-"
+        warnings.append(
+            "📌 主线/主题: %s | verdict=%s | thesis_valid=%s | review_required=%s" % (
+                _mname, _mainline_ctx.get("verdict"), _mainline_ctx.get("thesis_valid"),
+                _mainline_ctx.get("review_required")))
+        _mcaps = _mainline_ctx.get("caps") or {}
+        if _mcaps:
+            _ms = float(_mcaps.get("max_single_stock") or 0) * 100
+            if _ms > 0 and _ms < single_cap_pct:
+                single_cap_pct = _ms
+                warnings.append("📌 主题 caps：单票上限收紧到 %.1f%%" % _ms)
+            if req.tier == "probe" and _mcaps.get("max_probe"):
+                _mp = float(_mcaps.get("max_probe")) * 100
+                if _mp < single_cap_pct:
+                    single_cap_pct = _mp
+                    warnings.append("📌 主题 caps：试探仓上限 %.1f%%" % _mp)
+            if req.intent in {"add_base", "refill_base"} and _mcaps.get("max_add"):
+                _ma = float(_mcaps.get("max_add")) * 100
+                if _ma < single_cap_pct:
+                    single_cap_pct = _ma
+                    warnings.append("📌 主题 caps：加仓上限 %.1f%%" % _ma)
+            if req.intent == "new_base" and (not _mcaps.get("allow_new", True) or not _mcaps.get("allow_base", True)):
+                _mainline_blocked = True
+                warnings.append("🚫 主题 caps：当前不允许新开底仓")
+            if req.intent in {"add_base", "refill_base"} and not _mcaps.get("allow_add", True):
+                _mainline_blocked = True
+                warnings.append("🚫 主题 caps：当前不允许加仓")
+            if req.intent == "t_refill" and not _mcaps.get("allow_t", True):
+                _mainline_blocked = True
+                warnings.append("🚫 主题 caps：当前不允许做T")
+        if _mainline_ctx.get("thesis_valid") is False:
+            warnings.append("⚠️ 主题判据失效：thesis_valid=false，按现有仓位函数处理")
+        if _mainline_ctx.get("review_required"):
+            warnings.append("⚠️ 主题需要复核：review_required=true")
+    if _mainline_blocked:
+        single_cap_pct = 0.0
+
     # 2026-10-25：G0-G3 覆盖 Pi stance（退役旧表）；只压不抬，取不到 operation 不改变旧行为
+    _theme_sleeve = str(getattr(req, "sleeve", "") or "") == "theme"
     _dcap = _get_defense_cap()
-    if _dcap is not None and _dcap < total_cap_pct:
+    if _theme_sleeve:
+        # 题材 sleeve：按用户要求不受浪型/防御总仓 0% 封顶；仍受题材 caps、单票、现金约束
+        _theme_total = 30.0
+        if _theme_total < total_cap_pct:
+            total_cap_pct = _theme_total
+        warnings.append("📌 题材 sleeve：跳过防御总仓封顶，题材总仓≤30%")
+    elif _dcap is not None and _dcap < total_cap_pct:
         warnings.append("🛡️ 防御档位：总仓上限 %.0f%% → %.0f%%（G0-G3 统一口径）" % (total_cap_pct, _dcap))
         total_cap_pct = _dcap
     tier_condition = _get_tier_condition(req.tier)
@@ -1696,6 +1780,8 @@ def calc_position(req: CalcPositionRequest):
         logger.info(f"[calc_position] 风格调整({style_regime}): single_cap={single_cap_pct:.1f}%, total_cap={total_cap_pct:.1f}%")
 
     # ── P3 三仓档位（StepB dry-run; P3_TIER_MODE=1 后按档位 cap/现金底线生效）──
+    if _theme_sleeve:
+        warnings.append("📌 题材 sleeve：跳过浪型档位，但保留总仓/现金/单票/题材 caps/G0-G3")
     _p3_blocked = False
     _p3_mode_enabled_calc = False
     _p3_cash_floor_pct = 25.0
@@ -1704,7 +1790,8 @@ def calc_position(req: CalcPositionRequest):
         from app.services.position_tier import three_tier_gate as _t3c, tier_mode_enabled as _t3cm
         _ctx3 = _resolve_p3_context(ts_code, req)
         _dec3 = _t3c(ts_code=ts_code, intent=req.intent, has_base=_ctx3["has_base"],
-                     t_universe=_ctx3["t_universe"], rel_low=_ctx3["rel_low"], mainline_dir=_ctx3["mainline_dir"])
+                     t_universe=_ctx3["t_universe"], rel_low=_ctx3["rel_low"], mainline_dir=_ctx3["mainline_dir"],
+                     wave_state=({"operation": "build"} if _theme_sleeve else None))
         _p3_mode_enabled_calc = _t3cm()
         if _p3_mode_enabled_calc:
             if not _dec3.get("intent_allowed"):
@@ -1718,6 +1805,14 @@ def calc_position(req: CalcPositionRequest):
             warnings.append("[P3 dry-run] " + "; ".join((_dec3.get("reasons") or [])[:1]))
     except Exception as _e3:
         warnings.append("⚠️ P3三仓档位计算失败(跳过): " + str(_e3)[:100])
+
+    if _theme_sleeve:
+        # 题材 sleeve：明确不受浪型/防御档位限制；总仓、现金、单票、题材 caps 仍在下方生效
+        _p3_blocked = False
+        _p3_mode_enabled_calc = False
+        _p3_cap_pct = None
+        warnings = [w for w in warnings if "P3三仓档位禁止" not in w and "P3档位build" not in w]
+        warnings.append("📌 题材 sleeve：已绕过 P3/G0-G3 浪型闸门")
 
     # ── Layer 3: 计算数量 ──
     effective_single_cap_before = min(single_cap_pct, role_cap_pct) / 100.0 * total_asset
@@ -1894,7 +1989,7 @@ def calc_position(req: CalcPositionRequest):
         else:
             warnings.insert(0, f"🔴 无法建仓: 100股需{round(need_amount, 0)}元，超出约束")
     else:
-        all_pass = single_cap_ok and total_position_ok and cash_reserve_ok and max_loss_ok
+        all_pass = single_cap_ok and total_position_ok and cash_reserve_ok and max_loss_ok and (not _mainline_blocked)
     if pre_condition_ok is not None and not pre_condition_ok:
         all_pass = False
 
@@ -1983,6 +2078,7 @@ def calc_position(req: CalcPositionRequest):
         validation=validation,
         warnings=warnings,
         all_pass=all_pass,
+        mainline=_mainline_ctx or None,
     )
 
 
@@ -2321,6 +2417,13 @@ def _resolve_p3_context(ts_code: str, req) -> dict:
 
 
 @router.post("/check-entry-filters", response_model=EntryCheckResponse)
+@router.post("/pre-trade-gate")
+async def pre_trade_gate_api(req: PreTradeGateRequest):
+    """共享买入前门：P2 + B4/B5 + B8。选股后、calc_position 前调用；卖出意图直接放行。"""
+    from app.services.pre_trade_gate import pre_trade_gate
+    return pre_trade_gate(req.symbol, req.intent, req.ts_code, req.source)
+
+
 async def check_entry_filters(req: EntryCheckRequest):
     """
     入场过滤三层检查 — 对建仓计划表中的每只标的执行技术面、主力行为、超买过滤。
@@ -3225,7 +3328,8 @@ def get_express(
 
         pro = _get_tushare_pro()
 
-        kw = {"ts_code": ts_code, "limit": limit + 5}  # 多取一些用于过滤空值
+        # 多取几年，用于自己算同比（Tushare express 的 yoy_* 字段经常为空）
+        kw = {"ts_code": ts_code, "limit": max(limit + 8, 20)}
         if period:
             kw["end_date"] = period
 
@@ -3241,29 +3345,37 @@ def get_express(
 
         df = df.sort_values("end_date", ascending=False)
 
-        records = []
+        all_records = []
         for _, row in df.iterrows():
-            rec = {
+            all_records.append({
                 "end_date": str(row.get("end_date", "") or ""),
                 "revenue": _safe_float(row.get("revenue")),
                 "operate_profit": _safe_float(row.get("operate_profit")),
                 "total_profit": _safe_float(row.get("total_profit")),
                 "n_income": _safe_float(row.get("n_income")),
-                "basic_eps": _safe_float(row.get("basic_eps")),
-                "weighted_roe": _safe_float(row.get("weighted_roe")),
-                "yoy_revenue": _safe_float(row.get("yoy_revenue")),
-                "yoy_operate_profit": _safe_float(row.get("yoy_operate_profit")),
-                "yoy_n_income": _safe_float(row.get("yoy_n_income")),
+                "basic_eps": _safe_float(row.get("diluted_eps") or row.get("basic_eps")),
+                "weighted_roe": _safe_float(row.get("diluted_roe") or row.get("weighted_roe")),
                 "total_assets": _safe_float(row.get("total_assets")),
-                "announce_date": str(row.get("announce_date", "") or ""),
-            }
-            records.append(rec)
-
+                "announce_date": str(row.get("ann_date", "") or ""),
+            })
+        # 自算同比：同月同日上一年；Tushare 的 yoy_* 字段经常为空/非百分比
+        by_date = {r["end_date"]: r for r in all_records}
+        for r in all_records:
+            ed = r["end_date"]
+            if len(ed) != 8: continue
+            prev = by_date.get(str(int(ed[:4]) - 1) + ed[4:])
+            if not prev: continue
+            for k in ("revenue", "operate_profit", "n_income"):
+                pv = float(prev.get(k) or 0)
+                if pv > 0:
+                    r["yoy_" + k] = round((float(r.get(k) or 0) / pv - 1) * 100, 2)
+        all_records.sort(key=lambda x: x["end_date"], reverse=True)
+        records = all_records[:limit]
         return {
             "symbol": ts_code,
-            "records": records[:limit],
-            "count": min(len(records), limit),
-            "data_source": "Tushare(express)",
+            "records": records,
+            "count": len(records),
+            "data_source": "Tushare(express)+computed_yoy",
         }
 
     except EnvironmentError as e:

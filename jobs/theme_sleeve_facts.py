@@ -292,7 +292,7 @@ def main():
             rec["tier"] = "reject"
         elif _state == "linked" and rec["first_linkage"] and (fx.get("ret1") or 0) > 0.03 and (fx.get("breadth") or 0) >= 0.5 and tag not in ("failed", "graduation"):
             rec["tier"] = "probe_candidate"
-        elif _state == "linked" and rec.get("tier") == "watch":
+        elif _state == "linked" and rec.get("tier") == "watch" and (fx.get("ret1") or 0) > 0 and (fx.get("breadth") or 0) >= 0.4:
             rec["tier"] = "watch_strong"
         _oldl = [x for x in _oldl if str(x.get("date")) != str(a.date)]
         _oldl.append({"date": a.date, "state": _state, "leader_pct": _lp, "wind_up": _wind_up, "mid_hold": _mid_hold})

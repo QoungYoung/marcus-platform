@@ -362,6 +362,8 @@ class CandidatePoolMonitor:
         try:
             from app.api.indicator import calc_position
             from app.models.indicator import CalcPositionRequest
+            from app.services.mainline_read import load_position_context
+            _mlctx = load_position_context(symbol=symbol)
 
             async def _run_calc():
                 return await calc_position(CalcPositionRequest(
@@ -370,6 +372,8 @@ class CandidatePoolMonitor:
                     chain_role=role,
                     tier="probe",               # 自动建仓仅试探仓
                     stance=stance,
+                    theme_id=_mlctx.get("theme_id"),
+                    track_id=_mlctx.get("track_id"),
                 ))
 
             loop = asyncio.new_event_loop()

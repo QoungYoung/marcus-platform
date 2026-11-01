@@ -209,26 +209,26 @@ def select_for_theme(df: pd.DataFrame, theme: str, strength: Dict[str, Any],
     return out[:topn]
 
 
-def index_regime(as_of: str, index_path: str = "data/index_daily_000001_SH.json") -> Dict[str, Any]:
-    """指数短期 regime（PIT）：r5 + 是否站上 MA20。"""
+def index_regime(as_of: str, index_path: str = "") -> Dict[str, Any]:
+    """指数短期 regime（PIT）：PG index_daily。"""
     try:
-        import json
-        obj = json.load(open(index_path, encoding="utf-8"))
-        ix = pd.DataFrame(obj["rows"], columns=["trade_date", "close", "high", "amount"]).sort_values("trade_date")
-        ix = ix[ix.trade_date <= str(as_of)]
-        if len(ix) < 21:
+        from app.services.index_daily_store import load_bars
+        bars = load_bars("000001.SH")
+        rows = [x for x in bars if x["date"] <= str(as_of)]
+        if len(rows) < 21:
             return {"r5": None, "above_ma20": None, "date": None}
-        last = ix.iloc[-1]
-        r5 = float(last.close / ix.iloc[-6].close - 1)
-        ma20 = float(ix.close.tail(20).mean())
-        ma60 = float(ix.close.tail(60).mean()) if len(ix) >= 60 else None
-        ma120 = float(ix.close.tail(120).mean()) if len(ix) >= 120 else None
-        return {"r5": round(r5, 4), "above_ma20": bool(last.close >= ma20),
-                "above_ma60": bool(ma60 is not None and last.close >= ma60),
-                "above_ma120": bool(ma120 is not None and last.close >= ma120),
-                "close": round(float(last.close), 2), "ma20": round(ma20, 2),
+        closes = [float(x["close"]) for x in rows]
+        last = closes[-1]
+        r5 = last / closes[-6] - 1
+        ma20 = sum(closes[-20:]) / 20
+        ma60 = sum(closes[-60:]) / 60 if len(closes) >= 60 else None
+        ma120 = sum(closes[-120:]) / 120 if len(closes) >= 120 else None
+        return {"r5": round(r5, 4), "above_ma20": bool(last >= ma20),
+                "above_ma60": bool(ma60 is not None and last >= ma60),
+                "above_ma120": bool(ma120 is not None and last >= ma120),
+                "close": round(last, 2), "ma20": round(ma20, 2),
                 "ma60": round(ma60, 2) if ma60 else None, "ma120": round(ma120, 2) if ma120 else None,
-                "date": str(last.trade_date)}
+                "date": str(rows[-1]["date"])}
     except Exception:
         return {"r5": None, "above_ma20": None, "date": None}
 

@@ -503,6 +503,17 @@ def main():
     con = sqlite3.connect(DB)
     out = {}
     for mt in themes:
+        # B4/B5：每个主题当日一次（主线响应/避险抢戏），binary 传给 confirm_chain 的 F3/F4
+        _b45 = None
+        try:
+            import breakout_context as _bc45
+            if _bc45.b4b5_enabled():
+                _b45 = _bc45.gate(mt, _bc45.prev_trade_day())
+                print("[stock_confirm] B4/B5 %s: main=%s hedge=%s action=%s"
+                      % (mt, (_b45 or {}).get("mainline_ok"), (_b45 or {}).get("hedge_flag"),
+                         (_b45 or {}).get("action")), file=sys.stderr)
+        except Exception as _e_b45:
+            print("[stock_confirm] B4/B5 计算异常(fail-open): %s" % str(_e_b45)[:80], file=sys.stderr)
         try:
             names = fm.THEME_CONCEPTS.get(mt, []) if fm is not None else []
         except Exception:
@@ -791,7 +802,13 @@ def main():
                     continue
                 v = vol[ts_code].reindex(ser.index)
                 _net = _net_for(ts_code, days[-1] if days else None)
-                cc = confirm_chain(ser, _net, v)
+                _main_ok = (_b45 or {}).get("mainline_ok")
+                _hedge = (_b45 or {}).get("hedge_flag")
+                cc = confirm_chain(
+                    ser, _net, v,
+                    mainline_act=(1.0 if _main_ok else 0.0) if _main_ok is not None else None,
+                    hedge_act=(1.0 if _hedge else 0.0) if _hedge is not None else None,
+                )
                 stocks.append({"code": ts_code, "stage": cc["stage"]})
             # 主营方向校验（dsh 无思考模式；开关 WOLF_THEME_MEMBER_CHECK，回测默认开、生产默认关）
             try:

@@ -35,5 +35,11 @@ if [ -f "$PLUGINS_SRC/cordis.patch.yml" ]; then
   echo "[entrypoint] 已同步 cordis.patch.yml -> $PROFILE_DIR/cordis.patch.yml"
 fi
 
+# 4) headless profile 的 CLI 桥：symlink 到 service 的 bridge 包（--patch 用）
+mkdir -p /root/.dsh/profiles/headless/node_modules
+ln -sfn /root/.dsh/profiles/service/node_modules/dsh-dsh-marcus-bridge \
+  /root/.dsh/profiles/headless/node_modules/dsh-dsh-marcus-bridge
+echo "[entrypoint] 已链接 dsh-dsh-marcus-bridge -> headless profile（CLI 桥用）"
+
 # 4) exec 正式启动命令（替换当前进程，保证信号直达 dsh）
 exec dsh --profile service

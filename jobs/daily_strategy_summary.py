@@ -8,7 +8,8 @@
 """
 import os, sys, json, datetime
 
-for _p in ("/app/app", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")):
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_ROOT, os.path.join(_ROOT, "backend")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 DATA = os.environ.get("DATA_DIR", "data")
@@ -34,6 +35,21 @@ def fnum(d, k, default="?"):
     v = d.get(k)
     return round(float(v), 2) if isinstance(v, (int, float)) else (v if v is not None else default)
 
+
+def latest_p3():
+    """返回 (date, mainline, track, theme)；无 P3 数据返回 (None, {}, {}, {})。"""
+    base = os.path.join(DATA, "mainline")
+    try:
+        dirs = sorted([d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))])
+    except Exception:
+        return None, {}, {}, {}
+    for d in reversed(dirs):
+        p = os.path.join(base, d)
+        ml = load(os.path.join("mainline", d, "mainline.json"))
+        if ml:
+            return d, ml, load(os.path.join("mainline", d, "track.json")), load(os.path.join("mainline", d, "theme.json"))
+    return None, {}, {}, {}
+
 def mk_report():
     wv = load("wave_state.json")
     ml = load("main_line_state.json")
@@ -41,9 +57,53 @@ def mk_report():
     sr = load("systemic_risk.json")
     today = datetime.date.today().strftime("%Y-%m-%d")
 
+    f = wv.get("features") or {}
+    mk = macro.get("market") or f.get("market") or {}
+    gjd = mk.get("gjd") or {}
+    close = f.get("close")
+    bars = []
+    try:
+        from app.services.index_daily_store import load_bars
+        bars = load_bars("000001.SH")
+    except Exception:
+        pass
+    closes = [float(x["close"]) for x in bars] if bars else []
+    highs = [float(x["high"]) for x in bars] if bars else []
+    lows = [float(x["low"]) for x in bars] if bars else []
+
+    def _ret(n):
+        if len(closes) > n and closes[-1-n]:
+            return round((closes[-1] / closes[-1-n] - 1) * 100, 2)
+        return mk.get("idx_r%d" % n, "?")
+
+    def _ma(n):
+        return round(sum(closes[-n:]) / n, 2) if len(closes) >= n else "?"
+
+    r5 = _ret(5); r20 = _ret(20)
+    ma5, ma20, ma60, ma200 = _ma(5), _ma(20), _ma(60), _ma(200)
+    if close is None:
+        close = closes[-1] if closes else "?"
+    if ma20 == "?":
+        ma20 = f.get("ma20", "?")
+    if ma60 == "?":
+        ma60 = f.get("ma60", "?")
+    if closes:
+        lo = min(closes[-120:]); hi = max(closes[-120:])
+        pos = round((closes[-1] - lo) / (hi - lo) * 100, 2) if hi > lo else "?"
+        vr = round(sum(closes[-5:]) / max(1e-9, sum(closes[-60:]) / 12), 2)
+    else:
+        pos = f.get("pos_in_box", "?")
+        vr = f.get("vol_ratio20", "?")
+    vol_ratio = mk.get("vol_ratio_5_60", vr)
+    vol_pct = mk.get("vol_pct120", "?")
+    prior_peak = f.get("prior_peak"); prior_date = f.get("prior_peak_date")
+    origin = f.get("origin"); origin_date = f.get("origin_date")
+    vs_high = round((close / prior_peak - 1) * 100, 2) if isinstance(close, (int, float)) and prior_peak else "?"
+    vs_low = round((close / origin - 1) * 100, 2) if isinstance(close, (int, float)) and origin else "?"
+
     L = []
     L.append("# 当日策略摘要（%s · 盘前）" % today)
-    L.append("> 由 主线判定 + 波浪判定 + 宏观 + 风控 合并生成（确定性，读 data/*.json，非LLM叙事）")
+    L.append("> 由 主线判定 + 波浪判定 + 宏观 + 风控 合并生成（确定性，读 data/*.json + PG index_daily，非LLM叙事）")
     L.append("")
 
     # ── 一、大盘波浪 ──
@@ -52,55 +112,52 @@ def mk_report():
     sub = wv.get("sub_level") or "?"
     op = wv.get("operation") or "?"
     conf = wv.get("confidence")
-    f = wv.get("features") or {}
-    mk = f.get("market") or {}
-    gjd = (mk.get("gjd") or {})
-    anch = f.get("anchors") or {}
     L.append("- 大级别：**%s**（%s）｜子浪：**%s**｜操作：**%s**（confidence %s）｜判定日期：%s" % (
         level, LEVEL_NAMES.get(level, level), sub, op, conf,
         f.get("date") or wv.get("date") or "?"))
     L.append("- 收盘 %s ｜ 5日 %s%% ｜ 20日 %s%% ｜ 箱体位置 %s%% ｜ 量比5/60 %s ｜ 120日量分位 %s%%" % (
-        fnum(f, "close"), fnum(mk, "idx_r5"), fnum(mk, "idx_r20"),
-        fnum(f, "pos_in_box"), fnum(mk, "vol_ratio_5_60"), fnum(mk, "vol_pct120")))
+        close, r5, r20, pos, vol_ratio, vol_pct))
     L.append("- MA5/20/60/200: %s / %s / %s / %s ｜ 距前高 %s%% ｜ 距前低 %s%%" % (
-        fnum(f, "ma5"), fnum(f, "ma20"), fnum(f, "ma60"), fnum(f, "ma200"),
-        fnum(anch, "vs_last_high"), fnum(anch, "vs_last_low")))
-    L.append("- GJD: 510300 20日 %s%% ｜ 510050 20日 %s%%（净赎回=撤）｜ 两融净买 %s亿(20日 %s%%) ｜ 北向5日 %s万" % (
+        ma5, ma20, ma60, ma200, vs_high, vs_low))
+    _north = mk.get("north_5d")
+    _north_txt = "无数据" if _north is None else (str(round(float(_north), 2)) + "万")
+    L.append("- GJD: 510300 20日 %s%% ｜ 510050 20日 %s%%（净赎回=撤）｜ 两融净买 %s亿(20日 %s%%) ｜ 北向5日 %s" % (
         fnum(gjd, "sh300_chg20"), fnum(gjd, "sh50_chg20"),
-        fnum(mk, "margin_net_buy"), fnum(mk, "margin_20d_chg"), fnum(mk, "north_5d")))
-    last_h = (anch.get("last_high") or {})
-    last_l = (anch.get("last_low") or {})
+        fnum(mk, "margin_net_buy"), fnum(mk, "margin_20d_chg"), _north_txt))
     L.append("- 锚点：前高 %s(%s) ｜ 前低 %s(%s) ｜ 双底 %s" % (
-        last_h.get("date", "?"), last_h.get("value", "?"),
-        last_l.get("date", "?"), last_l.get("value", "?"),
-        anch.get("double_bottom") or "无"))
+        prior_date or "?", prior_peak if prior_peak is not None else "?",
+        origin_date or "?", origin if origin is not None else "?",
+        f.get("w_bottom") or "无"))
     rsn = (wv.get("reasons") or "")[:260].replace("\n", " ")
     if rsn:
         L.append("- 判定理由：%s" % rsn)
     L.append("")
 
-    # ── 二、主线判定 ──
-    L.append("## 二、主线判定（main_line_state）")
-    mainline = ml.get("main_line") or "?"
-    # ★ 2026-10-13（§9.829）：`fusion` 自 2026-09-13 起已退役 ✗ ⇒ 摘要改印**方向层**口径 ✓
-    #   （原先固定印「融合分 ?」✗ —— 用户 2026-10-13 看到的正是这个 ✓）
-    _ms = ml.get("mainline_select") or {}
-    _r5 = _ms.get("r5") if isinstance(_ms.get("r5"), dict) else {}
-    _msd = _ms.get("date") or "-"
-    L.append("- 主线：**%s**（方向层 r5 %s；mainline_select date=%s）｜候选：%s｜来源：%s" % (
-        mainline, (("%+.3f" % float(_r5.get(mainline))) if isinstance(_r5.get(mainline), (int, float)) else "无"),
-        _msd, "、".join(ml.get("candidates") or []) or "无", ml.get("main_line_source") or "-"))
-    _sel = [t for t in (_ms.get("mainline"), _ms.get("second")) if t]
-    top = [(t, {"score": _r5.get(t)}) for t in _sel]
-    if top:
-        L.append("- 前4主题分数：")
-        for th, s in top:
-            L.append("   - %s：%s（fund %s / rel %s / conc %s / cat %s）" % (
-                th, fnum(s, "score"), fnum(s, "fund"), fnum(s, "rel"), fnum(s, "conc"), fnum(s, "catalyst")))
-    # ★ §9.829：`fusion` 已退役 ⇒ 催化全零的判据改为"方向层无 r5 正值"（不再读 fusion ✗）
-    _r5v = [v for v in _r5.values() if isinstance(v, (int, float))]
-    cat_all_zero = (not _r5v) or all(v <= 0 for v in _r5v)
-    L.append("- 催化：%s" % ("全为0（无消息催化的存量博弈）" if cat_all_zero else "部分主题有催化（事件驱动）"))
+    # ── 二、主线判定（P3: L0→L1→L2） ──
+    p3_date, p3_ml, p3_tr, p3_th = latest_p3()
+    L.append("## 二、主线判定（P3：L0→L1→L2）")
+    if p3_ml:
+        mainline = p3_ml.get("name") or p3_ml.get("mainline") or "?"
+        L.append("- 数据日：%s ｜ L0：**%s / %s** ｜ exists=%s active=%s tradeable=%s status=%s" % (
+            p3_date, p3_ml.get("name") or p3_ml.get("mainline") or "?",
+            p3_ml.get("sub_mainline_name") or p3_ml.get("sub_mainline") or "?",
+            p3_ml.get("mainline_exists"), p3_ml.get("mainline_active"),
+            p3_ml.get("tradeable"), p3_ml.get("status")))
+        L.append("- L0 强度：abs_ok=%s rel_ok=%s cov_ok=%s ｜ benchmark_ret20=%s%%" % (
+            p3_ml.get("abs_ok"), p3_ml.get("rel_ok"), p3_ml.get("cov_ok"),
+            round(float(p3_ml.get("benchmark_ret20") or 0) * 100, 2)))
+        for label, key in (("L1 focus", "focus"), ("L1 trial", "trial"), ("L1 watch", "watch")):
+            arr = p3_tr.get(key) or []
+            if arr:
+                L.append("- %s：%s" % (label, "、".join("%s(%.2f)" % (x.get("name") or x.get("id"), float(x.get("score") or 0)) for x in arr[:6])))
+        for label, key in (("L2 trial", "trial"), ("L2 watch", "watch")):
+            arr = p3_th.get(key) or []
+            if arr:
+                L.append("- %s：%s" % (label, "、".join("%s(%.2f)" % (x.get("name") or x.get("id"), float(x.get("score") or 0)) for x in arr[:8])))
+        L.append("- 规则：只做 L0 主线；L1/L2 只用来选赛道/主题；L1/L2 trial 不等于可买，仍需 wave/P3/caps 放行。")
+    else:
+        mainline = "无 P3 数据"
+        L.append("- 无 P3 数据（data/mainline/*/mainline.json 缺失）")
     L.append("")
 
     # ── 三、宏观开关 ──

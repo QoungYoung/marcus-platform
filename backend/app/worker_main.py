@@ -131,6 +131,13 @@ def _start_services(settings):
     from app.services.t_monitor import start_t_monitor
     start_t_monitor(trade_executor=executor)  # ⑥ 253/254 无底仓建仓走狼大建仓链(executor=stock)
 
+    # 题材持仓统一监视器：双向触发（破位清 / 压力减半），盘中实时，不走 9:50/14:20 定时
+    try:
+        from app.services.theme_sleeve_monitor import start_theme_monitor
+        start_theme_monitor(executor=executor, interval=30)
+    except Exception as _e_tm:
+        print(f"[Worker] 题材监视器启动失败: {_e_tm}", file=sys.stderr)
+
     # 2026-09-02 全量屏蔽：做T建仓服务(自动建仓/次日条件生成/再平衡)仅作用于 account_id='t'，
     # 且无 env 门控会真实下单 → 停用；代码保留便于回滚
     # from app.services.t_build import start_t_build_service

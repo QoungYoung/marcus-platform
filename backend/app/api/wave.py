@@ -119,27 +119,12 @@ def _csv_bars(code: str, days: int) -> List[Dict[str, Any]]:
 
 
 def _kline_cache(code: str, days: int) -> List[Dict[str, Any]]:
-    """worker 侧同步的 K线缓存（jobs/sync_index_daily_multi.py 写；后端容器一般无外网 ✗ ⇒ 靠它 ✓）。
-
-    行格式 [date, close, high, amount, open, low]（前 4 项与浪型链兼容 ✓）。
-    """
-    p = _data_dir() / ("index_kline_%s.json" % code.replace(".", "_"))
-    if not p.exists():
-        return []
+    """指数 K 线唯一来源：PG `index_daily`。"""
     try:
-        rows = ((json.loads(p.read_text(encoding="utf-8")) or {}).get("rows")) or []
+        from app.services.index_daily_store import load_bars
+        return load_bars(code, days)
     except Exception:
         return []
-    out = []
-    for r in rows[-int(days) - 20:]:
-        try:
-            d, cl, hi, am = str(r[0]), float(r[1]), float(r[2]), float(r[3])
-            op = float(r[4]) if len(r) > 4 and r[4] else cl
-            lo = float(r[5]) if len(r) > 5 and r[5] else min(op, cl)
-        except Exception:
-            continue
-        out.append({"date": d, "open": op, "high": hi, "low": lo, "close": cl, "amount": am})
-    return out[-int(days):]
 
 
 def _bars(code: str, days: int) -> Tuple[List[Dict[str, Any]], str]:
@@ -155,14 +140,9 @@ def _bars(code: str, days: int) -> Tuple[List[Dict[str, Any]], str]:
             return b, "eastmoney:push2his"
     except Exception:
         pass                              # 容器内一般没有外网 ✗ ⇒ 走本地缓存/CSV ✓
-    b = _kline_cache(code, days)          # ② 本地 K线缓存（jobs/sync_index_daily_multi.py --kline-cache 写）
-    if b:
-        _CACHE[ck] = (time.time(), b, "local_kline_cache")
-        return b, "local_kline_cache"
-    b = _csv_bars(code, days)             # ③ 末选本地 CSV（近月只有收盘 ⇒ 合成并标注 ⛔）
-    src = "local_csv(csv_close_only)" if b else "none"
-    _CACHE[ck] = (time.time(), b, src)
-    return b, src
+    b = _kline_cache(code, days)          # ② PG index_daily
+    _CACHE[ck] = (time.time(), b, "pg:index_daily" if b else "none")
+    return b, ("pg:index_daily" if b else "none")
 
 
 def _ladder() -> Optional[Any]:

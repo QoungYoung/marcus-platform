@@ -297,7 +297,7 @@ export const ALL_TOOLS: ToolDef[] = [
   {
     name: 'calc_position',
     label: '仓位计算',
-    description: '建仓前必调：根据信号强度、产业链角色、加仓层级、市场立场计算建议仓位和止损价',
+    description: '建仓前必调：计算建议仓位/止损；自动读取主线主题 thesis_valid 与 caps',
     category: 'technical',
     endpoint: { method: 'POST', path: '/indicator/calc-position' },
     parameters: {
@@ -334,6 +334,8 @@ export const ALL_TOOLS: ToolDef[] = [
           { label: '观望 (总仓≤20%)', value: 'red' },
         ],
       },
+      theme_id: { type: 'string', description: '主线主题 id（如 storage），不传则按 symbol 自动查', required: false, placeholder: 'storage' },
+      track_id: { type: 'string', description: '赛道 id（如 semiconductor），不传则按 symbol 自动查', required: false, placeholder: 'semiconductor' },
     },
     pathParamNames: [],
   },

@@ -5,7 +5,7 @@
 数据: tushare forecast(业绩预告, 全历史) / express 兜底 → (end_date, ann_date, type)
 截止规则(法定期限, 无精确披露日时的最迟日):
   Q1(0331)<=0430; 半年(0630)<=0831; Q3(0930)<=1031; 年报(1231)<=次年0430
-输出: data/earnings_calendar.json {ref_date, rows:[{symbol,name,end_date,ann_date,type,disclosed,bad,deadline,days_to_deadline}], undisclosed:[...]}
+输出: PG earnings_calendar（PK ref_date,symbol,end_date；不再写本地 JSON）
 用法: python -u apps/main_line/build_earnings_calendar.py [--stocks X,Y] [--as-of 20260422]
 """
 import os, sys, json, time, argparse
@@ -117,6 +117,70 @@ def fetch_disclosure(sym):
             continue
     return out
 
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS earnings_calendar (
+  ref_date DATE NOT NULL,
+  symbol VARCHAR(16) NOT NULL,
+  name VARCHAR(64),
+  end_date DATE,
+  ann_date DATE,
+  pre_date DATE,
+  actual_date DATE,
+  type VARCHAR(32),
+  source VARCHAR(32),
+  disclosed BOOLEAN DEFAULT FALSE,
+  bad BOOLEAN DEFAULT FALSE,
+  deadline DATE,
+  days_to_deadline INTEGER,
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (ref_date, symbol, end_date)
+)
+"""
+
+UPSERT = """
+INSERT INTO earnings_calendar
+(ref_date, symbol, name, end_date, ann_date, pre_date, actual_date, type, source,
+ disclosed, bad, deadline, days_to_deadline)
+VALUES %s
+ON CONFLICT (ref_date, symbol, end_date) DO UPDATE SET
+  name=EXCLUDED.name, ann_date=EXCLUDED.ann_date, pre_date=EXCLUDED.pre_date,
+  actual_date=EXCLUDED.actual_date, type=EXCLUDED.type, source=EXCLUDED.source,
+  disclosed=EXCLUDED.disclosed, bad=EXCLUDED.bad, deadline=EXCLUDED.deadline,
+  days_to_deadline=EXCLUDED.days_to_deadline, updated_at=now()
+"""
+
+
+def _d(v):
+    v = str(v or "").strip()
+    if len(v) != 8 or not v.isdigit():
+        return None
+    return v[:4] + "-" + v[4:6] + "-" + v[6:8]
+
+
+def save_pg(ref: str, rows: list) -> int:
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 不可用")
+    conn = psycopg2.connect(DB)
+    try:
+        cur = conn.cursor()
+        cur.execute(SCHEMA)
+        from psycopg2.extras import execute_values
+        vals = []
+        for r in rows:
+            if not _d(r.get("end_date")):
+                continue
+            vals.append((_d(ref), r["symbol"], r.get("name") or "", _d(r.get("end_date")),
+                         _d(r.get("ann_date")), _d(r.get("pre_date")), _d(r.get("actual_date")),
+                         r.get("type") or "", r.get("source") or "", bool(r.get("disclosed")),
+                         bool(r.get("bad")), _d(r.get("deadline")), r.get("days_to_deadline")))
+        if vals:
+            execute_values(cur, UPSERT, vals)
+        conn.commit()
+        return len(vals)
+    finally:
+        conn.close()
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--stocks", default="")
     ap.add_argument("--as-of", default="")
@@ -146,14 +210,11 @@ def main():
                      "pre_date": pre_date, "actual_date": actual_date, "type": latest["type"],
                      "source": latest["src"], "disclosed": disclosed, "bad": bad,
                      "deadline": dline, "days_to_deadline": dd})
-    out = {"ref_date": ref, "rows": rows,
-           "undisclosed": [r for r in rows if not r["disclosed"]],
-           "recently_disclosed": [r for r in rows if r["disclosed"]]}
-    path = os.path.join(DATA, "earnings_calendar.json")
-    json.dump(out, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print("WROTE", path, "rows", len(rows))
-    print("undisclosed", len(out["undisclosed"]))
-    for r in out["undisclosed"][:15]:
+    n = save_pg(ref, rows)
+    print("UPSERT earnings_calendar ref=%s rows=%s" % (ref, n))
+    undisclosed = [r for r in rows if not r["disclosed"]]
+    print("undisclosed", len(undisclosed))
+    for r in undisclosed[:15]:
         print(r["symbol"], r["name"], "end", r["end_date"], "type", r["type"], "deadline", r["deadline"], "dd", r["days_to_deadline"])
     return 0
 

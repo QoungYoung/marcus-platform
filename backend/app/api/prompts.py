@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, List
+from datetime import datetime
 from app.database import get_db
 from app.services import prompt_service
 
@@ -21,8 +22,8 @@ class PromptResponse(BaseModel):
     content: str
     version: int
     is_active: bool
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

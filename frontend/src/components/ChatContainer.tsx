@@ -1962,6 +1962,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_realtime_indicators: '实时技术指标',
   get_intraday_min: '实时分钟K线',
   get_fina_mainbz: '主营业务构成',
+  calc_position: '仓位计算',
   get_express: '业绩快报',
   read_db_table: '读取数据库表',
   get_db_schema: '获取数据库结构',
@@ -2057,6 +2058,30 @@ const makeCollapsibleRenderer = (toolName: string) => ({
 });
 
 COLLAPSIBLE_TOOLS.forEach(name => registerToolRenderer(name, makeCollapsibleRenderer(name)));
+
+// calc_position：在通用 JSON 上方额外展示 mainline 上下文
+const makeCalcPositionRenderer = () => ({
+  render(params: any, result: any, isStreaming?: boolean) {
+    const base = makeCollapsibleRenderer('calc_position').render(params, result, isStreaming);
+    let mainline: any = null;
+    try {
+      const txt = result?.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n') || '';
+      mainline = JSON.parse(txt)?.mainline || null;
+    } catch { /* not JSON */ }
+    if (!mainline?.available) return base;
+    const line = `📌 ${mainline.theme_name || mainline.track_name || '-'} · ${mainline.verdict || '-'} · thesis_valid=${mainline.thesis_valid} · review_required=${mainline.review_required}`;
+    return {
+      content: html`
+        <div style="margin:4px 0 6px;padding:6px 8px;border-left:3px solid #f0b90b;background:rgba(240,185,11,0.08);font-size:12px;color:var(--agent-text-secondary);">
+          ${line}
+        </div>
+        ${base.content}
+      `,
+      isCustom: false,
+    };
+  },
+});
+registerToolRenderer('calc_position', makeCalcPositionRenderer());
 
 // ===== Session Metadata Helpers =====
 interface SessionMeta {

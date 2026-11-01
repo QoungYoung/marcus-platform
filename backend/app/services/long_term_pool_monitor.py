@@ -602,6 +602,8 @@ class LongTermPoolMonitor:
         try:
             from app.api.indicator import calc_position
             from app.models.indicator import CalcPositionRequest
+            from app.services.mainline_read import load_position_context
+            _mlctx = load_position_context(symbol=symbol)
 
             pos_result = calc_position(CalcPositionRequest(
                 symbol=symbol,
@@ -609,6 +611,8 @@ class LongTermPoolMonitor:
                 chain_role=role,
                 tier="probe",
                 stance="green",  # 长期池固定用 green（不过滤）
+                theme_id=_mlctx.get("theme_id"),
+                track_id=_mlctx.get("track_id"),
             ))
         except Exception as e:
             logger.warning(f"[长期池] calc_position failed for {symbol}: {e}")

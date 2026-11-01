@@ -107,6 +107,10 @@ class CalcPositionRequest(BaseModel):
     t_universe: Optional[bool] = None   # None=按 active t_conditions 自动
     rel_low: Optional[bool] = None
     mainline_dir: Optional[bool] = None
+    # 主线/赛道/主题读取（可选；不传则按 symbol 自动查 leader/ladder）
+    theme_id: Optional[str] = None
+    track_id: Optional[str] = None
+    sleeve: Optional[str] = None          # "theme" = 题材仓；跳过浪型档位，但保留总仓/现金/题材 caps
 
 
 class CalcPositionStopLoss(BaseModel):
@@ -189,6 +193,8 @@ class CalcPositionResponse(BaseModel):
     # 警告
     warnings: list[str] = []
     all_pass: bool = False
+    # 主线/赛道/主题读取结果（thesis_valid / review_required / caps）
+    mainline: Optional[dict] = None
     # 数据源标识（回测时填 "backtest_local"）
     data_source: Optional[str] = None
     trade_date: Optional[str] = None
@@ -209,6 +215,14 @@ class EntryCheckRequest(BaseModel):
     t_universe: Optional[bool] = None                   # 是否属做T宇宙(活跃狼大T腿)；None=按 t_conditions 自动判定
     rel_low: Optional[bool] = None                      # 相对主线低位(rotation 可埋伏)
     mainline_dir: Optional[bool] = None                 # 是否主线方向
+
+
+class PreTradeGateRequest(BaseModel):
+    """共享买入前门请求（选股后、calc_position 前）"""
+    symbol: str
+    intent: str = "new_base"
+    ts_code: Optional[str] = None
+    source: str = "api"
 
 
 class LayerResult(BaseModel):

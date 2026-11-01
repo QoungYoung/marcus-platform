@@ -135,3 +135,38 @@ server tool，已在本地实测返回原生 `web_search_tool_result` 结构）�
 - **验证**：`t-compaction/verify.profile.mjs`（16 项断言：t-agent 走做T指令 /
   普通会话回退默认 / 非引擎实例防御跳过 / 无引擎非阻塞）。运行：把该文件拷到 profile
   根后 `cd <profiles-root> && node verify-t-compaction.mjs`（已实测全过）。
+
+## CLI 桥（方案 A，2026-10-28）
+
+`/chat` 的 `chat` / `trade` 模式改为“一条消息一个 `dsh --profile headless --json` 子进程”，
+与飞书桥同构，避免常驻 agent 的 `inbox.clear()` / 空回复销毁导致吞消息。
+
+- 入口：`docker/dsh/bridge/lib/index.js` 的 `runCliTurn`；
+- 子进程：`dsh --profile headless --patch /tmp/marcus-cli-*.yml --json [--session-id ...] <消息>`；
+- 动态 patch：`system-prompt` 用 API 的 `CHAT_SYSTEM_PROMPT` / `TRADE_SYSTEM_PROMPT`，
+  并插入 `webserver`（port 0）+ `dsh-marcus-bridge` 以注册工具；
+- `chat`：`MARCUS_TOOLS_ALLOW` 只读工具（不含 place_order/cancel_order）；
+- `trade`：全量工具（保留 place_order）；
+- `final` 事件到达后杀掉子进程（bridge/webserver 会保活，不杀则 `/chat` 永不返回）；
+- 会话映射：`/app/data/marcus_cli_sessions.json`（请求 session_id → DSH CLI session_id）；
+- `/chat/stream`、panel/AgentTeams、conditions/backtest 仍走常驻 HTTP 桥。
+
+开关：
+
+```bash
+BRIDGE_CLI_CHAT=0            # 回退旧常驻 agent（默认开）
+BRIDGE_CLI_TIMEOUT_MS=900000 # CLI 超时
+BRIDGE_DSH_BIN=dsh
+```
+
+entrypoint 会在 `headless` profile 建 `dsh-dsh-marcus-bridge` symlink（compose 挂载了
+`docker/dsh/entrypoint.sh`，重建容器不会丢）。
+
+验证：
+
+```bash
+curl -s -X POST http://127.0.0.1:3001/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"只回复 A","session_id":"cli-test","mode":"chat"}'
+# {"reply":"A",...,"cli":true,"cli_session_id":"session-..."}
+```

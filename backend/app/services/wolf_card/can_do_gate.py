@@ -24,8 +24,9 @@ _C = {}
 
 def _index():
     if "idx" not in _C:
-        rows = json.load(open(os.path.join(DATA, "index_daily_000001_SH.json"), encoding="utf-8"))["rows"]
-        df = pd.DataFrame(rows, columns=["trade_date", "close", "pre_close", "amount"])
+        from app.services.index_daily_store import load_bars
+        bars = load_bars("000001.SH")
+        df = pd.DataFrame([{"trade_date": x["date"], "close": x["close"], "amount": x["amount"]} for x in bars])
         _C["idx"] = df.sort_values("trade_date").reset_index(drop=True)
     return _C["idx"]
 
