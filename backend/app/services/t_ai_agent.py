@@ -331,6 +331,17 @@ def handle_ai_decision(trigger: Optional[Dict[str, Any]], context: Optional[Dict
             # 方向：优先触发落库 direction（2026-09-08），不再按 event_type 白名单猜；
             # 历史行无 direction 时由 t_db.trigger_side 按 event_type/条件方向兜底。
             side = t_db.trigger_side(trigger or {})
+            # 仓位预算硬拦：今日已减到本轮上限 ⇒ 非清仓/止损类卖腿一律 wait
+            if str(side).lower() in ("sell", "卖出", "卖"):
+                _pos = (context or {}).get("position") or {}
+                _budget = _pos.get("remaining_reduce_budget")
+                _rw = str(reason or "")
+                _clear = any(x in _rw for x in ("清仓", "止损", "破位", "加速结束", "避险"))
+                if _budget is not None and int(_budget or 0) < 100 and not _clear:
+                    result.update({"status": "blocked", "action": "wait",
+                                   "reason": "[仓位预算] 今日已减 %s 股 / 本轮上限 %s 股，剩余预算不足 100 股，禁止再减：%s"
+                                             % (_pos.get("sold_today"), _pos.get("max_reduce_total"), _rw[:80])})
+                    return result
             # 量优先级：AI 建议(volume/amount) > context.volume > 系统默认推导(30%/建仓规模)；
             # 最终 min(量, 系统档位上限) 执行（2026-09-08 用户拍板，AI 只能在护栏内调仓）
             ai_sug = int((decision or {}).get("volume") or 0)

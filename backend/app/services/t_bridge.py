@@ -635,6 +635,8 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
                         % (_orig, _sold, _pv, _cap, float(_pos.get("max_reduce_pct") or 0.5) * 100,
                            _budget, "（已用完，禁止再减）" if _budget < 100 else ""))
                 _acts = _pos.get("today_trades") or []
+                if _budget < 100:
+                    msg += "【硬约束】本轮减仓预算已用完：非清仓/止损/破位类卖腿只能 wait/abandon，禁止再减。\n"
                 if _acts:
                     msg += "【今日已成交】" + "；".join(
                         "%s %s %s@%.2f %s" % (a.get("time", "")[-8:], a.get("side", ""),
