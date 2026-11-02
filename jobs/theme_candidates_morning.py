@@ -36,7 +36,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--date', default='', help='T 日；默认上一交易日')
     ap.add_argument('--retry-a', action='store_true', help='A 缺失时重跑 facts/select')
-    ap.add_argument('--max-members', type=int, default=12)
+    ap.add_argument('--max-members', type=int, default=8)
     a = ap.parse_args()
     t = a.date or last_trade_date(datetime.now().strftime('%Y%m%d'))
     base = os.path.join(ROOT, 'data', 'mainline', t)
