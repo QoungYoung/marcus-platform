@@ -761,3 +761,28 @@ tasks:
   depends_on: []
   retry:
     enabled: false
+- id: position_levels_preopen
+  name: 持仓上下位刷新（09:35）
+  description: 开盘后、卖出窗口前用 v3 agent 刷新 down/up，避免用昨日点位直接触发。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 35 9 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/update_position_levels.py
+    args:
+    - --account
+    - stock
+  output:
+    log_file: logs/position_levels_preopen_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: false

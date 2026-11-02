@@ -67,6 +67,12 @@ class ThemeSleeveMonitor:
         hm = now.strftime("%H:%M")
         return ("09:30" <= hm <= "11:30") or ("13:00" <= hm <= "15:00")
 
+    @staticmethod
+    def _exec_window():
+        """只在狼大窗口卖出：09:45-10:00 / 14:00-14:30。"""
+        hm = datetime.now().strftime("%H:%M")
+        return ("09:45" <= hm <= "10:00") or ("14:00" <= hm <= "14:30")
+
     def _quote(self, symbol):
         try:
             from app.services.t_data_sources import fetch_quote_one
@@ -94,7 +100,7 @@ class ThemeSleeveMonitor:
         time.sleep(8)
         while self.running:
             try:
-                if self._trading():
+                if self._trading() and self._exec_window():
                     pos = self._pos()
                     levels = self._levels("stock")
                     st = self._state()
@@ -117,6 +123,9 @@ class ThemeSleeveMonitor:
                             r = self._sell(sym, px, vol, "theme_monitor:down_break")
                             done[sym] = {"action": "clear", "px": px, "result": r, "t": datetime.now().isoformat()}
                         elif up and px >= up:
+                            # 跳空/快速越过压力位 >3%：按突破处理，不按“压力位”卖；等下一次点位刷新
+                            if px > float(up) * 1.03:
+                                continue
                             half = (vol // 2 // 100) * 100
                             if half >= 100:
                                 r = self._sell(sym, px, half, "theme_monitor:up_resistance")
