@@ -33,37 +33,44 @@
 
 - insert:
 
-    # 常驻 HTTP 服务器：暴露 0.0.0.0 供 compose 网络内其他容器访问
-    # ★ 账本 §9.690 ✓（用户「立即停跑批，开始修复」✓）：**必须挂载 provider 适配器** ✓
-    #   实测 ✗：只装包不注册 ⇒ 桥仍报 no adapter registered for provider "deepseek-official" ✓
-    - id: llm-deepseek
-      name: '@deepseek-ai/dsh-llm-deepseek'
+# ★★ 2026-11-02 ✓（生产告警根因）：provider 适配器**不用自己插条目** ✗ —— dsh-base 已经挂了 ✓
+#   `dsh --dump-config` 实测 base 组合树里本来就有（本文件不再重复插入 ✓）：
+#     · id: llm-deepseek         name: '@deepseek-ai/dsh-llm-deepseek-api-key' ← 注册 provider deepseek-official ✓
+#     · id: llm-deepseek-account name: '@deepseek-ai/dsh-llm-deepseek-account'  ← 账号凭证通道 ✓
+#     · 传输包 @deepseek-ai/dsh-llm-deepseek **只导出库**（Config/DeepSeekAdapter/
+#       registerDeepSeekProvider）**没有 apply / default** ✗ ⇒ 不能当 cordis entry 挂 ✓
+#   旧写法 ✗ 正好踩中这两点：
+#     ① 用同 id 的 `llm-deepseek` 条目把 base 那条 **覆盖成传输包** ✗
+#        ⇒ cordis 抛 `invalid plugin, expect function or object with an "apply" method` ✗
+#        ⇒ 每次启动打 `dsh: warning: 1 entry did not activate` + `llm-deepseek … failed to import` ✗
+#     ② 再另起 `llm-deepseek-key` 重复挂一次 api-key 插件 ✗ ⇒ 一旦去掉①立刻撞
+#        `LlmError: configurable provider "deepseek-official" is already declared` ✗
+#   ⇒ 正解：**只 patch base 那条的 config**（同 id、**不要写 name** ✓），不插新条目 ✓
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    # ★ 账本 §9.696 ✓（用户「123都加上」✓）：按适配器 README 的字段表降档 ✗
+    #   实测 ✓：一次回合 370 秒 = 上游每次 ~60 秒失败 × **重试 6 次**（assistant/attempt:6）
+    #     · reasoningEffort 默认 **high** ⇒ 降 **low** ✓（模型是推理模型 ✓）
+    #     · streamIdleTimeoutMs 默认 **300000（5 分钟）** ⇒ 降 **60000** ✓
+    #     · retryPolicy 默认「normal, **5 retries**」⇒ **maxRetries: 1** ✓（执行器 dsh-llm-retry ✓）
+    #   ⇒ 单次回合最坏 60~120 秒 ✓（而非 370 ✗）⇒ 排队者不再集体 420 秒超时 ✓
+    reasoningEffort: low
+    streamIdleTimeoutMs: 60000
+    # ★ §9.696 修正 ✓：schema 校验报错原文 ⇒
+    #   $.retryPolicy expected { mode: "normal", maxRetries?: number, … }
+    #   ⇒ **mode 是必填** ✗（我第一版漏了 ⇒ ValidationError ✓）
+    retryPolicy:
+      mode: normal
+      maxRetries: 1
+    # ★ 账本 §9.690 补2 ✓：**endpoint 也必须给** ✗ —— 只给 apiKeyEnv 会在加载时
+    #   抛 `TypeError: Invalid URL`（实测 ✓，插件加载失败 ⇒ provider 未注册 ⇒ NO_ADAPTER ✓）
+    #   代码里读的字段名实测是 ⇒ `config.baseURL` ✓
+    baseURL: !!js process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com/anthropic'
 
-    # ★ 账本 §9.690 补 ✓：**provider 注册**由 api-key 插件负责 ✓（传输包只导出库 ✗）
-    #   README 原文：「Register authentication and model discovery for `deepseek-official`」✓
-    #   `apiKeyEnv` 默认即 `DEEPSEEK_API_KEY` ✓（环境已设 ✓）；baseURL 走官方端点 ✓
-    - id: llm-deepseek-key
-      name: '@deepseek-ai/dsh-llm-deepseek-api-key'
-      config:
-        apiKeyEnv: DEEPSEEK_API_KEY
-        # ★ 账本 §9.696 ✓（用户「123都加上」✓）：按适配器 README 的字段表降档 ✗
-        #   实测 ✓：一次回合 370 秒 = 上游每次 ~60 秒失败 × **重试 6 次**（assistant/attempt:6）
-        #     · reasoningEffort 默认 **high** ⇒ 降 **low** ✓（模型是推理模型 ✓）
-        #     · streamIdleTimeoutMs 默认 **300000（5 分钟）** ⇒ 降 **60000** ✓
-        #     · retryPolicy 默认「normal, **5 retries**」⇒ **maxRetries: 1** ✓（执行器 dsh-llm-retry ✓）
-        #   ⇒ 单次回合最坏 60~120 秒 ✓（而非 370 ✗）⇒ 排队者不再集体 420 秒超时 ✓
-        reasoningEffort: low
-        streamIdleTimeoutMs: 60000
-        # ★ §9.696 修正 ✓：schema 校验报错原文 ⇒
-        #   $.retryPolicy expected { mode: "normal", maxRetries?: number, … }
-        #   ⇒ **mode 是必填** ✗（我第一版漏了 ⇒ ValidationError ✓）
-        retryPolicy:
-          mode: normal
-          maxRetries: 1
-        # ★ 账本 §9.690 补2 ✓：**endpoint 也必须给** ✗ —— 只给 apiKeyEnv 会在加载时
-        #   抛 `TypeError: Invalid URL`（实测 ✓，插件加载失败 ⇒ provider 未注册 ⇒ NO_ADAPTER ✓）
-        #   代码里读的字段名实测是 ⇒ `config.baseURL` ✓
-        baseURL: https://api.deepseek.com/anthropic
+- insert:
+
+    # 常驻 HTTP 服务器：暴露 0.0.0.0 供 compose 网络内其他容器访问
 
     - id: webserver
       name: '@deepseek-ai/dsh-host-webserver'
