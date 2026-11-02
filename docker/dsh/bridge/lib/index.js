@@ -998,15 +998,6 @@ function apply(ctx) {
         if (event.seq < firstSeq) continue;
         if (event.type === 'turn/start') { started = true; continue; }
         if (!started) continue;
-        // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
-        try {
-          if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-            // ★ §9.696 修正 ✓：计数**放在类型判断内部**（否则打的是「前 6 个事件」✗）
-            if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {
-              console.warn('[Bridge] ★att探形 #' + globalThis.__attProbe + ' type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
-            }
-          }
-        } catch (e) {}
         if (event.type === 'assistant/message') {
           const joined = (event.data.message.content || [])
             .filter((b) => b.type === 'text')
@@ -1180,15 +1171,6 @@ function apply(ctx) {
           if (event.seq < firstSeq) continue;
           if (event.type === 'turn/start') { started = true; continue; }
           if (!started) continue;
-        // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
-        try {
-          if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-            // ★ §9.696 修正 ✓：计数**放在类型判断内部**（否则打的是「前 6 个事件」✗）
-            if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {
-              console.warn('[Bridge] ★att探形 #' + globalThis.__attProbe + ' type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
-            }
-          }
-        } catch (e) {}
           if (event.type === 'assistant/message') {
             const joined = (event.data.message.content || [])
               .filter((b) => b.type === 'text')
@@ -1848,15 +1830,6 @@ function _sessionEvents(agent) {
         if (event.seq < firstSeq) continue;
         if (event.type === 'turn/start') { started = true; continue; }
         if (!started) continue;
-        // ★ 账本 §9.688 探形（**临时** ✓ 只打印、不做任何判断 ⇒ 不可能抛错 ✓）
-        try {
-          if (event.type === 'assistant/attempt' || event.type === 'assistant/message' || event.type === 'assistant/chunk') {
-            // ★ §9.696 修正 ✓：计数**放在类型判断内部**（否则打的是「前 6 个事件」✗）
-            if ((globalThis.__attProbe = (globalThis.__attProbe || 0) + 1) <= 6) {
-              console.warn('[Bridge] ★att探形 #' + globalThis.__attProbe + ' type=' + event.type + ' data=' + JSON.stringify(event.data).slice(0, 600));
-            }
-          }
-        } catch (e) {}
         if (event.type === 'assistant/message') {
           const joined = (event.data.message.content || [])
             .filter((b) => b.type === 'text')
