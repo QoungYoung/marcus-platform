@@ -80,16 +80,27 @@ def load_rows(code: str) -> List[Tuple[str, float, float, float]]:
         return []
 
 
-def load_bars(code: str, days: Optional[int] = None) -> List[Dict[str, Any]]:
+def load_bars(code: str, days: Optional[int] = None,
+              with_src: bool = False) -> List[Dict[str, Any]]:
+    """→ [{date,open,high,low,close,vol,amount(,src)}] 升序。
+
+    `with_src=True` 时带 `src`（tushare_relay / eastmoney…）—— **amount 单位随源不同**：
+    tushare_relay = 千元、eastmoney = 元 ⇒ 要绝对量的调用方需按 src 归一后使用 ✓。
+    """
     try:
         with _engine().connect() as c:
             rs = c.execute(text(
-                "SELECT trade_date, open, high, low, close, vol, amount FROM index_daily "
+                "SELECT trade_date, open, high, low, close, vol, amount, src FROM index_daily "
                 "WHERE ts_code=:c ORDER BY trade_date"
             ), {"c": code}).fetchall()
-        out = [{"date": r[0].strftime("%Y%m%d"), "open": float(r[1] or 0), "high": float(r[2] or 0),
-                "low": float(r[3] or 0), "close": float(r[4] or 0), "vol": float(r[5] or 0),
-                "amount": float(r[6] or 0)} for r in rs]
+        out = []
+        for r in rs:
+            d = {"date": r[0].strftime("%Y%m%d"), "open": float(r[1] or 0), "high": float(r[2] or 0),
+                 "low": float(r[3] or 0), "close": float(r[4] or 0), "vol": float(r[5] or 0),
+                 "amount": float(r[6] or 0)}
+            if with_src:
+                d["src"] = str(r[7] or "")
+            out.append(d)
         return out[-days:] if days else out
     except Exception:
         return []

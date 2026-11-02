@@ -34,7 +34,7 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for p in (ROOT, os.path.join(ROOT, "core")):
+for p in (ROOT, os.path.join(ROOT, "core"), os.path.join(ROOT, "backend")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -48,13 +48,47 @@ HOLD_DAYS = 20       # 持有交易日
 DEFAULT_ETF = ("510300.SH", "沪深300ETF")
 
 
-def hist_index(days=80):
-    """上证历史日线（不含今天 ✓ 因为 index_daily 当日数据要次日才到 ✗）"""
-    end = dt.date.today().strftime("%Y%m%d")
+def _hist_from_pg(days=80):
+    """PG `index_daily`（唯一 canonical）→ 同 hist_index 口径；拿不到返回 []（交给中继兜底 ✓）。
+
+    ★ amount 单位：tushare_relay 源 = **千元** ✓（today_snapshot 也是千元，故直接用）；
+      eastmoney 源 = **元** ⇒ ÷1000 归一 ✓（单位混用会让量比错 1000 倍 ✗）。
+    """
+    from app.services.index_daily_store import load_bars
     start = (dt.date.today() - dt.timedelta(days=days * 2)).strftime("%Y%m%d")
-    df = relay_query("index_daily", ts_code="000001.SH", start_date=start, end_date=end)
-    rs = sorted([{"d": str(r["trade_date"]), "o": float(r["open"]), "h": float(r["high"]),
-                  "l": float(r["low"]), "c": float(r["close"]), "a": float(r.get("amount") or 0)}
+    out = []
+    for b in load_bars("000001.SH", with_src=True):
+        d8 = str(b.get("date") or "")
+        if d8 < start:
+            continue
+        a = float(b.get("amount") or 0)
+        if str(b.get("src") or "").startswith("eastmoney"):
+            a /= 1000.0
+        out.append({"d": d8, "o": float(b["open"]), "h": float(b["high"]),
+                    "l": float(b["low"]), "c": float(b["close"]), "a": a})
+    return out
+
+
+def hist_index(days=80):
+    """上证历史日线（不含今天 ✓ 因为 index_daily 当日数据要次日才到 ✗）
+
+    ★ 2026-11-03 改：**先读 PG `index_daily`**（16:40 的 jobs/index_data_chain.py 已落库 ✓），
+      只有 PG 拿不到才退回 Tushare 中继。原因：中继的 `index_daily` 有硬配额
+      （promax 1 次/小时、datahubco token 会冷却）⇒ 2026-11-02 17:35 这一步直接
+      `TushareRelayError: index_daily 全部数据源失败: … 40203 频率超限` ⇒ 整链 rc=1 ✗，
+      而同一份数据 16:40 就已经进 PG 了 —— 纯属重复取数撞配额。
+    """
+    rs = []
+    try:
+        rs = _hist_from_pg(days)
+    except Exception as e:
+        print("[warn] PG index_daily 读取失败，退回 Tushare 中继: %s" % str(e)[:90], flush=True)
+    if len(rs) < 61:                     # evaluate() 至少要 61 根 ✓
+        end = dt.date.today().strftime("%Y%m%d")
+        start = (dt.date.today() - dt.timedelta(days=days * 2)).strftime("%Y%m%d")
+        df = relay_query("index_daily", ts_code="000001.SH", start_date=start, end_date=end)
+        rs = sorted([{"d": str(r["trade_date"]), "o": float(r["open"]), "h": float(r["high"]),
+                      "l": float(r["low"]), "c": float(r["close"]), "a": float(r.get("amount") or 0)}
                  for _, r in df.iterrows()], key=lambda x: x["d"])
     today = dt.date.today().strftime("%Y%m%d")
     return [x for x in rs if x["d"] != today]
