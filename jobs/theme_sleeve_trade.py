@@ -22,6 +22,21 @@ def post(path, payload):
         return json.loads(r.read().decode())
 
 
+def b_done_today(today: str) -> set:
+    """B 通道今天已成功买入的标的（防止 A 再买一次）。"""
+    try:
+        p = os.path.join(ROOT, "data", "theme_b_exec_state.json")
+        st = json.load(open(p, encoding="utf-8"))
+        out = set()
+        for sym, rec in (st.get(today) or {}).items():
+            gw = (rec or {}).get("gateway") or {}
+            if gw.get("status") == "success":
+                out.add(str(sym).upper())
+        return out
+    except Exception:
+        return set()
+
+
 def latest_selected():
     base = os.path.join(ROOT, "data", "mainline")
     ds = [x for x in os.listdir(base) if x.isdigit() and os.path.exists(os.path.join(base, x, "theme_sleeve_selected.json"))]
@@ -42,10 +57,15 @@ def main():
     except Exception: state = {}
     today = datetime.now().strftime("%Y%m%d")
     done = set(state.get(today) or [])
+    b_done = b_done_today(today)
     results = []
     for x in sel.get("selected") or []:
         sym = x.get("symbol")
         if not sym or sym in done:
+            continue
+        if str(sym).upper() in b_done:
+            results.append({"symbol": sym, "theme_id": x.get("theme_id"), "ok": False,
+                            "skipped": "B_already_executed_today"})
             continue
         payload = {"symbol": sym, "signal_strength": "medium", "chain_role": "mid", "tier": "probe",
                    "stance": "yellow", "intent": "new_base", "account_id": "stock",
