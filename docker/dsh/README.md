@@ -74,6 +74,14 @@ docker compose up -d --no-deps --force-recreate dsh
 docker logs marcus-dsh | grep Bridge
 ```
 
+> ⚠️ **只改 bridge/patch 时不必重建镜像**：`docker/dsh/bridge/lib/index.js`、`cordis.patch.yml`、
+> `entrypoint.sh` 都是 compose 的**单文件 bind mount**（宿主机路径 → 容器内 `/opt/dsh-plugins/…:ro`）。
+> 但 `git pull` 是**写新 inode**（rename 替换），单文件挂载仍指着旧 inode ⇒ 拉完代码**必须
+> `docker restart marcus-dsh`**（重启时 Docker 重新 bind 路径 ✓，entrypoint 再同步进 profile ✓）；
+> 只 `git pull` 不重启，容器里 `md5sum /opt/dsh-plugins/…` 还是旧内容 ✗。
+> 验证：`docker exec marcus-dsh md5sum /opt/dsh-plugins/dsh-dsh-marcus-bridge/lib/index.js`
+> 与宿主机 `md5sum docker/dsh/bridge/lib/index.js` 一致 ✓。
+
 不要手动 `docker cp` 进容器（旧办法，仅作一次性急救）；也不要改 volume 里的文件。
 entrypoint 只同步仓库维护内容，**不动** volume 里的运行时派生文件
 （`cordis.yml`、`pnpm-lock.yaml`、`sessions/` 等），会话持久化不受影响。
