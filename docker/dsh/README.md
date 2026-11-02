@@ -33,6 +33,10 @@ docker build -f docker/Dockerfile.dsh -t marcus-dsh:latest .
 3. **pnpm 11 需要 node22**（`ERR_UNKNOWN_BUILTIN_MODULE`），node20 上用 pnpm9。
 4. **agent-teams 的 UI peerDeps 缺失**：pnpm add 中断（`dsh-compact` 不在 registry）。服务端不需要 UI，直接解包 tarball 到 `node_modules/dsh-agent-teams` + 手工加入 `dsh.profile.bundles`。
 5. **bash 工具在容器内被沙箱拒绝**（无沙箱后端/审批通道）：服务端场景不需要模型跑任意 bash，bridge 插件的工具走 Node fetch 调 backend，不受影响。如需 bash 需配置 `dsh-bash-sandbox` 的沙箱后端。
+6. **`service.cordis.patch.yml.020` 不要自己插 llm-deepseek 条目**（2026-11-02 生产告警根因）：
+   - 现象：每次启动 `dsh: warning: 1 entry did not activate` + `llm-deepseek (@deepseek-ai/dsh-llm-deepseek): failed to import`（cordis 真实原因被 logger 吞进内存 ring buffer，日志只留一行）。
+   - 根因：`@deepseek-ai/dsh-llm-deepseek` 是**传输库**（只导出 `Config`/`DeepSeekAdapter`/`registerDeepSeekProvider`，无 `apply`/`default`），而 dsh-base 组合树里 `id: llm-deepseek` **本来就挂着** `@deepseek-ai/dsh-llm-deepseek-api-key`（负责注册 provider `deepseek-official`）。用同 id 条目写 `name:` 会把 base 那条**覆盖成传输库** ⇒ `invalid plugin, expect function or object with an "apply" method`；若再另起 `llm-deepseek-key`，去掉覆盖后立刻撞 `configurable provider "deepseek-official" is already declared`。
+   - 正解：**同 id 只 patch `config`（不写 `name`）**；查组合树用 `dsh --profile service --dump-config`。
 
 ## 运行
 
