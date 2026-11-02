@@ -954,10 +954,16 @@ class TMonitor:
                 try:
                     from app.services.position_state import build_position_state
                     _st = build_position_state(raw, T_MONITOR_ACCOUNT)
-                    _budget = int(_st.get("remaining_reduce_budget") or 0)
+                    if _st.get("board_half_done"):
+                        self._v3_log({"date": today, "symbol": raw, "phase": "board_half",
+                                      "action": "skip_board_half_done",
+                                      "reason": "本持仓周期已做过板上减半", "position": _st})
+                        continue
+                    _budget = int(_st.get("remaining_cycle_budget") or 0)
                     if _budget < 100:
                         self._v3_log({"date": today, "symbol": raw, "phase": "board_half",
-                                      "action": "skip_budget", "reason": "本轮已减仓，剩余预算<100",
+                                      "action": "skip_budget",
+                                      "reason": "本持仓周期累计减仓已达50%上限，剩余预算<100",
                                       "position": _st})
                         continue
                 except Exception:
