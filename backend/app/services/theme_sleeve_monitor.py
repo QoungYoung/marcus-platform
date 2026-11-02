@@ -8,6 +8,10 @@
 from __future__ import annotations
 import json, os, sys, threading, time
 from datetime import datetime, timedelta
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA = os.path.join(ROOT, "data")
@@ -60,17 +64,22 @@ class ThemeSleeveMonitor:
         except Exception:
             pass
 
+    @staticmethod
+    def _now():
+        # 统一按交易所时区判断，避免容器 TZ=UTC 时窗口整体错位
+        return datetime.now(ZoneInfo("Asia/Shanghai")) if ZoneInfo else datetime.now()
+
     def _trading(self):
-        now = datetime.now()
+        now = self._now()
         if now.weekday() >= 5:
             return False
         hm = now.strftime("%H:%M")
         return ("09:30" <= hm <= "11:30") or ("13:00" <= hm <= "15:00")
 
-    @staticmethod
-    def _exec_window():
+    @classmethod
+    def _exec_window(cls):
         """只在狼大窗口卖出：09:45-10:00 / 14:00-14:30。"""
-        hm = datetime.now().strftime("%H:%M")
+        hm = cls._now().strftime("%H:%M")
         return ("09:45" <= hm <= "10:00") or ("14:00" <= hm <= "14:30")
 
     def _quote(self, symbol):
@@ -89,6 +98,11 @@ class ThemeSleeveMonitor:
             return {}
 
     def _sell(self, symbol, px, vol, reason):
+        # 唯一卖出出口也做窗口兜底：即使调用方绕过 _loop，也不允许 09:30 成交
+        if not self._exec_window():
+            return {"status": "blocked", "reason": "outside_theme_window",
+                    "window": "09:45-10:00,14:00-14:30",
+                    "now": self._now().strftime("%Y-%m-%d %H:%M:%S")}
         try:
             if self.executor is None:
                 return {"status": "no_executor"}
