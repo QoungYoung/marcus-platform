@@ -1133,7 +1133,13 @@ function apply(ctx) {
       let lastSeq = firstSeq; // 每个事件只处理一次，避免重复累加/重复推送
       let lastEmit = Date.now();
       const sweep = () => {
-        const events = agent.session.events; // 每次访问返回新快照（追加后变化）
+        // ★ 2026-11-02 ✓：0.2.x 的 session **没有** `.events` ✗（那是 0.1.0-rc.6 的形态 ✓）
+        //   旧写法 `agent.session.events` ⇒ TypeError `events is not iterable` ✗：
+        //     · setInterval 里被 try/catch 吞掉（流式永远产不出 delta ✗）
+        //     · `await agent.whenIdle()` 之后那次直接 sweep() 则抛给 streamChatReply
+        //       ⇒ SSE `event: error` ⇒ QQBot 回「调用 Pi Server 失败: events is not iterable」✗
+        //   ⇒ 与其余路径一致，走 `_sessionEvents()` 兼容取法 ✓（0.2.x: snapshotEvents ✓）
+        const events = _sessionEvents(agent); // 每次访问返回新快照（追加后变化）
         for (const ev of events) {
           if (ev.seq < lastSeq) continue;
           lastSeq = ev.seq + 1;
@@ -1748,7 +1754,8 @@ const SESSION_CHAT_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // QQ 对话等长期上�
       if (h) { try { await h.dispose(); } catch (e) { console.warn('[Bridge] 迁移 dispose 失败: ' + e.message); } sessions.delete(oldKey); }
       locks.delete(oldKey);
       const newSessionId = asciiSessionId(sessionId) + '_m' + Date.now();
-      const seed = extractCompletePrefix(oldAgent ? oldAgent.session.events : []);
+      // ★ 2026-11-02 ✓：同样走 `_sessionEvents()`（0.2.x 无 `.events` ✗ ⇒ 原来恒取空 seed ✓）
+      const seed = extractCompletePrefix(oldAgent ? _sessionEvents(oldAgent) : []);
       const modelId = model || (mode === 'trade' ? DEEPSEEK_TRADE_MODEL : DEEPSEEK_MODEL);
       try {
         const handle = await ctx.agents.create({
