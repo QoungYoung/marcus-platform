@@ -566,7 +566,8 @@ def record_action(rec: Dict[str, Any]) -> None:
         pass
 
 
-def execute_plan(plan: Dict[str, Any], reason: str, live: Optional[bool] = None) -> Dict[str, Any]:
+def execute_plan(plan: Dict[str, Any], reason: str, live: Optional[bool] = None,
+                 is_stop_loss: bool = True, kind: str = "wolf_v3_stop") -> Dict[str, Any]:
     """执行卖出计划；默认只返回计划，不真下单。"""
     if not plan.get("ok"):
         return {"status": "skipped", "reason": plan.get("reason")}
@@ -592,6 +593,6 @@ def execute_plan(plan: Dict[str, Any], reason: str, live: Optional[bool] = None)
         pass
     from app.services.t_gateway import gateway_execute
     gw = gateway_execute(plan["symbol"], "sell", plan["price"], plan["volume"],
-                         reason=reason, decision_source="agent", is_stop_loss=True,
-                         kind="wolf_v3_stop", account_id=plan.get("account_id") or os.getenv("T_MONITOR_ACCOUNT", "stock"))
+                         reason=reason, decision_source="agent", is_stop_loss=is_stop_loss,
+                         kind=kind, account_id=plan.get("account_id") or os.getenv("T_MONITOR_ACCOUNT", "stock"))
     return gw

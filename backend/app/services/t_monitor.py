@@ -829,6 +829,7 @@ class TMonitor:
                     self._v3_agent_positions("intraday_3x15")
             except Exception:
                 pass
+            self._check_board_half_v3(quotes)
             for raw, sym in pairs:
                 q = quotes.get(sym)
                 if q and q.get("current"):
@@ -908,6 +909,62 @@ class TMonitor:
                     print("[TMonitor][V3][LIVE] 异常(不卖) %s: %s" % (symbol, str(_e_live)[:160]), flush=True)
         except Exception as e:
             print("[TMonitor][V3] 异常(不卖) %s: %s" % (symbol, str(e)[:120]), flush=True)
+
+    def _check_board_half_v3(self, quotes: dict) -> None:
+        """板上减半（狼大纪律②）：接近涨停 + 浮盈>=3% → 卖当前持仓一半。
+
+        v3 纯净版删掉了旧 _check_board_half，这里按当前持仓重新接回；
+        只做保护性止盈，不碰止损/反抽逻辑。
+        """
+        try:
+            from app.services import wolf_discipline as WD
+            from app.services import wolf_v3_production as _vp
+            from app.services import decision_window as _dw
+            ph = _dw.phase_at().get("phase")
+            if ph not in ("intraday", "tail_preview", "tail_confirm"):
+                return
+            holds = [p for p in self._positions() if float(p.get("volume") or 0) > 0]
+            if not holds:
+                return
+            raw_by_norm = {_normalize_symbol(p.get("symbol")): p.get("symbol") for p in holds}
+            qmap = {}
+            for ns, q in (quotes or {}).items():
+                if not q:
+                    continue
+                qmap[ns] = {"current": float(q.get("current") or 0),
+                            "pre_close": float(q.get("pre_close") or 0)}
+            portfolio = {"positions": [{"symbol": _normalize_symbol(p.get("symbol")),
+                                        "avg_cost": float(p.get("avg_price") or 0),
+                                        "volume": float(p.get("volume") or 0)} for p in holds]}
+            bh = WD.board_half(json.dumps(portfolio, ensure_ascii=False), datetime.now(), quotes=qmap)
+            today = datetime.now().strftime("%Y%m%d")
+            for sell in (bh.get("active_sells") or []):
+                ns = str(sell.get("symbol") or "")
+                raw = raw_by_norm.get(ns) or ns
+                key = (ns, "board_half", today)
+                if key in self._v3_done:
+                    continue
+                self._v3_done.add(key)
+                q = (quotes or {}).get(ns) or {}
+                px = float(q.get("current") or 0)
+                if px <= 0:
+                    continue
+                plan = _vp.plan_sell(raw, q, 0.5, account_id=T_MONITOR_ACCOUNT, allow_floor=False)
+                rec = {"date": today, "symbol": raw, "phase": "board_half",
+                       "action": "board_half_sell", "reason": sell.get("reason"),
+                       "quote": px, "plan": plan}
+                self._v3_log(rec)
+                if not plan.get("ok"):
+                    continue
+                gw = _vp.execute_plan(plan, reason="[board-half] " + str(sell.get("reason") or ""),
+                                      live=None, is_stop_loss=False, kind="wolf_board_half_sell")
+                rec["gateway"] = gw
+                self._v3_log(rec)
+                if gw.get("status") == "success":
+                    print("[TMonitor][V3][BOARD-HALF] %s %s股 @%.2f" % (
+                        raw, plan.get("volume"), px), flush=True)
+        except Exception as e:
+            print("[TMonitor][V3] board_half 异常(不卖): %s" % str(e)[:120], flush=True)
 
     def _v3_precompute_positions(self) -> None:
         """14:50 预计算：只问一次，结果落盘，14:55 读缓存。"""
