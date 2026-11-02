@@ -64,10 +64,10 @@ def _position_summary(symbol: str, account_id: str = "") -> Dict[str, Any]:
     """
     try:
         from app.services.t_gateway import get_sellable_ledger
-        _acc = account_id or os.getenv("T_MONITOR_ACCOUNT", "t")
+        _acc = account_id or os.getenv("T_MONITOR_ACCOUNT", "stock")
         ledger = get_sellable_ledger(account_id=_acc)
         item = ledger.get(symbol) or {}
-        return {
+        out = {
             "symbol": symbol,
             "account_id": _acc,
             "sellable": item.get("sellable", 0),
@@ -75,6 +75,14 @@ def _position_summary(symbol: str, account_id: str = "") -> Dict[str, Any]:
             "avg_price": item.get("avg_price"),
             "pnl_pct": item.get("pnl_pct"),
         }
+        try:
+            from app.services.position_state import build_position_state
+            st = build_position_state(symbol, _acc, sellable=out["sellable"])
+            if st and not st.get("error"):
+                out.update(st)
+        except Exception:
+            pass
+        return out
     except Exception as e:
         return {"symbol": symbol, "error": str(e)[:100]}
 
@@ -617,6 +625,24 @@ def wake_agent(trigger: Dict[str, Any], context: Optional[dict] = None) -> Optio
                     "（底仓不可卖 ✓ 卖腿只动 T 仓）\n"
                     % (symbol, _pv, _sv, _cost,
                        ("%.2f%%" % float(_pnl)) if _pnl is not None else "—"))
+            try:
+                _orig = int(_pos.get("original_volume") or 0)
+                _sold = int(_pos.get("sold_today") or 0)
+                _budget = int(_pos.get("remaining_reduce_budget") or 0)
+                _cap = int(_pos.get("max_reduce_total") or 0)
+                msg += ("【今日仓位】原仓 %d｜已卖 %d｜剩余 %d｜本轮减仓上限 %d（%.0f%%）｜"
+                        "剩余预算 %d 股%s\n"
+                        % (_orig, _sold, _pv, _cap, float(_pos.get("max_reduce_pct") or 0.5) * 100,
+                           _budget, "（已用完，禁止再减）" if _budget < 100 else ""))
+                _acts = _pos.get("today_trades") or []
+                if _acts:
+                    msg += "【今日已成交】" + "；".join(
+                        "%s %s %s@%.2f %s" % (a.get("time", "")[-8:], a.get("side", ""),
+                                              a.get("volume", 0), float(a.get("price") or 0),
+                                              str(a.get("reason") or "")[:40])
+                        for a in _acts[-5:]) + "\n"
+            except Exception:
+                pass
         except Exception as _e_pos:
             print("[t-bridge] 持仓渲染失败(跳过): %s" % str(_e_pos)[:70], flush=True)
     recents = ctx.get("recent_decisions") or []

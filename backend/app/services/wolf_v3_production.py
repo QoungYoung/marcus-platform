@@ -51,7 +51,8 @@ def _norm_bars(daily_bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def build_snapshot(symbol: str, quote: Dict[str, Any], daily_bars: List[Dict[str, Any]],
                    intraday_bars: Optional[List[Dict[str, Any]]] = None,
-                   now: Optional[datetime] = None) -> Dict[str, Any]:
+                   now: Optional[datetime] = None,
+                   account_id: str = "stock") -> Dict[str, Any]:
     """PIT 快照：phase/last_price/partial OHLC + 候选；不写未来极值。"""
     now = now or datetime.now()
     asof = _today8(now)
@@ -106,6 +107,12 @@ def build_snapshot(symbol: str, quote: Dict[str, Any], daily_bars: List[Dict[str
     rest = sorted([c for c in cands if c not in near],
                   key=lambda x: (-(_f(x.get("confluence"))), abs(_f(x.get("distance_pct")))))[:20]
     cands = near + rest
+    position = {}
+    try:
+        from app.services.position_state import build_position_state
+        position = build_position_state(symbol, account_id, asof=asof)
+    except Exception:
+        position = {}
     return {
         "symbol": symbol, "asof": asof, "phase": win["phase"], "decision_time": win["time"],
         "data_cutoff": win["time"], "is_final": bool(win.get("is_final")),
@@ -116,6 +123,7 @@ def build_snapshot(symbol: str, quote: Dict[str, Any], daily_bars: List[Dict[str
         "data_warning": ("已收盘；当天无法成交" if win.get("is_final") else
                          "未收盘；today_low/high 只到 %s，不是全天极值" % win["time"]),
         "candidates": cands,
+        "position": position,
     }
 
 
@@ -132,6 +140,7 @@ def build_prompt(snapshot: Dict[str, Any]) -> str:
         "4) 只能用候选 id/price，不得发明价格；没把握就 no_confident_level=true。",
         "5) phase=tail_confirm 是 14:55 尾盘代理，不是 15:00 官方收盘；phase=close 当天不能成交。",
         "6) 若 action_mode=rebound_exit，必须给 rebound_zone（反抽卖出带，zone=[low,high] + candidate_ids）；否则 null。",
+        "7) 仓位状态在 snapshot.position：original_volume=今日原仓、sold_today=已卖、remaining_reduce_budget=本轮剩余可减；预算<100 股时不得再输出减仓动作（止损/破位清仓除外）。",
         "输入快照：" + json.dumps(s, ensure_ascii=False),
         "候选：" + json.dumps(cands, ensure_ascii=False),
         "输出 schema：",
