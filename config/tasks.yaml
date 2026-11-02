@@ -449,7 +449,7 @@ tasks:
 - id: stock_agent_facts_daily
   name: P3 候选事实（盘后 16:55）
   description: 从主题成员生成 top30 候选事实；含位置/筹码/股东/席位/业绩/老龙头。
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: 55 16 * * mon-fri
@@ -477,7 +477,7 @@ tasks:
 - id: stock_agent_select_daily
   name: P3 agent 选股（盘后 17:15）
   description: 把候选事实交给 DSH agent 按狼大规则选股，校验后落 stock_agent_selected.json；不下单。
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: 15 17 * * mon-fri
@@ -502,7 +502,7 @@ tasks:
   name: P3 选股→仓位（盘后 17:25）
   description: 读 stock_agent_selected.json，调用 calc-position（带 theme_id），继续走 mainline
     caps/thesis/P3/defense/wave；只算仓，不下单。9:50 交易 agent 再执行。
-  enabled: true
+  enabled: false
   schedule:
     type: cron
     expr: 25 17 * * mon-fri
@@ -861,3 +861,28 @@ tasks:
   depends_on: []
   retry:
     enabled: false
+
+- id: stock_agent_chain_daily
+  name: P3 三步一条链（facts → select → position，16:55）
+  description: 原 16:55/17:15/17:25 三个任务靠「等文件」串联 ⇒ 2026-11-02 facts 没触发时下游各空等 15 分钟、通知只剩 waiting ✗；改为一条链：顺序强制、失败点落在真正失败的那一步，任一步失败即停（原三个任务已 enabled=false 留作回滚）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 55 16 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/stock_agent_chain.py
+    args: []
+  output:
+    log_file: logs/stock_agent_chain_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - mainline_core_chain
+  retry:
+    enabled: true
