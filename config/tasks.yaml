@@ -783,6 +783,34 @@ tasks:
   depends_on: []
   retry:
     enabled: false
+- id: theme_candidates_execute
+  name: B候选执行（09:45）
+  description: 读 theme_candidates_final.json，只执行 B 通道 pass 候选；单票 5% probe，已有持仓跳过，走 t_gateway。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 45 9 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/theme_candidates_execute.py
+    args:
+    - --execute
+    - --probe-pct
+    - '0.05'
+    - --max-positions
+    - '2'
+  output:
+    log_file: logs/theme_candidates_execute_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: false
 - id: position_levels_daily
   name: 持仓上下位更新（19:10）
   description: 每日用 v3 agent 计算每只持仓的 down/up，落 PG position_levels；监视器只读表。

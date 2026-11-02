@@ -158,7 +158,7 @@ _BUILD_SIZE_FLOOR = os.getenv("WOLF_BUILD_SIZE_FLOOR", "0").strip().lower() in (
 _BUILD_CAP_CASH_SAFETY = float(os.getenv("WOLF_BUILD_CAP_CASH_SAFETY", "0.98") or 0.98)
 # 受资金锚影响的**建仓类腿型**（做T回补腿不在内：它们的"买腿≤可卖底仓"是有意为之的防堆仓）
 _BUILD_CAP_KINDS = {k.strip() for k in str(os.getenv(
-    "WOLF_BUILD_CAP_KINDS", "trend_break_buy,buy_253,buy_254,custom_buy,wolf_build")).split(",") if k.strip()}
+    "WOLF_BUILD_CAP_KINDS", "trend_break_buy,buy_253,buy_254,custom_buy,wolf_build,theme_b_probe")).split(",") if k.strip()}
 
 
 # ── 卖腿「底仓 floor」执行（`WOLF_SELL_FLOOR_ENFORCE`，库内默认 0 = 逐字旧行为）──────────────
@@ -988,7 +988,8 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
                       reason: str = "",
                       decision_source: str = "agent",
                       allow_human_override: bool = False,
-                      is_stop_loss: bool = False) -> Dict[str, Any]:
+                      is_stop_loss: bool = False,
+                      kind: str = "") -> Dict[str, Any]:
     """做T下单网关校验（三阶 + 二段断言）——状态全注入版（回测与实盘共用）。
 
     与 validate_order 行为完全一致，仅把实时依赖改为从 ctx 读取：
@@ -1041,7 +1042,7 @@ def validate_order_at(symbol: str, side: str, price: float, volume: int,
             # 无触发事件的主动裸买（非自由跑）仍拒绝——新开仓走独立建仓流程。
             no_pos = symbol not in ledger
             if no_pos and T_BUY_TIER_LIMIT_ENABLED \
-                    and not condition_id and not trigger_id:
+                    and not condition_id and not trigger_id and not _is_build_cap_kind(kind):
                 result["reason"] = "无底仓标的禁止裸买（新开仓走独立建仓流程或发布条件单）"
                 return result
         # 4) 跌停禁买 / 涨停禁卖
@@ -1187,7 +1188,8 @@ def validate_order(symbol: str, side: str, price: float, volume: int,
                    reason: str = "",
                    decision_source: str = "agent",
                    is_stop_loss: bool = False,
-                   account_id: str = ACCOUNT_T) -> Dict[str, Any]:
+                   account_id: str = ACCOUNT_T,
+                   kind: str = "") -> Dict[str, Any]:
     """做T下单网关校验（实时路径）——构造实时 ctx 后委托 validate_order_at。
     2026-09-02: account_id 参数(默认 t)——ledger/在途/买腿按账户, net_asset/daily/risk 保持全局风控口径。"""
     symbol = std_symbol(symbol)      # 2026-09-17：小写调用方也要查到同一份账本/行情
@@ -1206,7 +1208,7 @@ def validate_order(symbol: str, side: str, price: float, volume: int,
     return validate_order_at(symbol, side, price, volume, ctx,
                              condition_id=condition_id, trigger_id=trigger_id,
                              reason=reason, decision_source=decision_source,
-                             is_stop_loss=is_stop_loss)
+                             is_stop_loss=is_stop_loss, kind=kind)
 
 
 def self_quote(symbol: str) -> Optional[dict]:
@@ -1755,7 +1757,7 @@ def _wave_hold_action() -> str:
 def _build_cap_kinds() -> set:
     """**建仓类腿型**名单（与资金上限 `WOLF_BUILD_CAP_KINDS` 同一份 ✓；§9.865 买带豁免只对它生效 ✓）。"""
     return {k.strip() for k in str(os.getenv(
-        "WOLF_BUILD_CAP_KINDS", "trend_break_buy,buy_253,buy_254,custom_buy,wolf_build") or "").split(",") if k.strip()}
+        "WOLF_BUILD_CAP_KINDS", "trend_break_buy,buy_253,buy_254,custom_buy,wolf_build,theme_b_probe") or "").split(",") if k.strip()}
 
 
 def _falling_gate_exempt(trigger_kind) -> bool:
@@ -3181,7 +3183,7 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
                            condition_id=condition_id, trigger_id=trigger_id,
                            reason=reason, decision_source=decision_source,
                            is_stop_loss=is_stop_loss,
-                           account_id=account_id)
+                           account_id=account_id, kind=kind)
     if not check["pass"]:
         if trigger_id:
             t_db.update_trigger_status(trigger_id, "blocked", reason=check["reason"])
