@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """theme_sleeve_store.py — 题材 facts/selected/trade 落 PG。"""
 from __future__ import annotations
-import json, os
+import json, math, os
 
 TABLE = "theme_sleeve_daily"
 
@@ -30,6 +30,16 @@ def ensure():
             cur.execute("CREATE INDEX IF NOT EXISTS idx_theme_sleeve_daily_updated ON theme_sleeve_daily(updated_at DESC)")
 
 
+def _clean(v):
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return None
+    if isinstance(v, dict):
+        return {k: _clean(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_clean(x) for x in v]
+    return v
+
+
 def save(date8: str, kind: str, payload) -> bool:
     """kind: facts / selected / trade"""
     if kind not in ("facts", "selected", "trade"):
@@ -43,5 +53,5 @@ def save(date8: str, kind: str, payload) -> bool:
             VALUES (%s, %s::jsonb, now())
             ON CONFLICT (trade_date) DO UPDATE
             SET {kind} = EXCLUDED.{kind}, updated_at = now()
-            """, (d, json.dumps(payload, ensure_ascii=False)))
+            """, (d, json.dumps(_clean(payload), ensure_ascii=False, allow_nan=False)))
     return True

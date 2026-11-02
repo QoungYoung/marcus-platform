@@ -85,16 +85,25 @@ def main():
         print("[theme] limit_list fail:", str(e)[:100], flush=True)
     lim = {str(r.get("ts_code")): r for r in lrows}
 
-    # 筹码：一次全市场
+    # 筹码：当天没出就回退上一交易日（cyq_perf 常晚于 18:45）
     chips = {}
+    chips_date = a.date
     try:
-        d = relay_query("cyq_perf", trade_date=a.date, limit=6000)
-        if d is not None:
-            for _, r in d.iterrows():
-                chips[str(r.get("ts_code"))] = {"winner": _f(r.get("winner_rate")),
-                                                "cost85": _f(r.get("cost_85pct")),
-                                                "cost15": _f(r.get("cost_15pct")),
-                                                "cost50": _f(r.get("cost_50pct"))}
+        from mainline_common import trade_dates as _tds
+        _dates = [str(x) for x in _tds(a.date)][-8:]
+        for _d in reversed(_dates):
+            try:
+                d = relay_query("cyq_perf", trade_date=_d, limit=6000)
+            except Exception:
+                d = None
+            if d is not None and len(d):
+                chips_date = _d
+                for _, r in d.iterrows():
+                    chips[str(r.get("ts_code"))] = {"winner": _f(r.get("winner_rate")),
+                                                    "cost85": _f(r.get("cost_85pct")),
+                                                    "cost15": _f(r.get("cost_15pct")),
+                                                    "cost50": _f(r.get("cost_50pct"))}
+                break
     except Exception as e:
         print("[theme] cyq fail:", str(e)[:100], flush=True)
 
@@ -204,7 +213,7 @@ def main():
                          "mid": [z["symbol"] for z in mid]},
                "b4": {"date": b4_date, "stale": b4_stale, "u": len(u), "z": len(zz), "d": len(dd),
                       "max_times": mx, "ladder": ladder, "tag": tag, "open_sum": open_sum, "open_max": open_max},
-               "overhang": overhang,
+               "overhang": overhang, "overhang_date": chips_date,
                "popular_120": {x["symbol"]: x.get("popular_120", 0)
                                   for x in ([leader] + wind + mid if leader else [])
                                   if x},
