@@ -949,6 +949,17 @@ class TMonitor:
                 px = float(q.get("current") or 0)
                 if px <= 0:
                     continue
+                # 同轮减仓预算：压力位已减半后，板上减半不再重复卖（突破减半，剩下吃溢价）
+                try:
+                    from app.services.position_state import build_position_state
+                    _st = build_position_state(raw, T_MONITOR_ACCOUNT)
+                    if int(_st.get("remaining_reduce_budget") or 0) < 100:
+                        self._v3_log({"date": today, "symbol": raw, "phase": "board_half",
+                                      "action": "skip_budget", "reason": "本轮已减仓，剩余预算<100",
+                                      "position": _st})
+                        continue
+                except Exception:
+                    pass
                 plan = _vp.plan_sell(raw, q, 0.5, account_id=T_MONITOR_ACCOUNT, allow_floor=False)
                 rec = {"date": today, "symbol": raw, "phase": "board_half",
                        "action": "board_half_sell", "reason": sell.get("reason"),
