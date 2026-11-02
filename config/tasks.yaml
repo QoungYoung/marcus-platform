@@ -736,6 +736,53 @@ tasks:
   depends_on: []
   retry:
     enabled: false
+- id: theme_candidates_morning
+  name: 题材A/B候选合并（次日08:00）
+  description: T+1 早盘用上一交易日最终数据重跑/合并 A 强势与 B 低位首次放量候选；不交易。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 0 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/theme_candidates_morning.py
+    args:
+    - --retry-a
+  output:
+    log_file: logs/theme_candidates_morning_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: false
+- id: theme_candidates_open_filter
+  name: 题材候选开盘过滤（09:25）
+  description: 读早盘合并候选，按集合竞价/开盘价过滤追高与破位；不交易。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 9 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/theme_candidates_open_filter.py
+    args: []
+  output:
+    log_file: logs/theme_candidates_open_filter_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: false
 - id: position_levels_daily
   name: 持仓上下位更新（19:10）
   description: 每日用 v3 agent 计算每只持仓的 down/up，落 PG position_levels；监视器只读表。
