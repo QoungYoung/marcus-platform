@@ -1043,8 +1043,10 @@ class TMonitor:
                 self._v3_log(rec)
                 if not plan.get("ok"):
                     continue
+                _live = str(os.getenv("WOLF_ACCEL_END_LIVE", "0")).strip() in ("1", "true", "yes", "on")
                 gw = _vp.execute_plan(plan, reason="[accel-end] 二次冲高缩量不过前高 %.2f" % hi,
-                                      live=None, is_stop_loss=False, kind="wolf_confirm_sell")
+                                      live=_live, is_stop_loss=False, kind="wolf_confirm_sell")
+                rec["shadow"] = not _live
                 rec["gateway"] = gw
                 self._v3_log(rec)
                 if gw.get("status") == "success":
