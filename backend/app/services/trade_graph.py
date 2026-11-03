@@ -74,6 +74,7 @@ class TradeState(TypedDict):
     stance_context: str
     position_context: str
     position_levels_context: str
+    cycle_context: str
     trade_mode_instruction: str
     regime_context: str           # 市场结构指令（趋势/震荡）
     market_regime: str            # "trend" / "oscillation"
@@ -819,6 +820,39 @@ def _read_position_context() -> str:
         return ""
 
 
+def _read_cycle_context(portfolio_json: str = "") -> str:
+    """持仓周期/减仓预算：原仓、本周期已卖、板上减半、剩余预算。"""
+    try:
+        import json as _j
+        from app.services.position_state import build_position_state
+        pf = _j.loads(portfolio_json) if isinstance(portfolio_json, str) and portfolio_json else portfolio_json
+        positions = (pf or {}).get("positions") if isinstance(pf, dict) else None
+        if not positions:
+            return ""
+        lines = ["## 持仓周期/减仓预算（卖出前必须核对）"]
+        for p in positions:
+            sym = p.get("symbol") or p.get("code")
+            if not sym: continue
+            vol = int(float(p.get("volume") or p.get("sellable") or 0))
+            if vol <= 0: continue
+            st = build_position_state(sym, "stock", sellable=vol)
+            if st.get("error"):
+                lines.append("- %s：仓位状态取数失败，禁止减仓" % sym); continue
+            lines.append("- %s：原仓 %s｜本周期已卖 %s｜当前 %s｜本轮上限 %s｜剩余预算 %s｜板上减半 %s" % (
+                sym, st.get("entry_volume"), st.get("sold_since_entry"), st.get("current_volume"),
+                st.get("max_reduce_cycle"), st.get("remaining_cycle_budget"),
+                "已做" if st.get("board_half_done") else "未做"))
+            acts = st.get("today_trades") or []
+            if acts:
+                lines.append("  今日成交：" + "；".join(
+                    "%s %s %s@%.2f" % (a.get("time","")[-8:], a.get("side",""), a.get("volume",0), float(a.get("price") or 0))
+                    for a in acts[-5:]))
+        lines.append("- 规则：板上减半一个周期只做一次；剩余预算<100 时不得再减半，除非清仓/止损/破位/加速结束。")
+        return "\n".join(lines) + "\n\n"
+    except Exception:
+        return ""
+
+
 def _read_stock_confirm_context() -> str:
     """read stock_confirm_result -> 主线概念成分股确认比例(个股层确认: 三层联动之三)"""
     try:
@@ -1429,6 +1463,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "trade_mode_instruction": _get_trade_instruction(state['window'], regime),
         "main_line_context": _read_main_line_context(),
         "position_context": _read_position_context(),
+        "cycle_context": _read_cycle_context(_pf),
         "position_levels_context": _read_position_levels_context(portfolio_json=_pf),
         "confirm_context": _read_confirm_context(),
         "stock_confirm_context": _read_stock_confirm_context(),
@@ -1548,6 +1583,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('three_tier_context', chr(39)+chr(39))}"
         f"{state.get('main_line_context', chr(39)+chr(39))}"
         f"{state.get('position_context', chr(39)+chr(39))}"
+        f"{state.get('cycle_context', chr(39)+chr(39))}"
         f"{state.get('position_levels_context', chr(39)+chr(39))}"
         f"{state.get('confirm_context', chr(39)+chr(39))}"
         f"{state.get('stock_confirm_context', chr(39)+chr(39))}"
@@ -1597,7 +1633,8 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"- 先试探后确认；不一次性打满。\n\n"
         f"【8. 卖出】\n"
         f"- 破黄线/破前低/高位放量滞涨/逻辑失效/触发止损，减仓或退出。\n"
-        f"- 做T只卖T仓，底仓不卖；止损按现有纪律块执行，不因为‘看好’硬扛。\n\n"
+        f"- 做T只卖T仓，底仓不卖；止损按现有纪律块执行，不因为‘看好’硬扛。\n"
+        f"- 减仓前必须核对【持仓周期/减仓预算】：board_half_done=已做、或 remaining_cycle_budget<100 时，不得再按板上减半/高位兑现减仓；只允许清仓/止损/破位/加速结束。\n\n"
         f"【9. 时间窗口】\n"
         f"- 狼大窗口：9:45-10:00、14:00-14:30；本任务 9:50 / 14:20 就在窗口内。\n"
         f"- 窗口外不新开日内T腿；有消息刺激的个股例外目前没有可靠数据，不擅自放宽。\n\n"
