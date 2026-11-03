@@ -479,6 +479,7 @@ class TMonitor:
         self._v3_m5_cache = {}       # (symbol, minute) -> 5m bars
         self._v3_precompute_done = set()
         self._v3_intraday_done = set()
+        self._accel_event_done = set()   # 加速结束事件观察去重（影子，不下单）
         self._nochase_deferred = set()   # (symbol, date) 被"不追高"延后到 14:00–14:30 重评的票（只用于降噪打印）
         self._line_deferred = set()      # (symbol, date) 挂低位线等待成交的票（狼大 2026-04-10；只用于降噪打印）
         self._line_bars_cache = {}       # (symbol, date) → 算线用的 as-of 日线（每天只取一次，避免 30s 轮次重复请求）
@@ -830,6 +831,7 @@ class TMonitor:
             except Exception:
                 pass
             self._check_board_half_v3(quotes)
+            self._check_accel_events_v3(quotes)
             self._check_acceleration_end_v3(quotes)
             for raw, sym in pairs:
                 q = quotes.get(sym)
@@ -989,6 +991,47 @@ class TMonitor:
                         raw, plan.get("volume"), px), flush=True)
         except Exception as e:
             print("[TMonitor][V3] board_half 异常(不卖): %s" % str(e)[:120], flush=True)
+
+    def _check_accel_events_v3(self, quotes: dict) -> None:
+        """30s 事件观察：炸板/VWAP 破位立即记录（影子，不卖）。
+
+        5m 结构由 _check_acceleration_end_v3 每 30s 用已完成桶重算；
+        这里只做“事件型”触发，避免等 30 分钟确认。
+        """
+        try:
+            from app.services import decision_window as _dw
+            from app.services.exit_rule_engine import _limit_price
+            if _dw.phase_at().get("phase") != "intraday":
+                return
+            today = datetime.now().strftime("%Y%m%d")
+            for p in self._positions():
+                raw = p.get("symbol"); vol = float(p.get("volume") or 0)
+                if not raw or vol < 100:
+                    continue
+                ns = _normalize_symbol(raw)
+                q = (quotes or {}).get(ns) or {}
+                px = float(q.get("current") or 0)
+                if px <= 0:
+                    continue
+                pre = float(q.get("pre_close") or 0)
+                lim = _limit_price(pre, raw) if pre > 0 else 0.0
+                vwap = float(q.get("average") or 0)
+                ev = None
+                if lim > 0 and float(q.get("high") or 0) >= lim - 0.001 and px < lim - 0.001:
+                    ev = "board_open"
+                elif vwap > 0 and px < vwap * 0.995:
+                    ev = "vwap_break"
+                if not ev:
+                    continue
+                key = (ns, ev, today)
+                if key in self._accel_event_done:
+                    continue
+                self._accel_event_done.add(key)
+                self._v3_log({"date": today, "symbol": raw, "phase": "accel_event",
+                              "action": "observe_" + ev, "quote": px, "vwap": vwap,
+                              "limit_price": lim, "shadow": True})
+        except Exception as e:
+            print("[TMonitor][V3] accel_event 异常(只记录): %s" % str(e)[:120], flush=True)
 
     def _check_acceleration_end_v3(self, quotes: dict) -> None:
         """加速结束（狼大 2026-08-04）：二次冲高后半小时缩量不过前高 → 剩余仓位走。
