@@ -737,12 +737,12 @@ tasks:
   retry:
     enabled: false
 - id: theme_candidates_morning
-  name: 题材A/B候选合并（次日08:00）
-  description: T+1 早盘用上一交易日最终数据重跑/合并 A 强势与 B 低位首次放量候选；不交易。
+  name: 题材A/B候选合并（次日08:15）
+  description: T+1 08:15，B4(08:05)完成后用上一交易日最终数据重跑/合并 A 强势与 B 低位首次放量候选；不交易。
   enabled: true
   schedule:
     type: cron
-    expr: 0 8 * * mon-fri
+    expr: 15 8 * * mon-fri
     timezone: Asia/Shanghai
   script:
     path: jobs/theme_candidates_morning.py
@@ -785,7 +785,8 @@ tasks:
     enabled: false
 - id: theme_candidates_execute
   name: B候选执行（09:45）
-  description: 读 theme_candidates_final.json，只执行 B 通道 pass 候选；单票 5% probe，已有持仓跳过，走 t_gateway。
+  description: 读 theme_candidates_final.json，只执行 B 通道 pass 候选；单票 5% probe，已有持仓跳过，走
+    t_gateway。
   enabled: true
   schedule:
     type: cron
@@ -861,10 +862,10 @@ tasks:
   depends_on: []
   retry:
     enabled: false
-
 - id: stock_agent_chain_daily
   name: P3 三步一条链（facts → select → position，16:55）
-  description: 原 16:55/17:15/17:25 三个任务靠「等文件」串联 ⇒ 2026-11-02 facts 没触发时下游各空等 15 分钟、通知只剩 waiting ✗；改为一条链：顺序强制、失败点落在真正失败的那一步，任一步失败即停（原三个任务已 enabled=false 留作回滚）。
+  description: 原 16:55/17:15/17:25 三个任务靠「等文件」串联 ⇒ 2026-11-02 facts 没触发时下游各空等 15 分钟、通知只剩
+    waiting ✗；改为一条链：顺序强制、失败点落在真正失败的那一步，任一步失败即停（原三个任务已 enabled=false 留作回滚）。
   enabled: true
   schedule:
     type: cron

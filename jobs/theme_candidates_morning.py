@@ -9,7 +9,7 @@ T 日收盘后数据可能不齐；T+1 08:00 用上一交易日最终数据重�
 """
 from __future__ import annotations
 import argparse, json, os, subprocess, sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,7 +38,10 @@ def main():
     ap.add_argument('--retry-a', action='store_true', help='A 缺失时重跑 facts/select')
     ap.add_argument('--max-members', type=int, default=8)
     a = ap.parse_args()
-    t = a.date or last_trade_date(datetime.now().strftime('%Y%m%d'))
+    _now = datetime.now()
+    # 08:00 跑时当天还没收盘，必须用上一交易日；15:00 后才允许用当天
+    _basis = _now.strftime('%Y%m%d') if _now.hour >= 15 else (_now - timedelta(days=1)).strftime('%Y%m%d')
+    t = a.date or last_trade_date(_basis)
     base = os.path.join(ROOT, 'data', 'mainline', t)
     out = {'date': t, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
            'readiness': {}, 'channels': {'A': [], 'B': []}, 'merged': []}
