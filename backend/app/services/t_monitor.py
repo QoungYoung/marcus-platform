@@ -830,6 +830,7 @@ class TMonitor:
             except Exception:
                 pass
             self._check_board_half_v3(quotes)
+            self._check_acceleration_end_v3(quotes)
             for raw, sym in pairs:
                 q = quotes.get(sym)
                 if q and q.get("current"):
@@ -988,6 +989,68 @@ class TMonitor:
                         raw, plan.get("volume"), px), flush=True)
         except Exception as e:
             print("[TMonitor][V3] board_half 异常(不卖): %s" % str(e)[:120], flush=True)
+
+    def _check_acceleration_end_v3(self, quotes: dict) -> None:
+        """加速结束（狼大 2026-08-04）：二次冲高后半小时缩量不过前高 → 剩余仓位走。
+
+        只做 5m 结构代理：高点后 ≥6 根 5m 无新高、量能缩、现价较前高回撤 ≥1%。
+        13:00-14:30 不执行（狼大窗口）。
+        """
+        try:
+            from app.services import decision_window as _dw
+            from app.services import wolf_v3_production as _vp
+            if _dw.phase_at().get("phase") != "intraday":
+                return
+            hm = datetime.now().strftime("%H:%M")
+            if "13:00" <= hm < "14:30":
+                return
+            today = datetime.now().strftime("%Y%m%d")
+            for p in self._positions():
+                raw = p.get("symbol"); vol = float(p.get("volume") or 0)
+                if not raw or vol < 100:
+                    continue
+                ns = _normalize_symbol(raw)
+                q = (quotes or {}).get(ns) or {}
+                px = float(q.get("current") or 0)
+                if px <= 0:
+                    continue
+                bars = [b for b in (self._v3_intraday_bars(raw) or []) if str(b.get("time", "")).startswith(today)]
+                if len(bars) < 12:
+                    continue
+                hi_i = max(range(len(bars)), key=lambda i: float(bars[i].get("high") or 0))
+                hi = float(bars[hi_i].get("high") or 0)
+                if hi <= 0 or hi_i < 6:
+                    continue
+                after = bars[hi_i + 1:]
+                if len(after) < 6:
+                    continue
+                if max(float(b.get("high") or 0) for b in after) > hi * 1.001:
+                    continue
+                v_before = sum(float(b.get("vol") or 0) for b in bars[max(0, hi_i - 6):hi_i]) / max(1, min(6, hi_i))
+                v_after = sum(float(b.get("vol") or 0) for b in after[-6:]) / 6
+                if v_before <= 0 or v_after > v_before * 0.8:
+                    continue
+                if px > hi * 0.99:
+                    continue
+                key = (ns, "accel_end", today)
+                if key in self._v3_done:
+                    continue
+                self._v3_done.add(key)
+                plan = _vp.plan_sell(raw, q, 0.0, account_id=T_MONITOR_ACCOUNT, allow_floor=True)
+                rec = {"date": today, "symbol": raw, "phase": "accel_end",
+                       "action": "accel_end", "reason": "二次冲高缩量不过前高",
+                       "high": hi, "quote": px, "plan": plan}
+                self._v3_log(rec)
+                if not plan.get("ok"):
+                    continue
+                gw = _vp.execute_plan(plan, reason="[accel-end] 二次冲高缩量不过前高 %.2f" % hi,
+                                      live=None, is_stop_loss=False, kind="wolf_confirm_sell")
+                rec["gateway"] = gw
+                self._v3_log(rec)
+                if gw.get("status") == "success":
+                    print("[TMonitor][V3][ACCEL-END] %s %s股 @%.2f" % (raw, plan.get("volume"), px), flush=True)
+        except Exception as e:
+            print("[TMonitor][V3] accel_end 异常(不卖): %s" % str(e)[:120], flush=True)
 
     def _v3_precompute_positions(self) -> None:
         """14:50 预计算：只问一次，结果落盘，14:55 读缓存。"""
