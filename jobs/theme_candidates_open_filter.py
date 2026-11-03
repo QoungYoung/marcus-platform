@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 import argparse, json, os, sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for p in (ROOT, os.path.join(ROOT, 'backend')):
@@ -20,7 +20,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--date', default='')
     a = ap.parse_args()
-    d = a.date or datetime.now().strftime('%Y%m%d')
+    _now = datetime.now()
+    _basis = _now.strftime('%Y%m%d') if _now.hour >= 15 else (_now - timedelta(days=1)).strftime('%Y%m%d')
+    try:
+        from mainline_common import last_trade_date
+        _d = last_trade_date(_basis)
+    except Exception:
+        _d = _basis
+    d = a.date or _d
     base = os.path.join(ROOT, 'data', 'mainline', d)
     p = os.path.join(base, 'theme_candidates_merged.json')
     if not os.path.exists(p):
