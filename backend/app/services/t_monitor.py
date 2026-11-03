@@ -832,7 +832,7 @@ class TMonitor:
                 pass
             self._check_board_half_v3(quotes)
             self._check_accel_events_v3(quotes)
-            self._check_acceleration_end_v3(quotes)
+            self._check_accel_engine_v3(quotes)
             for raw, sym in pairs:
                 q = quotes.get(sym)
                 if q and q.get("current"):
@@ -1032,6 +1032,71 @@ class TMonitor:
                               "limit_price": lim, "shadow": True})
         except Exception as e:
             print("[TMonitor][V3] accel_event 异常(只记录): %s" % str(e)[:120], flush=True)
+
+    def _check_accel_engine_v3(self, quotes: dict) -> None:
+        """加速结束：确定性引擎 exit_rule_engine → 清剩余。
+
+        30s 轮询；5m 结构由引擎按已完成桶计算；13:00-14:30 不执行。
+        默认影子（WOLF_ACCEL_ENGINE_LIVE=0），=1 才真下单。
+        """
+        try:
+            from app.services import decision_window as _dw
+            from app.services import wolf_v3_production as _vp
+            from app.services.exit_rule_engine import evaluate as _eval_exit
+            from app.services.position_state import build_position_state
+            from app.services.t_gateway import get_sellable_ledger
+            if _dw.phase_at().get("phase") != "intraday":
+                return
+            hm = datetime.now().strftime("%H:%M")
+            if "13:00" <= hm < "14:30":
+                return
+            today = datetime.now().strftime("%Y%m%d")
+            led = get_sellable_ledger(T_MONITOR_ACCOUNT)
+            for p in self._positions():
+                raw = p.get("symbol"); vol = float(p.get("volume") or 0)
+                if not raw or vol < 100:
+                    continue
+                ns = _normalize_symbol(raw)
+                q = (quotes or {}).get(ns) or {}
+                px = float(q.get("current") or 0)
+                if px <= 0:
+                    continue
+                item = led.get(raw) or led.get(ns) or {}
+                sellable = int(item.get("sellable") or vol)
+                st = build_position_state(raw, T_MONITOR_ACCOUNT, sellable=sellable, asof=today)
+                bars = self._v3_intraday_bars(raw) or []
+                snap = {"symbol": raw, "asof": today, "decision_time": hm,
+                        "data_cutoff": hm, "bars_5m": bars, "quote": q,
+                        "position": st, "levels": [], "warnings": ["runtime_shadow"]}
+                r = _eval_exit(snap)
+                feats = r.get("features") or {}
+                if r.get("signal") != "accel_end" or r.get("decision") != "exit_all":
+                    continue
+                key = (ns, "accel_engine", today)
+                if key in self._v3_done:
+                    continue
+                self._v3_done.add(key)
+                plan = _vp.plan_sell(raw, q, 0.0, account_id=T_MONITOR_ACCOUNT, allow_floor=True)
+                rec = {"date": today, "symbol": raw, "phase": "accel_engine",
+                       "action": "accel_end", "reason": r.get("reason"),
+                       "pattern": feats.get("pattern"), "quote": px,
+                       "features": {k: feats.get(k) for k in
+                                    ("push1", "pullback", "push2", "vol_ratio_after", "vwap", "board")},
+                       "plan": plan, "engine": r}
+                self._v3_log(rec)
+                if not plan.get("ok"):
+                    continue
+                live = str(os.getenv("WOLF_ACCEL_ENGINE_LIVE", "0")).strip() in ("1", "true", "yes", "on")
+                gw = _vp.execute_plan(plan, reason="[accel-engine] " + str(r.get("reason") or ""),
+                                      live=live, is_stop_loss=False, kind="wolf_confirm_sell",
+                                      bypass_symbol_cap=True)
+                rec["shadow"] = not live
+                rec["gateway"] = gw
+                self._v3_log(rec)
+                if gw.get("status") == "success":
+                    print("[TMonitor][V3][ACCEL-ENGINE] %s %s股 @%.2f" % (raw, plan.get("volume"), px), flush=True)
+        except Exception as e:
+            print("[TMonitor][V3] accel_engine 异常(不卖): %s" % str(e)[:120], flush=True)
 
     def _check_acceleration_end_v3(self, quotes: dict) -> None:
         """加速结束（狼大 2026-08-04）：二次冲高后半小时缩量不过前高 → 剩余仓位走。

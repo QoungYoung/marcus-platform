@@ -567,7 +567,8 @@ def record_action(rec: Dict[str, Any]) -> None:
 
 
 def execute_plan(plan: Dict[str, Any], reason: str, live: Optional[bool] = None,
-                 is_stop_loss: bool = True, kind: str = "wolf_v3_stop") -> Dict[str, Any]:
+                 is_stop_loss: bool = True, kind: str = "wolf_v3_stop",
+                 bypass_symbol_cap: bool = False) -> Dict[str, Any]:
     """执行卖出计划；默认只返回计划，不真下单。"""
     if not plan.get("ok"):
         return {"status": "skipped", "reason": plan.get("reason")}
@@ -582,9 +583,11 @@ def execute_plan(plan: Dict[str, Any], reason: str, live: Optional[bool] = None,
             return {"status": "blocked", "reason": "daily_sell_cap"}
     except Exception:
         pass
-    # 单票单次上限：默认不超过可卖的 60%（target_pct 已表达目标仓位）
+    # 单票单次上限：默认不超过可卖的 60%；加速结束清剩余时显式绕过
     try:
         max_pct = float(os.getenv("WOLF_V3_MAX_SYMBOL_PCT", "0.60"))
+        if bypass_symbol_cap:
+            max_pct = 1.0
         if plan.get("sellable") and plan["volume"] > int(plan["sellable"] * max_pct):
             plan["volume"] = (int(plan["sellable"] * max_pct) // 100) * 100
             if plan["volume"] < 100:
