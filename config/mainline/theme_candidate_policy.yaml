@@ -1,0 +1,9 @@
+version: 1
+as_of: "2026-11-03"
+description: 题材 sleeve 候选策略；不把“主线内主题”一刀切排除。
+# 显式纳入：即使 parent_track 在主线白名单，也作为题材候选
+include_themes:
+  - humanoid_robot
+  - robot_actuator
+# 显式排除：优先级最高
+exclude_themes: []

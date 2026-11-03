@@ -123,12 +123,33 @@ def main():
         lk = json.load(open(lk_path, encoding="utf-8"))
     except Exception:
         lk = {}
+    # 题材候选策略：include 可覆盖“主线 parent 排除”，exclude 最高优先
+    _policy = {}
+    try:
+        _policy = load_yaml(os.path.join(ROOT, "config", "mainline", "theme_candidate_policy.yaml"))
+    except Exception:
+        pass
+    _inc = set(_policy.get("include_themes") or [])
+    _exc = set(_policy.get("exclude_themes") or [])
+    _active_ids = []
+    for _x in (theme.get("focus") or []) + (theme.get("trial") or []) + (theme.get("watch") or []):
+        _tid = _x.get("id")
+        if _tid in _exc:
+            continue
+        _t = tcfg.get(_tid) or {}
+        if _tid not in _inc and main_tracks and _t.get("parent_track") in main_tracks:
+            continue
+        _active_ids.append(_tid)
+    for _tid in _inc:
+        if _tid not in _active_ids and _tid in tcfg:
+            _active_ids.append(_tid)
     out = []
+    _active = set(_active_ids)
     for x in (theme.get("focus") or []) + (theme.get("trial") or []) + (theme.get("watch") or []):
         tid = x.get("id")
-        t = ts.get(tid) or {}
-        if t.get("parent_track") in main_tracks:
+        if tid not in _active:
             continue
+        t = ts.get(tid) or {}
         fx = full.get(tid) or {}
         mem = []
         try:
