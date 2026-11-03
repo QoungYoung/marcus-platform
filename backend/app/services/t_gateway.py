@@ -1806,6 +1806,27 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     if not _kind_gw and "wolf_ambush_buy" in str(reason or ""):
         _kind_gw = "wolf_ambush_buy"
 
+    # ── 封板保护（2026-11-03 用户实盘）：封死涨停时禁止“高位兑现”类卖腿
+    #   只允许板上减半/止损/破位/清仓/加速结束/避险；普通 high_exit/减仓 在封板价上不卖。
+    if str(side).lower() in ("sell", "卖出", "卖") and not is_stop_loss:
+        _allow = ("board", "板上", "板价", "up_resistance",
+                  "止损", "破位", "清仓", "加速结束", "避险", "stop_loss")
+        _txt = (str(reason or "") + " " + str(kind or "")).lower()
+        if not any(x in _txt for x in _allow):
+            try:
+                from app.services.t_data_sources import fetch_quote_one
+                from app.services.exit_rule_engine import _limit_price
+                _q = fetch_quote_one(symbol) or {}
+                _pre = float(_q.get("pre_close") or 0)
+                _cur = float(_q.get("current") or 0)
+                _hi = float(_q.get("high") or 0)
+                _lim = _limit_price(_pre, symbol) if _pre > 0 else 0.0
+                if _lim > 0 and _cur >= _lim - 0.001 and _hi >= _lim - 0.001:
+                    return {"status": "rejected", "level": "SEALED_BOARD",
+                            "reason": "封板价禁止非保护性卖出：%s" % (str(reason or "")[:80])}
+            except Exception:
+                pass
+
     # ── 浪型"不动"闸（账本 §9.287 ✓）：操作=参与（build/side/t_only）⇒ 当天不做**减仓性**操作 ✓
     if side == "sell" and not is_stop_loss:
         _wop = _wave_hold_action()

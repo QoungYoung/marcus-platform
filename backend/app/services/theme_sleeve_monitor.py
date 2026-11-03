@@ -82,6 +82,22 @@ class ThemeSleeveMonitor:
         hm = cls._now().strftime("%H:%M")
         return ("09:45" <= hm <= "10:00") or ("14:00" <= hm <= "14:30")
 
+    @staticmethod
+    def _limit_price(pre: float, symbol: str) -> float:
+        from app.services.exit_rule_engine import _limit_price
+        return _limit_price(pre, symbol)
+
+    def _down_break_confirmed(self, q: dict, px: float, down: float, symbol: str) -> bool:
+        """跌破确认：非涨停/封板附近，且跌破 0.3% 缓冲，避免一分钱假破。"""
+        try:
+            pre = float((q or {}).get("pre_close") or 0)
+            lim = self._limit_price(pre, symbol) if pre > 0 else 0.0
+            if lim > 0 and (px >= lim - 0.001 or float((q or {}).get("high") or 0) >= lim - 0.001):
+                return False
+            return px < float(down) * 0.997
+        except Exception:
+            return False
+
     def _quote(self, symbol):
         try:
             from app.services.t_data_sources import fetch_quote_one
@@ -134,6 +150,8 @@ class ThemeSleeveMonitor:
                             continue
                         down, up = lv.get("down"), lv.get("up")
                         if down and px < down:
+                            if not self._down_break_confirmed(q, px, float(down), sym):
+                                continue
                             r = self._sell(sym, px, vol, "theme_monitor:down_break")
                             done[sym] = {"action": "clear", "px": px, "result": r, "t": datetime.now().isoformat()}
                         elif up and px >= up:
