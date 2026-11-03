@@ -1809,10 +1809,13 @@ def gateway_execute(symbol: str, side: str, price: float, volume: int,
     # ── 封板保护（2026-11-03 用户实盘）：封死涨停时禁止“高位兑现”类卖腿
     #   只允许板上减半/止损/破位/清仓/加速结束/避险；普通 high_exit/减仓 在封板价上不卖。
     if str(side).lower() in ("sell", "卖出", "卖") and not is_stop_loss:
-        _allow = ("board", "板上", "板价", "up_resistance",
-                  "止损", "破位", "清仓", "加速结束", "避险", "stop_loss")
-        _txt = (str(reason or "") + " " + str(kind or "")).lower()
-        if not any(x in _txt for x in _allow):
+        # 只认结构化腿型，不认 reason 文案（auto_trade 的理由也常写“板上减半”）
+        _allow_kind = {"wolf_board_half_sell", "wolf_confirm_sell", "wolf_stop",
+                       "wolf_v3_stop", "stop_loss"}
+        _allow_reason = ("止损", "破位", "清仓", "加速结束", "避险")
+        _rw = str(reason or "")
+        if (str(kind or "") not in _allow_kind
+                and not any(x in _rw for x in _allow_reason)):
             try:
                 from app.services.t_data_sources import fetch_quote_one
                 from app.services.exit_rule_engine import _limit_price
