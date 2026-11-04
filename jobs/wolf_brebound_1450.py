@@ -362,7 +362,23 @@ def vol_trend(code: str) -> dict | None:
                 phase = "放转缩"
             else:
                 phase = "量能平"
-        return dict(bars=len(rows), time=t[-1], price=px,
+        # ── 全天是否出现过「缩转放」（他 13:49「今天下午缩转放进来的资金」是**事件**，不是当下状态）──
+        #   按 30 分钟分桶，找最淡的一桶，看它之后的桶有没有放大 ≥1.3 倍。
+        # ★ 只取完整的 30 分钟桶：最后一桶常常只有几分钟，量必然最小 ⇒ 会被误判成"最淡"
+        _bk = [sum(dv[i:i + 30]) for i in range(0, len(dv) - 29, 30)]
+        turn = dict(occurred=False, from_time="", to_time="", ratio=None)
+        if len(_bk) >= 2:
+            _mn = min(range(len(_bk)), key=lambda k: _bk[k])
+            _after = _bk[_mn + 1:]
+            if _after and _bk[_mn] > 0:
+                _mx = max(_after)
+                _r = _mx / _bk[_mn]
+                _idx = _mn + 1 + _after.index(_mx)
+                turn = dict(occurred=bool(_r >= 1.3),
+                            from_time=t[min(len(t) - 1, _mn * 30 + 29)],
+                            to_time=t[min(len(t) - 1, _idx * 30 + 29)],
+                            ratio=round(_r, 2))
+        return dict(bars=len(rows), time=t[-1], price=px, intraday_turn=turn,
                     avg_price=round(avg, 2) if avg else None,
                     last30=round(last30 / 1e4, 0), prev30=round(prev30 / 1e4, 0) if prev30 else None,
                     ratio_30v30=round(ratio, 2) if ratio else None, phase=phase)
@@ -458,6 +474,24 @@ def read(day: str, cut: str = CUT) -> dict:
     ia = idx_d.amount.values.astype(float)
     amt = ia[-1] / 1e5
     a20 = np.mean(ia[max(0, len(ia) - 20):len(ia) - (1 if intraday else 0)]) / 1e5 if len(ia) > 21 else np.nan
+    # ── 「缩转放」的**日级**判据（30v30 只作盘中动能参考）──
+    #   他 11-04 13:00/13:44 说的缩转放 =「前几日缩量 → 今天放量」的日级转折。
+    #   实测 14:50 时最后 30 分钟天然是全天最淡的一段 ⇒ 30v30 几乎恒 <1 ⇒ 用那个判据这条永远不成立 ✗
+    #   amt 已经把盘中累计量按 PRE_CUT_SHARE 折算成全天口径，所以这里可以直接比。
+    volume_turn = None
+    try:
+        if a20 == a20 and a20 > 0 and len(ia) >= 2:
+            _prev = float(ia[-2]) / 1e5
+            _rp, _rt = _prev / a20, amt / a20
+            _ph = ("缩转放" if (_rp < 1.0 and _rt >= 1.03)
+                   else "放量（之前没缩）" if _rt >= 1.03
+                   else "缩量延续" if _rp < 1.0 else "量能平")
+            volume_turn = dict(prev_day_ratio=round(_rp, 2), today_ratio=round(_rt, 2),
+                               prev_day_amount_yi=round(_prev), ma20_amount_yi=round(a20),
+                               phase=_ph,
+                               note="缩转放=前一日<1.0× 且 今日≥1.03×（日级；30v30 只是盘中动能）")
+    except Exception as e:
+        print(f"[warn] volume_turn: {str(e)[:60]}", file=sys.stderr)
     if intraday:
         a20 = np.mean(ia[-21:-1]) / 1e5
 
@@ -520,6 +554,7 @@ def read(day: str, cut: str = CUT) -> dict:
                     right_side_ready=bool(_rs and (_rs.get("streak_days") or 0) >= 3),
                     note="streak_days=连续收盘 > 该点位的天数；right_side_ready 用「1浪顶」那一条，需 ≥3 天"),
         intraday_volume=dict(index=vol_trend(IDX), chinext=vol_trend("399006.SZ"), etf=vol_trend(ETF)),
+        volume_turn=volume_turn,
         wave=wave_block(day),
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
         source_note="盘中量已按截至 %s 的累计量折算（÷%.3f）；历史日用日线" % (cut, PRE_CUT_SHARE) if intraday else "日线口径",
