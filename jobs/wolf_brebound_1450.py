@@ -225,6 +225,8 @@ def wave_block(asof: str) -> dict | None:
                         level=w[1], completed=w[2], running=w[3],
                         next_watch=w[4], rejudge_trigger=w[5], evidence=w[6],
                         anchors_index=idx[-6:], anchors_etf=etf[-4:],
+                        key_levels=idx,            # 全量（right_side 判据要用 2024-10-08 的 1浪顶，不能被 -6 截掉）
+                        wave1_top=next((a["price"] for a in idx if "1浪顶" in (a.get("label") or "")), None),
                         note=("段位/锚点均来自 PG。level=机械判级（之后20日反向≥25% 记大级别，"
                               "≥10% 记小级别）；**判断段位时只用与当前级别相同的锚点**，"
                               "不同级别的锚点并存是正常的，不是冲突"))
@@ -253,7 +255,12 @@ def wave_block(asof: str) -> dict | None:
                 running=cur_.get("running"), next_watch=cur_.get("next_watch"),
                 rejudge_trigger=cur_.get("rejudge_trigger"),
                 anchors_index=[dict(x, level=x.get("level", "")) for x in (j.get("index") or [])
-                               if str(x.get("known_from", "")).replace("-", "") <= asof][-6:])
+                               if str(x.get("known_from", "")).replace("-", "") <= asof][-6:],
+                key_levels=[dict(x, level=x.get("level", "")) for x in (j.get("index") or [])
+                            if str(x.get("known_from", "")).replace("-", "") <= asof],
+                wave1_top=next((x.get("price") for x in (j.get("index") or [])
+                                if "1浪顶" in str(x.get("label") or "")
+                                and str(x.get("known_from", "")).replace("-", "") <= asof), None))
 
 
 # ────────────────────────── 底部结构 ──────────────────────────
@@ -484,7 +491,8 @@ def read(day: str, cut: str = CUT) -> dict:
     elif intraday and not cut_ok:
         warn = f"快照时间 {qt[8:12] if len(qt)>12 else '?'}，非 14:50 口径：量比未计算，量额为累计值"
     wv = wave_block(day) or {}
-    _levels = levels_vs_price(idx_d.close.values, wv.get("anchors_index") or [], float(idx_d.close.iloc[-1]))
+    _levels = levels_vs_price(idx_d.close.values, wv.get("key_levels") or wv.get("anchors_index") or [],
+                              float(idx_d.close.iloc[-1]))
     _rs = next((x for x in _levels if "1浪顶" in (x.get("label") or "")), None)
     _etf_levels = levels_vs_price(etf_d.close.values, wv.get("anchors_etf") or [], float(etf_d.close.iloc[-1]))
 
@@ -507,7 +515,7 @@ def read(day: str, cut: str = CUT) -> dict:
         bottom_structure=dict(index=bottom_for(IDX, day), chinext=bottom_for("399006.SZ", day)),
         # 浪型点位对照（他 11-04 14:05「3674 以上 3 天收盘 = B反 右侧一买」）
         levels=dict(index=_levels, etf=_etf_levels,
-                    right_side_level=(_rs or {}).get("price"),
+                    right_side_level=(_rs or {}).get("price") or wv.get("wave1_top"),
                     right_side_streak=(_rs or {}).get("streak_days"),
                     right_side_ready=bool(_rs and (_rs.get("streak_days") or 0) >= 3),
                     note="streak_days=连续收盘 > 该点位的天数；right_side_ready 用「1浪顶」那一条，需 ≥3 天"),
