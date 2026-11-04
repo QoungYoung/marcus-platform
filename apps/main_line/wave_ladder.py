@@ -108,7 +108,9 @@ ORIGIN_EDGE_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_EDGE", 20))
 #   旧：origin = 窗口内最低主级 L。实测 2024-02-05(2702.18) 与 2024-09-13(2704.09) 只差 1.18 点，
 #       选前者 ⇒ 1浪顶 3174.27，且 2 浪回撤 99.6%（浪型自身失效）；选后者 ⇒ 1浪顶 3674.40，回撤 59.6% ✓
 #   新：只保留「2 浪已完成且回撤 < 上限」的候选，取**时间最近**的一个；无合格候选才回退旧行为。
-ORIGIN_VALID = os.getenv("WOLF_WAVE_LADDER_ORIGIN_VALID", "0").strip() in ("1", "true", "yes")
+# ★ 2026-11-04 起默认开（回放 685 天档位差异 0 天，只把 wave1_top 从 3174.27 纠正为 3674.40）；
+#   要回旧行为设 WOLF_WAVE_LADDER_ORIGIN_VALID=0
+ORIGIN_VALID = os.getenv("WOLF_WAVE_LADDER_ORIGIN_VALID", "1").strip() in ("1", "true", "yes")
 ORIGIN_MAX_RETRACE = _envf("WOLF_WAVE_LADDER_ORIGIN_MAX_RETRACE", 0.80)
 # ★ 2026-11-04（用户：一起上）：铁律②的「下穿」加防抖 + 加对称释放
 #   ① 防抖：下穿改成「连续 2 日收盘 < 1浪顶×(1-0.5%)」的**事件**（第 2 天才触发，且只触发一次）
