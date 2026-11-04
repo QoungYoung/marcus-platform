@@ -254,7 +254,13 @@ def rank_trend_legs(rows, day, k, factor="auto", data_dir=None):
     _fac = str(factor or os.getenv("WOLF_BREAKOUT_RANK_FACTOR", "auto")).strip().lower()
     if _fac in ("auto", ""):
         _op = ""
-        for d in _dirs[:3]:
+        # ★ 2026-11-04：先走 wave_store（PG 唯一真源），读不到再走文件（回测目录）
+        try:
+            from app.services import wave_store as _ws
+            _op = str((_ws.get_wave() or {}).get("operation") or "").lower()
+        except Exception:
+            _op = ""
+        for d in ([] if _op else _dirs[:3]):
             try:
                 _op = str((json.load(open(os.path.join(d, "wave_state.json"), encoding="utf-8")) or {})
                           .get("operation") or "").lower()

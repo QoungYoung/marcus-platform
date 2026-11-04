@@ -36,6 +36,20 @@ def _read(path: str) -> Optional[dict]:
 
 
 def load_wave(date8: Optional[str] = None) -> tuple[Optional[dict], str]:
+    # ★ 2026-11-04（停写文件 / 统一 PG）：先走 wave_store（PG 唯一真源）；
+    #   文件只在 PG 读不到时兜底（文件从今天起冻结，直接读会拿到旧档 ✗）。
+    try:
+        from app.services import wave_store as _ws
+        if date8 and date8 != "live":
+            _w = _ws.get_wave_asof(date8)
+            if _w:
+                return _w, "pg:wave_state_asof"
+        else:
+            _w = _ws.get_wave()
+            if _w:
+                return _w, "pg:wave_state"
+    except Exception:
+        pass
     if date8 and date8 != "live":
         for p in (os.path.join(DATA, "wave_state_history", date8 + ".json"),
                   os.path.join(DATA, "wave_state_%s-%s-%s.json" % (date8[:4], date8[4:6], date8[6:8])),
