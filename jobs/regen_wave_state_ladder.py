@@ -247,13 +247,19 @@ def main():
                 tf.add(f, arcname=os.path.relpath(f, ROOT))
     print("\n备份：%s（%d 份，%.1f MB）" % (tarp, len(plan), os.path.getsize(tarp) / 1e6))
 
+    # ★ 2026-11-04（用户：停写文件 / 统一 PG）：文件只在 WOLF_WAVE_FILE_EXPORT=1 时导出。
+    #   本脚本第二步会**成批重写 data/wave_state*.json**（live + dated + 回测快照）⇒
+    #   不停它，「停写文件」就只是表面功夫（实测 17:56 仍有 900+ 份文件被重写 ✗）。
+    #   PG 回写不受影响（下面照旧 upsert ✓）。
+    _file_export = os.getenv("WOLF_WAVE_FILE_EXPORT", "0").strip() in ("1", "true", "yes")
     n_ok, n_err, n_pg = 0, 0, 0
     for f, ev, _, ws in plan:
         try:
-            os.makedirs(os.path.dirname(f) or ".", exist_ok=True)
-            tmp = f + ".tmp"
-            json.dump(ws, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-            os.replace(tmp, f)
+            if _file_export:
+                os.makedirs(os.path.dirname(f) or ".", exist_ok=True)
+                tmp = f + ".tmp"
+                json.dump(ws, open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+                os.replace(tmp, f)
             n_ok += 1
             # ★ 2026-10-23 事故修：regen 原先**只写文件、不回写 PG** ✗ ⇒ 10-21 那次
             #   `wave_state_pg_backfill` 灌进库的旧口径（短数据窗口算的 origin/wave1_top）
