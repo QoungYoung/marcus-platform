@@ -48,11 +48,34 @@ def _file_state(name: str = "wave_state.json") -> Optional[Dict[str, Any]]:
         return None
 
 
+def _main_line_dir() -> str:
+    """定位 apps/main_line（含 wave_pg.py）。
+
+    ★ 2026-11-04 修：原来用 `dirname(dirname(dirname(dirname(__file__))))` 硬回溯 4 层，
+    在容器布局 `/app/app/services/wave_store.py` 下算出来是 `/` ⇒ 拼成 `/apps/main_line`
+    （不存在）⇒ `import wave_pg` 永远失败 ⇒ `_pg_latest()` 静默返回 None ⇒
+    **「PG 优先」在生产上从未生效，一直在读文件**（而本地仓库布局 `/repo/backend/app/services/...`
+    回溯 4 层刚好是仓库根，所以本地测试一直是通的 ✗）。
+    改为：向上逐层找 `apps/main_line`，最多 6 层。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        cand = os.path.join(here, "apps", "main_line")
+        if os.path.isdir(cand):
+            return cand
+        nxt = os.path.dirname(here)
+        if nxt == here:
+            break
+        here = nxt
+    return ""
+
+
 def _pg_latest() -> Optional[Dict[str, Any]]:
     try:
         import sys
-        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        p = os.path.join(root, "apps", "main_line")
+        p = _main_line_dir()
+        if not p:
+            return None
         if p not in sys.path:
             sys.path.insert(0, p)
         import wave_pg          # type: ignore
@@ -64,8 +87,9 @@ def _pg_latest() -> Optional[Dict[str, Any]]:
 def _pg_asof(sim8: Any) -> Optional[Dict[str, Any]]:
     try:
         import sys
-        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        p = os.path.join(root, "apps", "main_line")
+        p = _main_line_dir()
+        if not p:
+            return None
         if p not in sys.path:
             sys.path.insert(0, p)
         import wave_pg          # type: ignore
