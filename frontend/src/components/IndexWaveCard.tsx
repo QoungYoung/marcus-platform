@@ -23,6 +23,24 @@ interface Wave {
   day_stage?: number | null; day_name?: string; degraded?: boolean; reset?: boolean;
   reset_reason?: string; ov_name?: string; ov_expect?: string;
   legs_stale?: boolean; leg_cycle?: string; generator_version?: string;
+  // ★ 2026-11-04：1浪顶（他的右侧一买判据）+ 盘中反哺状态
+  wave1_top?: number | null; wave1_top_date?: string;
+  status?: string; intraday?: boolean; as_of_time?: string;
+}
+interface KeyLevel {
+  name: string; price: number; gap_pct: number; above: boolean;
+  streak_days: number; need_days: number; ready: boolean; criterion?: string;
+}
+interface TodaySummary {
+  date: string; close: number; pct: number | null; high: number; low: number;
+  pos_pct: number; amount_yi: number | null; vol_ratio20: number | null;
+  key_level?: KeyLevel | null;
+}
+interface BottomStruct {
+  state: string; l_left?: number; l_right?: number; neck?: number; dist_neck?: number;
+  days_since_right?: number; right_pos?: number;
+  ma5?: number; ma10?: number; above_ma5?: boolean; above_ma10?: boolean;
+  neck_criterion?: string;
 }
 // level 的内部枚举 → 人话（原来直接把 `down` 打在卡片上 ✗）
 const LEVEL_CN: Record<string, string> = {
@@ -75,6 +93,9 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
   const [apiLast, setApiLast] = useState<Wave | null>(null);
   const [waveVer, setWaveVer] = useState('');
   const [note, setNote] = useState('');
+  const [today, setToday] = useState<TodaySummary | null>(null);
+  const [bottom, setBottom] = useState<BottomStruct | null>(null);
+  const [structNote, setStructNote] = useState('');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -92,6 +113,9 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         setDispPats(d.display_patterns || []);   // 显示专用形态（用长序列算，不改链的状态 ✓）
         setSrc(d.ohlc_source || '');
         setNote(d.note || '');
+        setToday((d.today as TodaySummary) || null);
+        setBottom((d.bottom_structure as BottomStruct) || null);
+        setStructNote(d.structure_note || '');
         setErr((d.bars || []).length ? '' : '无指数数据');
       })
       .catch((e) => { if (alive) setErr(String((e && e.message) || e)); })
@@ -104,6 +128,16 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
     () => apiLast || (waves.length ? waves[waves.length - 1] : null),
     [apiLast, waves],
   );
+
+  // ★ 2026-11-04：1浪顶 水平线（他的右侧一买判据）——必须有，别只画我们算的颈线
+  const w1 = today?.key_level?.price || last?.wave1_top || 0;
+  const w1Lines = useMemo(
+    () => (w1 ? [{ yAxis: w1, lineStyle: { color: '#c98a12', type: 'dashed', width: 1.2 },
+                   label: { formatter: '1浪顶 ' + w1.toFixed(2), position: 'insideEndTop',
+                            color: '#c98a12', fontSize: 9 } }] : []),
+    [w1],
+  );
+  const lastColor = last ? (OP_COLOR[last.operation] || MUTED) : MUTED;
 
   useEffect(() => {
     if (!ref.current || !bars.length) return;
@@ -307,11 +341,11 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         },
         markArea: { silent: true, data: areas },
         markPoint: { silent: true, data: patPoints },
-        markLine: { silent: true, symbol: 'none', data: patLines },
+            markLine: { silent: true, symbol: 'none', data: [...patLines, ...w1Lines] },
       }],
     }, true);
     return () => { /* 保留实例，随组件卸载由 effect 清理 */ };
-  }, [bars, waves]);
+  }, [bars, waves, w1Lines]);
 
   useEffect(() => () => { if (chartRef.current) { chartRef.current.dispose(); chartRef.current = null; } }, []);
   useEffect(() => {
@@ -320,7 +354,6 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const lastColor = last ? (OP_COLOR[last.operation] || MUTED) : MUTED;
   return (
     <div className="cp-threat-card" style={{ padding: '10px 12px' }}>
       <div className="cp-threat-head">
@@ -365,6 +398,56 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
           <span style={{ color: MUTED, fontSize: 11 }}>{loading ? '加载中…' : (err || '无数据')}</span>
         )}
       </div>
+      {/* ★ 2026-11-04：今日摘要 + 1浪顶进度（他的右侧一买判据）+ 底部结构 */}
+      {today && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center',
+                      fontSize: 11, color: INK, margin: '2px 0 4px' }}>
+          <span style={{ fontWeight: 700, color: (today.pct ?? 0) >= 0 ? UP_COLOR : DOWN_COLOR }}>
+            {today.close?.toFixed(2)} {today.pct != null ? (today.pct >= 0 ? '+' : '') + today.pct + '%' : ''}
+          </span>
+          <span style={{ color: MUTED }}>收位 {today.pos_pct}%</span>
+          {today.amount_yi != null && (
+            <span style={{ color: MUTED }}>
+              {today.amount_yi} 亿{today.vol_ratio20 != null ? ' · ' + today.vol_ratio20 + '×' : ''}
+            </span>
+          )}
+          {today.key_level && (
+            <span title={today.key_level.criterion || ''}
+                  style={{ border: '1px solid ' + (today.key_level.ready ? UP_COLOR : LINE),
+                           borderRadius: 4, padding: '0 5px', color: today.key_level.ready ? UP_COLOR : MUTED }}>
+              1浪顶 {today.key_level.price.toFixed(2)}
+              {' '}连续 {today.key_level.streak_days}/{today.key_level.need_days} 天
+              {today.key_level.ready ? ' ✅ 右侧一买' : ''}
+            </span>
+          )}
+          {last?.status === 'provisional' && (
+            <span title="盘中反哺写入，收盘由浪型链覆盖成 confirmed"
+                  style={{ color: '#c98a12', fontWeight: 700 }}>
+              盘中生效{last.as_of_time ? ' ' + last.as_of_time : ''}·待收盘确认
+            </span>
+          )}
+        </div>
+      )}
+      {bottom && (
+        <div style={{ fontSize: 10, color: MUTED, margin: '0 0 4px', display: 'flex',
+                      gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ color: INK }}>{bottom.state}</span>
+          {bottom.ma5 != null && (
+            <span style={{ color: bottom.above_ma5 ? UP_COLOR : DOWN_COLOR }}>
+              MA5 {bottom.ma5.toFixed(2)}{bottom.above_ma5 ? '↑' : '↓'}
+            </span>
+          )}
+          {bottom.ma10 != null && (
+            <span style={{ color: bottom.above_ma10 ? UP_COLOR : DOWN_COLOR }}>
+              MA10 {bottom.ma10.toFixed(2)}{bottom.above_ma10 ? '↑' : '↓'}
+            </span>
+          )}
+          {bottom.neck != null && (
+            <span title={bottom.neck_criterion || ''}>颈线 {bottom.neck.toFixed(2)}（辅助）</span>
+          )}
+          {structNote && <span style={{ color: '#d64545' }}>{structNote}</span>}
+        </div>
+      )}
       <div ref={ref} style={{ width: '100%', height, opacity: loading ? 0.4 : 1 }} />
       {/* 图例：色带 = 当日 operation（敞口许可），不是「能不能交易」 ✓ */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
