@@ -24,6 +24,12 @@ import pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+try:
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    from bottom_struct import detect as _detect_v3      # v3：中间态 + MA5/MA10
+except Exception:                                     # 兜底：用本文件的旧检测器
+    _detect_v3 = None
+
 ETF = "588170.SH"
 IDX = "000001.SH"
 CUT = "14:50"
@@ -37,8 +43,9 @@ def _relay():
     return relay_query
 
 
-def fetch_daily(code: str, end: str, n: int = 160) -> pd.DataFrame:
-    api = "index_daily" if code.endswith(".SH") and code.startswith("0000") else "fund_daily"
+def fetch_daily(code: str, end: str, n: int = 160, api: str | None = None) -> pd.DataFrame:
+    if api is None:
+        api = "index_daily" if code.startswith(("0000", "3990")) else "fund_daily"
     rq = _relay()
     d = rq(api, ts_code=code, start_date="20240101", end_date=end)
     d = d.sort_values("trade_date").reset_index(drop=True).tail(n).reset_index(drop=True)
@@ -308,6 +315,32 @@ def detect_bottom(h, l, c, o, v, j, tol=0.03, gap=(5, 60), reb=(0.03, 0.20), fre
                 first_break_age=since_b)
 
 
+def _detect_v3_or_local(h, l, c, o, v, j):
+    if _detect_v3 is not None:
+        return _detect_v3(h, l, c, o, v, j)
+    return detect_bottom(h, l, c, o, v, j)
+
+
+def bottom_for(code: str, day: str) -> dict:
+    """任意指数的底部结构（v3 中间态 + MA5/MA10）。含今日盘中 bar。"""
+    try:
+        d = fetch_daily(code, day, api="index_daily")
+        q = tx_today(code, day)
+        cols = ["open", "high", "low", "close", "vol"]
+        if q:
+            row = dict(trade_date=day, open=q["open"], high=q["high"], low=q["low"],
+                       close=q["close"], vol=q["vol"])
+            if d.trade_date.iloc[-1] == day:
+                for c in cols:
+                    d.loc[d.index[-1], c] = row[c]
+            else:
+                d = pd.concat([d, pd.DataFrame([row])], ignore_index=True)
+        h, l, c, o, v = (d[x].values.astype(float) for x in ("high", "low", "close", "open", "vol"))
+        return _detect_v3_or_local(h, l, c, o, v, len(d) - 1)
+    except Exception as e:
+        return {"state": f"检测失败: {str(e)[:60]}"}
+
+
 # ────────────────────────── 读数 ──────────────────────────
 def read(day: str, cut: str = CUT) -> dict:
     etf_d = adjust_splits(fetch_daily(ETF, day))
@@ -403,7 +436,7 @@ def read(day: str, cut: str = CUT) -> dict:
                     note_unit="sh_vol_shou=手；sh_pos_pct=上证收盘位置；ETF 的收位在 etf.pos_pct，勿混",
                     sh_ratio=(round(amt / a20, 2) if (cut_ok and a20 == a20) else None),
                     note=(None if cut_ok else "非 14:50 口径，仅报累计值，量比不计算")),
-        bottom_structure=bottom,
+        bottom_structure=dict(index=bottom_for(IDX, day), chinext=bottom_for("399006.SZ", day)),
         wave=wave_block(day),
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
         source_note="盘中量已按截至 %s 的累计量折算（÷%.3f）；历史日用日线" % (cut, PRE_CUT_SHARE) if intraday else "日线口径",
