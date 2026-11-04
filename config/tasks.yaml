@@ -11,6 +11,27 @@ settings:
       enabled: true
       recipient: BF1510663A6C14D6E00E42B46108F51E
 tasks:
+- id: wolf_neck_break_alert
+  name: 颈线突破提醒（盘中每5分钟）
+  description: '盘中盯上证颈线（两只脚之间的最高点）。现价突破颈线 +0.5% 且同刻量比 ≥1.03× ⇒ 推 QQ。每天每个颈线只推一次。判据语料：他 2026-02-03「反弹 → 过颈线 → 加强」、2026-01-12「突破颈线的加速」——过颈线是加强/加仓信号，不是结构成立条件（结构由三根K线定）。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '*/5 9-15 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_neck_break_alert.py
+    args: []
+  output:
+    log_file: logs/wolf_neck_break_alert_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_brebound_anchor_run
   name: B反锚点标注（15:40）
   description: 收盘后判断候选结构点算不算正式锚点，结果写 PG 的 b_rebound_anchors。分工：程序算候选点（最后锚点之后的新低/新高）与「够不够格」（之后
