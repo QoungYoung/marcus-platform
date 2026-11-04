@@ -20,6 +20,16 @@ from typing import Any, Dict, Optional
 
 DSN = (os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN") or "").strip()
 
+
+def _dsn() -> str:
+    """**每次调用时**读环境变量（不要在导入时定死）。
+
+    2026-11-04 实测：容器里 `wave_pg` 被某条更早的 import 链先加载，那一刻
+    DATABASE_URL 还没进环境 ⇒ 模块级 DSN='' ⇒ 之后所有 `_conn()` 都返回 None，
+    上层 `wave_store.get_wave()` 恒为 None（门禁拿不到浪型）。改为惰性读取后修复。
+    """
+    return (os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN") or DSN or "").strip()
+
 DDL = """
 CREATE TABLE IF NOT EXISTS wave_state (
   session_date DATE PRIMARY KEY,
@@ -71,10 +81,11 @@ def _date8(s: Any) -> Optional[str]:
 
 
 def _conn():
-    if not DSN:
+    dsn = _dsn()
+    if not dsn:
         return None
     import psycopg2
-    return psycopg2.connect(DSN, connect_timeout=5)
+    return psycopg2.connect(dsn, connect_timeout=5)
 
 
 def upsert(ws: Dict[str, Any]) -> bool:
