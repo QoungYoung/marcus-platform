@@ -297,6 +297,73 @@ def _waves(code: str) -> List[Dict[str, Any]]:
         return []
 
 
+
+def _scripts_dir() -> str:
+    """定位仓库里的 scripts/（含 bottom_struct.py）。容器布局 /app/app/... 与仓库布局都兼容。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        cand = os.path.join(here, "scripts")
+        if os.path.isfile(os.path.join(cand, "bottom_struct.py")):
+            return cand
+        nxt = os.path.dirname(here)
+        if nxt == here:
+            break
+        here = nxt
+    return ""
+
+
+def _bottom_and_today(bars: List[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """底部结构（双脚/颈线/MA）+ 今日摘要（价位/量能/关键位距离）。
+
+    2026-11-04 加：接口原来只有浪型档位，看不到「底部结构」和「今天到底怎么样」。
+    """
+    out: Dict[str, Any] = {"bottom_structure": None, "today": None, "note": ""}
+    if not bars:
+        return out
+    b = bars[-1]
+    prev = bars[-2] if len(bars) > 1 else None
+    rng = max(1e-9, float(b["high"]) - float(b["low"]))
+    pos = (float(b["close"]) - float(b["low"])) / rng * 100
+    amt = float(b.get("amount") or 0)
+    a20 = sum(float(x.get("amount") or 0) for x in bars[-21:-1]) / 20 if len(bars) > 21 else 0.0
+    out["today"] = dict(date=b["date"], close=round(float(b["close"]), 2),
+                        pct=(round((float(b["close"]) / float(prev["close"]) - 1) * 100, 2) if prev else None),
+                        high=round(float(b["high"]), 2), low=round(float(b["low"]), 2),
+                        pos_pct=round(pos), amount_yi=(round(amt / 1e5) if amt else None),
+                        vol_ratio20=(round(amt / a20, 2) if a20 else None))
+    # 关键位（1浪顶）：来自浪型判定里带的 levels；没有就说没有，不猜
+    w1 = ((last or {}).get("features") or {}).get("wave1_top") or ((last or {}).get("levels") or {}).get("wave1_top")
+    if w1:
+        streak = 0
+        for x in reversed(bars):
+            if float(x["close"]) > float(w1):
+                streak += 1
+            else:
+                break
+        out["today"]["key_level"] = dict(name="1浪顶", price=round(float(w1), 2),
+                                         gap_pct=round((float(b["close"]) / float(w1) - 1) * 100, 2),
+                                         above=bool(float(b["close"]) > float(w1)),
+                                         streak_days=streak)
+    d = _scripts_dir()
+    if not d:
+        out["note"] = "scripts/ 未找到 ⇒ 底部结构不可用"
+        return out
+    try:
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        import numpy as np                     # detect() 内部用 ndarray 切片求极值
+        from bottom_struct import detect as _detect
+        h = np.array([float(x["high"]) for x in bars])
+        l = np.array([float(x["low"]) for x in bars])
+        c = np.array([float(x["close"]) for x in bars])
+        o = np.array([float(x.get("open") or x["close"]) for x in bars])
+        v = np.array([float(x.get("vol") or 0) for x in bars])
+        out["bottom_structure"] = _detect(h, l, c, o, v, len(bars) - 1)
+    except Exception as e:
+        out["note"] = "底部结构计算失败: %s" % str(e)[:80]
+    return out
+
+
 @router.get("/index-history")
 def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000001.SH")):
     bars, src = _bars(code, days)
@@ -315,7 +382,11 @@ def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000
     if not waves:
         note = (note + " ｜ " if note else "") + "浪型链不可用（" + (_LAST_ERR["waves"] or "缺指数数据") + "）⇒ 只画 K 线 ✓"
     disp = _display_patterns(code, bars)
+    _extra = _bottom_and_today(bars, last)
     return {"code": code, "asof": today, "bars": bars, "waves": waves, "display_patterns": disp,
+            "bottom_structure": _extra.get("bottom_structure"),
+            "today": _extra.get("today"),
+            "structure_note": _extra.get("note") or "",
             "last": last, "last_is_today": bool(last and today and last.get("date") == today),
             "wave_count": len(waves), "wave_version": (last or {}).get("generator_version") or "",
             "ohlc_source": src,
