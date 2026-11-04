@@ -7,7 +7,8 @@
 **session_date 主键** ✓），统一从这里读 ✓。
 
 口径（`WOLF_WAVE_STORE` ✓ 默认 `both`）：
-  · `both`：先 PG ✓ → 读不到/异常再读文件 ✓（默认 ✓ 灰度期用这个 ✓）
+  · `pg`  ：只用 PG ✓（**2026-11-04 起默认**：唯一真源 ✓ 文件不再回落 ✓）
+  · `both`：先 PG ✓ → 读不到/异常再读文件（灰度期口径，保留开关 ✓）
   · `pg`  ：只用 PG ✗ 不回落（PG 里一旦确认齐全可切 ✓）
   · `file`：只用文件 ✓（回滚开关 ✓）
 
@@ -21,7 +22,9 @@ import os
 import time
 from typing import Any, Dict, Optional
 
-_MODE = (os.environ.get("WOLF_WAVE_STORE") or "both").strip().lower()     # both | pg | file
+# ★ 2026-11-04（用户：去掉文件，统一 PG）：默认改为 **pg**。
+#   文件（data/wave_state*.json）降级为**导出物**——只给回测/审计用，生产读取不再回落它 ✓
+_MODE = (os.environ.get("WOLF_WAVE_STORE") or "pg").strip().lower()        # pg（默认）| both | file
 _TTL = 30.0
 _CACHE: Dict[str, Any] = {"at": 0.0, "latest": None, "asof": {}}
 

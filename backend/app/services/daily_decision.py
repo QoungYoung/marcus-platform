@@ -199,6 +199,17 @@ def _load_wave(d8: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     #   "历史回填产物"，实测它与同日 live 文件冲突：wave_state_2025-12-31.json op=**exit** vs
     #   wave_state.json op=build ⇒ 决策门读到 exit ⇒ 当日 entry_allowed=False ⇒ **整日新开仓全封**
     #   （data/_bt_jan2 实测 0105、0115 两天）。开关 WOLF_WAVE_LIVE_FIRST：库内默认关、回测默认开。
+    # ★ 2026-11-04（用户：去掉文件、统一 PG）：先走 wave_store（PG 唯一真源）；
+    #   读不到才落到下面的文件逻辑（回测/审计仍用 dated 文件 ✓）
+    try:
+        from app.services import wave_store as _ws
+        _w = _ws.get_wave() or {}
+        if isinstance(_w, dict) and _w.get("operation"):
+            _as_of = _norm_date8(_w.get("date") or _w.get("as_of"))
+            return _w, {"path": "pg:wave_state", "file": "wave_state", "present": True,
+                        "kind": "pg", "as_of": _as_of}
+    except Exception:
+        pass
     if WAVE_LIVE_FIRST:
         w0 = _read_json("wave_state.json", d8)
         if isinstance(w0, dict) and w0:

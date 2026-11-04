@@ -468,7 +468,7 @@ def push_intraday_wave(day: str, wi: dict | None) -> dict | None:
 
     只在真的出现反转信号（differs / reset）时写，避免每天刷；写完由收盘的
     wave_ladder_chain 用同一套规则覆盖成 confirmed。
-    写 PG（wave_store 默认 PG 优先 ⇒ 生产立刻生效）+ 同步 data/wave_state.json。
+    只写 PG（2026-11-04 起 PG 是唯一真源；data/wave_state*.json 降级为导出物，不再同步）。
     """
     if not wi or not (wi.get("differs") or wi.get("reset")):
         return None
@@ -505,13 +505,6 @@ def push_intraday_wave(day: str, wi: dict | None) -> dict | None:
             _pg_upsert(ws)
         except Exception as e:
             print(f"[warn] 盘中浪型写 PG 失败: {str(e)[:60]}", file=sys.stderr)
-        try:
-            _p = os.path.join(ROOT, "data", "wave_state.json")
-            if os.path.isdir(os.path.dirname(_p)):
-                json.dump(ws, open(_p + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-                os.replace(_p + ".tmp", _p)
-        except Exception as e:
-            print(f"[warn] 盘中浪型写文件失败: {str(e)[:60]}", file=sys.stderr)
         return dict(written=True, rung=ws.get("sub_level"), status="provisional",
                     as_of_time=wi.get("as_of_time"), reason=(wi.get("reason") or "")[:120])
     except Exception as e:

@@ -488,6 +488,14 @@ def wave_bucket() -> Optional[str]:
     只读 data/wave_state*.json（与 position_tier.read_wave_state 同源）。**用文件 mtime 判新鲜度**，
     不用文件内 date 字段（daily_decision 记录过该字段口径不一致的坑：文件写于当日、date 却是前一交易日）。
     """
+    # ★ 2026-11-04：统一 PG —— 先走 wave_store（PG 唯一真源），读不到才回落文件（回测/审计）
+    try:
+        from app.services import wave_store as _ws
+        _w = _ws.get_wave() or {}
+        if _w.get("operation"):
+            return _w.get("operation")
+    except Exception:
+        pass
     cands = []
     now = datetime.now()
     d8 = now.strftime("%Y%m%d")

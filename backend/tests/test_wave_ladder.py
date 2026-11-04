@@ -121,11 +121,32 @@ def test_switch_defaults_off(monkeypatch):
 # ─────────────── 铁律②（教材）与跳空降一档：2026-10-15 接入的硬规矩 ───────────────
 def test_tie2_wave1_top_break_goes_rung3():
     """铁律②「第四个浪的底部不可以低于第一个浪的浪顶」⇒ 破 1 浪顶 = 主跌1浪。"""
-    closes = [100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0]
+    # ★ 2026-11-04：破位改成**连续 2 日**收盘 < 1浪顶×(1-0.5%) 才算事件（防抖）。
+    #   原来单日穿越就翻档，实测 2025-08-14 单日破 3674 造成 w45_ok→down1→w45_ok 抖动 ✗
+    closes = [100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0, 94.0]
     rows = mk(closes)
     ev = W.evaluate(rows, last(rows))
     assert ev["levels"]["wave1_top"] == 110.0, ev["levels"]
     assert ev["rung_index"] == 3 and "铁律②" in ev["reasons"], ev["reasons"]
+
+
+def test_single_day_break_does_not_downgrade():
+    """单日破 1浪顶**不再**直接判主跌1浪（防抖，2026-11-04）。"""
+    closes = [100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0]
+    ev = W.evaluate(mk(closes), last(mk(closes)))
+    assert ev["levels"]["wave1_top"] == 110.0, ev["levels"]
+    assert ev["rung_index"] != 3, ev["reasons"]
+
+
+def test_three_days_above_wave1_top_releases_downgrade():
+    """连续 3 日收盘站上 1浪顶 ⇒ 撤销降级（他 11-04 14:05「3674 以上 3 天收盘」）。"""
+    closes = [100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0, 94.0, 112.0, 113.0, 114.0]
+    rows = mk(closes)
+    # 模拟「已被单向锁在 down1」：prev=3。撤销降级只在 prev>raw 时才有意义 ✓
+    evs = [W.evaluate(rows, last(rows[:i]), prev=3) for i in range(len(closes) - 4, len(closes) + 1)]
+    last_ev = W.evaluate(rows, last(rows), prev=3)
+    assert last_ev["rung_index"] < 3, last_ev["reasons"]      # 已撤销降级
+    assert any(bool(e.get("reset")) for e in evs if e), "应有一次 reset 事件"
 
 
 def test_single_gap_only_degrades_one_notch():
@@ -138,18 +159,23 @@ def test_single_gap_only_degrades_one_notch():
     assert ev["rung_index"] == 2 and "跳空" in ev["reasons"], (ev["rung_index"], ev["reasons"])
 
 
-def test_load_rows_merges_csv_and_json(tmp_path, monkeypatch):
-    """长历史来自 CSV、近端来自 JSON，同日以 JSON 为准（铁律② 需要 2024-10 那种老拐点）。"""
+def test_load_rows_reads_pg_only(tmp_path, monkeypatch):
+    """2026-11-04 起：load_rows **唯一来源 = PG index_daily**（文件合并逻辑已移除）。
+
+    原来这条测的是「CSV 长历史 + JSON 近端合并」，那段代码已不存在
+    （`_load_rows_uncached` 现在直接 `index_daily_store.load_rows`，DB 不可用 ⇒ []）。
+    ⇒ 改成守住新契约：**不读文件**；PG 里没有该代码就返回空，且不抛异常。
+    """
     monkeypatch.setattr(W, "DATA", str(tmp_path))
     d = tmp_path / "指数数据" / "index_daily"
     d.mkdir(parents=True)
-    (d / "999999.XX.csv").write_text("trade_date,open,high,low,close,amount\n2024-01-02,1,9,1,8.0,100\n"
-                                     "2024-01-03,1,9,1,9.0,100\n", encoding="utf-8")
+    (d / "999999.XX.csv").write_text("trade_date,open,high,low,close,amount\n2024-01-02,1,9,1,8.0,100\n",
+                                     encoding="utf-8")
     (tmp_path / "index_daily_999999_XX.json").write_text(
-        json.dumps({"rows": [["20240103", 9.5, 9.8, 200], ["20240104", 10.0, 10.2, 300]]}), encoding="utf-8")
+        json.dumps({"rows": [["20240103", 9.5, 9.8, 200]]}), encoding="utf-8")
     rows = W.load_rows("999999.XX")
-    assert [r[0] for r in rows] == ["20240102", "20240103", "20240104"]
-    assert rows[1][1] == 9.5 and rows[1][3] == 200     # 同日 JSON 覆盖 CSV ✓
+    assert rows == [] or all(len(r) == 4 for r in rows)      # 不读文件、不抛异常
+    assert not any(r[0] == "20240102" for r in rows), "不应再从 CSV 读"
 
 
 # ─────────────── rung1「止跌确认」（2026-10-15 第二轮：治 2026-08 偏保守） ───────────────
@@ -210,7 +236,7 @@ def test_to_wave_state_level_mapping():
     # ★ 2026-10-15：浅回调(rung0 + 距高≤5% + 近5日跌≥2%) 现在是「4-1 回调初 ⇒ defense」✓（原表 4-1=defense）
     assert ws0["operation"] in ("t_only", "defense") and ws0["date"].count("-") == 2
     assert set(("level", "sub_level", "operation", "confidence", "reasons", "date", "features")) <= set(ws0)
-    flat = mk([100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0])
+    flat = mk([100.0] * 80 + [92.0, 84.0, 80.0] + [82.0, 90.0, 100.0, 110.0] + [95.0, 94.0])
     ws3 = W.to_wave_state(W.evaluate(flat, last(flat)))
     # ★ 2026-10-15 语义修正：down1 默认 sub_level=「下跌1浪」，只有**放量急杀当日**才标 C杀 ✓
     assert ws3["level"] == "down" and ws3["operation"] == "defense" and ws3["sub_level"] in ("下跌1浪", "C杀")
