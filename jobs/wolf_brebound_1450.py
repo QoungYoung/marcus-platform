@@ -364,6 +364,26 @@ def vol_trend(code: str) -> dict | None:
         return None
 
 
+def levels_vs_price(closes, anchors: list[dict], cur: float) -> list[dict]:
+    """浪型点位对照：现价 vs 每个结构点，附「连续收盘 > 该点」的天数。
+    点位来自 b_rebound_anchors（不硬编码），换锚点这里就跟着变。"""
+    out = []
+    for a in anchors or []:
+        try:
+            p = float(a["price"])
+        except Exception:
+            continue
+        n = 0
+        for c in reversed(list(closes)):
+            if c > p:
+                n += 1
+            else:
+                break
+        out.append(dict(label=a.get("label") or "", price=round(p, 2), level=a.get("level") or "",
+                        gap_pct=round((cur / p - 1) * 100, 2), above=bool(cur > p), streak_days=n))
+    return out
+
+
 def bottom_for(code: str, day: str) -> dict:
     """任意指数的底部结构（v3 中间态 + MA5/MA10）。含今日盘中 bar。"""
     try:
@@ -463,6 +483,11 @@ def read(day: str, cut: str = CUT) -> dict:
         warn = "盘中实时数据未取到 ⇒ 本次用的是上一交易日日线，读数不代表今日"
     elif intraday and not cut_ok:
         warn = f"快照时间 {qt[8:12] if len(qt)>12 else '?'}，非 14:50 口径：量比未计算，量额为累计值"
+    wv = wave_block(day) or {}
+    _levels = levels_vs_price(idx_d.close.values, wv.get("anchors_index") or [], float(idx_d.close.iloc[-1]))
+    _rs = next((x for x in _levels if "1浪顶" in (x.get("label") or "")), None)
+    _etf_levels = levels_vs_price(etf_d.close.values, wv.get("anchors_etf") or [], float(etf_d.close.iloc[-1]))
+
     return dict(
         asof=day, cutoff=cut, intraday=bool(intraday), data_warning=warn,
         etf=dict(code=ETF, price=round(c[j], 3), pct_yest=round((c[j] / c[j - 1] - 1) * 100, 2),
@@ -480,6 +505,12 @@ def read(day: str, cut: str = CUT) -> dict:
                     sh_ratio=(round(amt / a20, 2) if (cut_ok and a20 == a20) else None),
                     note=(None if cut_ok else "非 14:50 口径，仅报累计值，量比不计算")),
         bottom_structure=dict(index=bottom_for(IDX, day), chinext=bottom_for("399006.SZ", day)),
+        # 浪型点位对照（他 11-04 14:05「3674 以上 3 天收盘 = B反 右侧一买」）
+        levels=dict(index=_levels, etf=_etf_levels,
+                    right_side_level=(_rs or {}).get("price"),
+                    right_side_streak=(_rs or {}).get("streak_days"),
+                    right_side_ready=bool(_rs and (_rs.get("streak_days") or 0) >= 3),
+                    note="streak_days=连续收盘 > 该点位的天数；right_side_ready 用「1浪顶」那一条，需 ≥3 天"),
         intraday_volume=dict(index=vol_trend(IDX), chinext=vol_trend("399006.SZ"), etf=vol_trend(ETF)),
         wave=wave_block(day),
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
