@@ -1541,7 +1541,13 @@ if __name__ == "__main__":
         # 实时写入：若今天已经晚于数据日 ⇒ session_date = 今天（精确 ✓）；否则取下一个工作日 ✓
         _sd = _today8 if (_asof8 and _today8 > _asof8) else next_session_date(_asof8)
         _p = write_wave_state(_asof or None, dated=("--dated" in _sys.argv), rows=_rows, ev=_ev, session_date=_sd)
-        if _p:
+        if _p == "pg:wave_state":
+            # ★ 2026-11-04（停写文件）：PG 是唯一真源，返回值不再是文件路径。
+            #   不能再 open(_p) 判成功 —— 否则链会误报「浪型状态 失败」，其实已写库。
+            _ws = to_wave_state(_ev, _asof or None) or {}
+            print("wave_state 已写库(PG):", json.dumps(
+                {k: _ws.get(k) for k in ("date", "level", "sub_level", "operation")}, ensure_ascii=False))
+        elif _p:
             _ws = json.load(open(_p, encoding="utf-8")) or {}
             print("wave_state 已写:", _p, json.dumps({k: _ws.get(k) for k in ("date", "level", "sub_level", "operation")}, ensure_ascii=False))
         else:
