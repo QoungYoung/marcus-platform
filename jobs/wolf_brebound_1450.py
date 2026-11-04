@@ -321,6 +321,49 @@ def _detect_v3_or_local(h, l, c, o, v, j):
     return detect_bottom(h, l, c, o, v, j)
 
 
+def vol_trend(code: str) -> dict | None:
+    """盘中「缩转放」：腾讯分时（累计量）→ 差分得每分钟量 → 最近 30 分钟 vs 前 30 分钟。
+    phase=缩转放 需要：量比 ≥1.3 且 现价在当日均价之上（放量且价格配合）。"""
+    import urllib.request
+    tx_code = ("sh" if code.endswith(".SH") else "sz") + code.split(".")[0]
+    try:
+        raw = urllib.request.urlopen(urllib.request.Request(
+            f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={tx_code}",
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}),
+            timeout=12).read().decode("utf-8", "ignore")
+        rows = json.loads(raw)["data"][tx_code]["data"]["data"]
+        if len(rows) < 40:
+            return None
+        t = [r.split()[0] for r in rows]
+        px_s = [float(r.split()[1]) for r in rows]
+        v = [float(r.split()[2]) for r in rows]
+        dv = [v[i] - v[i - 1] for i in range(1, len(v))]          # 每分钟量（差分）
+        # VWAP 用「每分钟价 × 每分钟量」，避免 amount/vol 单位不一致（ETF 会差 100 倍）
+        num = sum(px_s[i + 1] * dv[i] for i in range(len(dv)))
+        den = sum(dv) or 1.0
+        avg = num / den
+        last30 = sum(dv[-30:]); prev30 = sum(dv[-60:-30]) if len(dv) >= 60 else None
+        ratio = (last30 / prev30) if prev30 else None
+        px = px_s[-1]
+        phase = "数据不足"
+        if ratio is not None:
+            if ratio >= 1.3 and avg and px > avg:
+                phase = "缩转放（量比≥1.3 且价在均价上）"
+            elif ratio >= 1.3:
+                phase = "放量但价在均价下"
+            elif ratio <= 0.8:
+                phase = "放转缩"
+            else:
+                phase = "量能平"
+        return dict(bars=len(rows), time=t[-1], price=px,
+                    avg_price=round(avg, 2) if avg else None,
+                    last30=round(last30 / 1e4, 0), prev30=round(prev30 / 1e4, 0) if prev30 else None,
+                    ratio_30v30=round(ratio, 2) if ratio else None, phase=phase)
+    except Exception as e:
+        print(f"[warn] 分时量能失败 {code}: {str(e)[:60]}", file=sys.stderr)
+        return None
+
+
 def bottom_for(code: str, day: str) -> dict:
     """任意指数的底部结构（v3 中间态 + MA5/MA10）。含今日盘中 bar。"""
     try:
@@ -437,6 +480,7 @@ def read(day: str, cut: str = CUT) -> dict:
                     sh_ratio=(round(amt / a20, 2) if (cut_ok and a20 == a20) else None),
                     note=(None if cut_ok else "非 14:50 口径，仅报累计值，量比不计算")),
         bottom_structure=dict(index=bottom_for(IDX, day), chinext=bottom_for("399006.SZ", day)),
+        intraday_volume=dict(index=vol_trend(IDX), chinext=vol_trend("399006.SZ"), etf=vol_trend(ETF)),
         wave=wave_block(day),
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
         source_note="盘中量已按截至 %s 的累计量折算（÷%.3f）；历史日用日线" % (cut, PRE_CUT_SHARE) if intraday else "日线口径",
