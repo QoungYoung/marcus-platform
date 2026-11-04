@@ -19,6 +19,7 @@
 """
 import json
 import os
+import sys
 import time
 from typing import Any, Dict, Optional
 
@@ -83,6 +84,13 @@ def get_wave() -> Optional[Dict[str, Any]]:
         w = _pg_latest()
     if not w and _MODE in ("both", "file"):
         w = _file_state()
+    if not w and _MODE == "pg":
+        # ★ PG 模式下的**安全兜底**（2026-11-04）：PG 读不到 ⇒ 宁可回落文件也不要返回 None，
+        #   否则 p2_entry_gate / t_monitor 等拿不到浪型（fail-open ⇒ 门禁形同虚设）。
+        #   回落时打一行告警，方便发现「PG 唯一真源」其实没生效。
+        w = _file_state()
+        if w:
+            print("[wave_store] PG 读不到，已回落文件（请检查 wave_pg/PG 连接）", file=sys.stderr)
     _CACHE["latest"] = w
     _CACHE["at"] = now
     return w
