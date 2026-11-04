@@ -368,10 +368,16 @@ def read(day: str, cut: str = CUT) -> dict:
     dn = sorted({round(l[i], 3) for i in piv if l[i] < c[j]}, reverse=True)[:3]
 
     # 口径：盘中 14:50 / 盘后 / 回放 —— agent 必须据此决定用"今天"还是"明日"表述
+    hm = (cb or {}).get("quote_time", "")[8:12] if intraday else ""
     if not intraday:
         mode, mode_note = "回放", "历史回放：结论是复盘口径，不是当日决策"
-    elif cut_ok:
-        mode, mode_note = "盘中14:50", "盘中口径：可以给「今天做不做」"
+    elif "1440" <= hm <= "1500":
+        mode, mode_note = "盘中14:50", "14:50 盘中口径：可以给「今天做不做」"
+    elif "0930" <= hm < "1440":
+        mode = "盘中"
+        mode_note = ("盘中口径但**未到 14:50**：量比不可算（同刻均值要 14:50 口径）；"
+                     "**结论必须标「待收盘确认」**，不能当成定论。可以说今天在发生什么，"
+                     "不要说「今天就是起点」。")
     else:
         mode = "盘后"
         mode_note = ("盘后口径：今天已收盘，**不能写「今天可以建/今天做」**；"
