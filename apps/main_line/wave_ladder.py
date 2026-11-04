@@ -103,7 +103,13 @@ LOW_AGE = int(_envf("WOLF_WAVE_LADDER_LOW_AGE", 5))   # rung1 止跌确认：20 
 ZIGZAG_PCT = _envf("WOLF_WAVE_LADDER_ZIGZAG", 0.10)     # 主级 zigzag 阈值（10% ⇒ 上证一年几次拐点）
 PCT_FINE = _envf("WOLF_WAVE_LADDER_ZIGZAG_FINE", 0.05)  # 细级 zigzag（只出预警位，不触发降级）
 ORIGIN_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_BARS", 900))  # 主升起点回溯窗口（≈3.5 年）
-ORIGIN_EDGE_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_EDGE", 20))  # 锚点距窗口边界 ≤N 根 ⇒ 预警（快被顶替）
+ORIGIN_EDGE_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_EDGE", 20))
+# ★ 2026-11-04：起点有效性（用户：算浪起点应该按最近的那个有效结构，不是取窗口最低点）
+#   旧：origin = 窗口内最低主级 L。实测 2024-02-05(2702.18) 与 2024-09-13(2704.09) 只差 1.18 点，
+#       选前者 ⇒ 1浪顶 3174.27，且 2 浪回撤 99.6%（浪型自身失效）；选后者 ⇒ 1浪顶 3674.40，回撤 59.6% ✓
+#   新：只保留「2 浪已完成且回撤 < 上限」的候选，取**时间最近**的一个；无合格候选才回退旧行为。
+ORIGIN_VALID = os.getenv("WOLF_WAVE_LADDER_ORIGIN_VALID", "0").strip() in ("1", "true", "yes")
+ORIGIN_MAX_RETRACE = _envf("WOLF_WAVE_LADDER_ORIGIN_MAX_RETRACE", 0.80)  # 锚点距窗口边界 ≤N 根 ⇒ 预警（快被顶替）
 LOW60_TRIGGER = os.getenv("WOLF_WAVE_LADDER_LOW60", "0").strip() in ("1", "true", "yes")
 # ↑ 2026-10-15 起**默认关**：60 日新低是早期拍的代理；换教材「铁律②」后它退为参考量，=1 可 A/B 回旧行为 ✓
 
@@ -780,6 +786,29 @@ def structural_levels(rows: Sequence[Tuple[str, float, float, float]], asof: str
     if ls:
         o = min(ls, key=lambda p: p[2])
         o_val, o_date = o[2], o[1]
+    if ORIGIN_VALID and ls:
+        # 逐个候选检查「2 浪回撤」：候选 L → 之后第一个主级 H（1浪顶）→ 再之后第一个主级 L（2浪低）
+        cands = []
+        for p in ls:
+            hs2 = [q for q in z if q[3] == "H" and q[1] > p[1]]
+            if not hs2:
+                continue
+            h1 = hs2[0]
+            ls2 = [q for q in z if q[3] == "L" and q[1] > h1[1]]
+            done = bool(ls2)
+            retr = None
+            if done and h1[2] > p[2]:
+                retr = (h1[2] - ls2[0][2]) / (h1[2] - p[2])
+            cands.append({"date": p[1], "px": p[2], "h1_date": h1[1], "h1": h1[2],
+                          "l2_date": ls2[0][1] if done else "", "l2": ls2[0][2] if done else None,
+                          "retrace": round(retr, 4) if retr is not None else None,
+                          "valid": bool(done and retr is not None and retr < ORIGIN_MAX_RETRACE)})
+        _v = [c for c in cands if c["valid"]]
+        if _v:
+            _pick = max(_v, key=lambda c: c["date"])      # 最近的那个有效起点
+            o_val, o_date = _pick["px"], _pick["date"]
+            out["anchor_source"] = "valid_recent"
+        out["origin_candidates"] = cands[-8:]
     _pin_v, _pin_d = _env_pin_origin()
     if _pin_v > 0 and _pin_d:                        # 人工钉住 ⇒ 覆盖自动锚点（锚点单调 ✓）
         o_val, o_date = _pin_v, _pin_d
