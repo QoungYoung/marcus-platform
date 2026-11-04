@@ -419,6 +419,28 @@ def levels_vs_price(closes, anchors: list[dict], cur: float) -> list[dict]:
     return out
 
 
+def production_wave(asof: str) -> dict | None:
+    """生产浪型 wave_state（**裁决源**）：它被 gate/选股/交易链消费，段位名以它为准。
+    b_rebound_wave_state 只负责「在这一档里的哪一段」。"""
+    try:
+        import psycopg2
+        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
+        with psycopg2.connect(dsn, connect_timeout=6) as conn:
+            cur = conn.cursor()
+            cur.execute("select session_date,level,sub_level,rung,status,operation "
+                        "from wave_state where session_date<=%s order by session_date desc limit 1", (iso,))
+            r = cur.fetchone()
+        if not r:
+            return None
+        return dict(session_date=str(r[0]), level=r[1], sub_level=r[2], rung=r[3],
+                    status=r[4], operation=r[5],
+                    note="生产浪型=段位裁决源；b_rebound_wave_state 的 level_key 若与 sub_level 不一致，必须写进【反证】")
+    except Exception as e:
+        print(f"[warn] 生产浪型读取失败: {str(e)[:60]}", file=sys.stderr)
+        return None
+
+
 def bottom_for(code: str, day: str) -> dict:
     """任意指数的底部结构（v3 中间态 + MA5/MA10）。含今日盘中 bar。"""
     try:
@@ -568,6 +590,7 @@ def read(day: str, cut: str = CUT) -> dict:
         intraday_volume=dict(index=vol_trend(IDX), chinext=vol_trend("399006.SZ"), etf=vol_trend(ETF)),
         volume_turn=volume_turn,
         wave=wave_block(day),
+        production_wave=production_wave(day),
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
         source_note="盘中量已按截至 %s 的累计量折算（÷%.3f）；历史日用日线" % (cut, PRE_CUT_SHARE) if intraday else "日线口径",
     )
