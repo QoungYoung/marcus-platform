@@ -201,7 +201,8 @@ def wave_block(asof: str) -> dict | None:
         with psycopg2.connect(dsn, connect_timeout=6) as conn:
             ensure_schema(conn)        # 本地/新环境缺这两张表时自愈（2026-10-30 14:50 就是缺表 ✗）
             cur = conn.cursor()
-            cur.execute("select as_of,level,completed,running,next_watch,rejudge_trigger,evidence "
+            cur.execute("select as_of,level,completed,running,next_watch,rejudge_trigger,evidence,"
+                        "coalesce(level_key,'') "
                         "from b_rebound_wave_state where as_of<=%s order by as_of desc limit 1", (asof,))
             w = cur.fetchone()
             cur.execute("select instrument,session_date,price,kind,label,role,coalesce(level,'') "
@@ -227,6 +228,10 @@ def wave_block(asof: str) -> dict | None:
                         anchors_index=idx[-6:], anchors_etf=etf[-4:],
                         key_levels=idx,            # 全量（right_side 判据要用 2024-10-08 的 1浪顶，不能被 -6 截掉）
                         wave1_top=next((a["price"] for a in idx if "1浪顶" in (a.get("label") or "")), None),
+                        naming=dict(level=w[1], level_key=w[7], running=w[3],
+                                    allowed_labels=[a.get("label") for a in idx if a.get("label")],
+                                    rule=("段位名必须照抄 level / level_key；子段只能用 allowed_labels "
+                                          "或价格序列表达；**禁止自造编号（1-3/1-4/1-5 之类）**")),
                         note=("段位/锚点均来自 PG。level=机械判级（之后20日反向≥25% 记大级别，"
                               "≥10% 记小级别）；**判断段位时只用与当前级别相同的锚点**，"
                               "不同级别的锚点并存是正常的，不是冲突"))
@@ -250,10 +255,17 @@ def wave_block(asof: str) -> dict | None:
                  date(int(a8[:4]), int(a8[4:6]), int(a8[6:]))).days
     except Exception:
         pass
+    _fl = [dict(x, level=x.get("level", "")) for x in (j.get("index") or [])
+           if str(x.get("known_from", "")).replace("-", "") <= asof]
     return dict(source="file", as_of=cur_.get("as_of"), stale_days=stale,
                 level=cur_.get("level"), completed=cur_.get("completed"),
                 running=cur_.get("running"), next_watch=cur_.get("next_watch"),
                 rejudge_trigger=cur_.get("rejudge_trigger"),
+                naming=dict(level=cur_.get("level"), level_key=cur_.get("level_key") or "",
+                            running=cur_.get("running"),
+                            allowed_labels=[x.get("label") for x in _fl if x.get("label")],
+                            rule=("段位名必须照抄 level / level_key；子段只能用 allowed_labels "
+                                  "或价格序列表达；**禁止自造编号（1-3/1-4/1-5 之类）**")),
                 anchors_index=[dict(x, level=x.get("level", "")) for x in (j.get("index") or [])
                                if str(x.get("known_from", "")).replace("-", "") <= asof][-6:],
                 key_levels=[dict(x, level=x.get("level", "")) for x in (j.get("index") or [])
