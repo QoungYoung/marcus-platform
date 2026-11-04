@@ -609,6 +609,11 @@ def read(day: str, cut: str = CUT) -> dict:
             import psycopg2
             _dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
             with psycopg2.connect(_dsn, connect_timeout=5) as _c:
+                try:                                   # 新环境先自愈建表（含 b_rebound_wave_intraday）
+                    from b_rebound_schema import ensure_schema as _es
+                except Exception:
+                    from jobs.b_rebound_schema import ensure_schema as _es
+                _es(_c)
                 _cur = _c.cursor()
                 _cur.execute(
                     "insert into b_rebound_wave_intraday(session_date,as_of_time,rung_today,rung_index,"
