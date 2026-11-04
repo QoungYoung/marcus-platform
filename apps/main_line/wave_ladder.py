@@ -109,7 +109,15 @@ ORIGIN_EDGE_BARS = int(_envf("WOLF_WAVE_LADDER_ORIGIN_EDGE", 20))
 #       选前者 ⇒ 1浪顶 3174.27，且 2 浪回撤 99.6%（浪型自身失效）；选后者 ⇒ 1浪顶 3674.40，回撤 59.6% ✓
 #   新：只保留「2 浪已完成且回撤 < 上限」的候选，取**时间最近**的一个；无合格候选才回退旧行为。
 ORIGIN_VALID = os.getenv("WOLF_WAVE_LADDER_ORIGIN_VALID", "0").strip() in ("1", "true", "yes")
-ORIGIN_MAX_RETRACE = _envf("WOLF_WAVE_LADDER_ORIGIN_MAX_RETRACE", 0.80)  # 锚点距窗口边界 ≤N 根 ⇒ 预警（快被顶替）
+ORIGIN_MAX_RETRACE = _envf("WOLF_WAVE_LADDER_ORIGIN_MAX_RETRACE", 0.80)
+# ★ 2026-11-04（用户：一起上）：铁律②的「下穿」加防抖 + 加对称释放
+#   ① 防抖：下穿改成「连续 2 日收盘 < 1浪顶×(1-0.5%)」的**事件**（第 2 天才触发，且只触发一次）
+#      —— 原来单日下穿就翻档，实测 2025-08-14 单日穿越 3674 造成 w45_ok→down1→w45_ok 抖动
+#   ② 释放：连续 ≥3 日收盘 > 1浪顶 ⇒ 撤销降级（他 11-04 14:05「3674 以上 3 天收盘＝右侧一买」）
+BREAK_W1_MIN = _envf("WOLF_WAVE_LADDER_BREAK_W1_MIN", 0.005)
+ORIGIN_EDGE_BARS = ORIGIN_EDGE_BARS  # 锚点距窗口边界 ≤N 根 ⇒ 预警（快被顶替）
+RESET_W1_STREAK = int(_envf("WOLF_WAVE_LADDER_RESET_W1_STREAK", 3))
+RESET_W1_ON = os.getenv("WOLF_WAVE_LADDER_RESET_W1", "1").strip() in ("1", "true", "yes")
 LOW60_TRIGGER = os.getenv("WOLF_WAVE_LADDER_LOW60", "0").strip() in ("1", "true", "yes")
 # ↑ 2026-10-15 起**默认关**：60 日新低是早期拍的代理；换教材「铁律②」后它退为参考量，=1 可 A/B 回旧行为 ✓
 
@@ -314,6 +322,17 @@ def _streak_above(hist: Sequence[Tuple[str, float, float, float]], win: int) -> 
 
 
 SYNC_CODES = ("000001.SH", "399001.SZ", "399006.SZ")   # 上证 / 深证成指 / 创业板指 —— 他说的「三大指数」
+
+
+def _streak_above_level(hist: Sequence[Tuple[str, float, float, float]], level: float) -> int:
+    """连续收盘 > 指定点位 的天数（他 11-04 的「3674 以上 3 天收盘」）。"""
+    n = 0
+    for r in reversed(hist):
+        if r[1] > level:
+            n += 1
+        else:
+            break
+    return n
 
 
 def sync3(asof: str, look: int = 3) -> Optional[bool]:
@@ -922,7 +941,11 @@ def features(rows: Sequence[Tuple[str, float, float, float]], asof: str) -> Opti
         # ★ 2026-10-15 修：**首次下穿**才算事件。原来写成「close < 1浪顶」这种**状态** ⇒ 指数一旦
         #   站到 1浪顶之下，档位就被钉死在主跌1浪（实测：2019-05~2020-07 共 285 天，期间指数还在涨；
         #   2022-07~2024-02 共 391 天）—— 与之前修过的「MA60 状态」「20 日内新破」同一类错误 ✗。
-        "break_wave1": bool(w1 and close < w1 and prev_close >= w1),
+        # ★ 2026-11-04 防抖：连续 2 日收在 1浪顶下方（第 2 日幅度 ≥BREAK_W1_MIN），
+        #   且再前一日还在上方 ⇒ 这才是**一次事件**（只触发一次，不会长期为真）。
+        "break_wave1": bool(w1 and len(hist) >= 3
+                            and close < w1 * (1 - BREAK_W1_MIN)
+                            and hist[-2][1] < w1 and hist[-3][1] >= w1),
         "hi60_prev": hi60_prev, "lo60_prev": lo60_prev, "hi20": hi20, "lo20": lo20,
         "ma60": round(sum(r[1] for r in hist[-61:-1]) / 60, 2) if len(hist) >= 61 else 0.0,
         "below_ma60": bool(len(hist) >= 61 and close < sum(r[1] for r in hist[-61:-1]) / 60),
@@ -1066,6 +1089,17 @@ def evaluate(rows: Sequence[Tuple[str, float, float, float]], asof: str,
     elif prev is not None and int(prev) > raw:
         if f["new_high60"]:
             reset, why = True, "创60日新高 ⇒ 重定浪型"
+        elif RESET_W1_ON and f.get("wave1_top") and f.get("anchor_source") == "valid_recent" and \
+                _streak_above_level([r for r in rows if r[0] <= str(asof)[:8]],
+                                    f["wave1_top"]) == RESET_W1_STREAK:
+            # ★ 只认可信的 1浪顶：anchor_source 必须是 valid_recent（起点有效性通过）。
+            #   若回退成 auto（如 2024-10-22 时 2024-09 那个起点还没走出 2 浪 ⇒ 未确认），
+            #   wave1_top 会退回 3174.27（错 500 点），此时释放会在错误价位触发 ✗。
+            # ★ 必须是**事件**不是状态：只在「第 3 天」触发一次。
+            #   写成 >=3 会让条件长期为真 ⇒ 每天都 reset ⇒ 单向锁等于被关掉（实测 245/685 天抖动 ✗）。
+            _n = _streak_above_level([r for r in rows if r[0] <= str(asof)[:8]], f["wave1_top"])
+            reset, why = True, ("连续 %d 日收盘站上 1浪顶 %.2f ⇒ 撤销降级（他 11-04 14:05"
+                                "「3674 以上 3 天收盘＝B反 右侧一买」）" % (_n, f["wave1_top"]))
         elif latch_start:
             seg = [r[1] for r in rows if latch_start <= r[0] <= str(asof)[:8]]
             hi, lo = (max(seg), min(seg)) if seg else (0.0, 0.0)
