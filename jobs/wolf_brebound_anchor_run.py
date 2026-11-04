@@ -182,7 +182,24 @@ def write_anchors(ins: str, items: list[dict], eligible: list[dict]) -> int:
     return n
 
 
-def ask_wave_state(df: pd.DataFrame, anchors: list[dict], prev: dict | None) -> dict | None:
+def production_rung(asof: str) -> str:
+    """生产浪型（裁决源）的 sub_level —— level_key 必须与它一致。"""
+    try:
+        import psycopg2
+        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
+        with psycopg2.connect(dsn, connect_timeout=6) as conn:
+            cur = conn.cursor()
+            cur.execute("select sub_level, rung from wave_state where session_date<=%s "
+                        "order by session_date desc limit 1", (iso,))
+            r = cur.fetchone()
+        return str(r[0]) if r and r[0] else ""
+    except Exception:
+        return ""
+
+
+def ask_wave_state(df: pd.DataFrame, anchors: list[dict], prev: dict | None,
+                   prod_rung: str = "") -> dict | None:
     """让 agent 维护「段位」五项。约束：completed 必须包含最后一个已确认锚点。"""
     anc = "\n".join(f"  {a['date']} {a['price']:.3f} {a['kind']} {a['label'] or ''}" for a in anchors[-8:])
     tail = df.tail(20)
@@ -195,6 +212,9 @@ def ask_wave_state(df: pd.DataFrame, anchors: list[dict], prev: dict | None) -> 
         f"已确认锚点（最后 8 个，权威）：\n{anc}\n\n"
         f"最近 20 根日线：\n{rows}\n\n"
         f"上一版段位：{pv}\n\n"
+        f"生产浪型（裁决源，被 gate/交易链消费）的档位：**{prod_rung or '（未知）'}**\n"
+        f"  ⇒ level_key 必须等于它；若你认为该改，只在 evidence 里说明，\n"
+        f"    并把 level_key 仍写成它（观察链无权改段位名）。\n\n"
         "他的改判规则（原话）：\n"
         "  · 「收盘后如果没有收回跳空跌幅，整波浪型从 X 转为主跌1浪」\n"
         "  · 「延伸浪的终结一定是一个明确的结构」\n"
@@ -329,7 +349,7 @@ def main() -> None:
         asof = str(df.loc[df.index[-1], "trade_date"])
         prev = load_wave_state(asof)
         print(f"\n=== 段位（{asof}）上一版：{(prev or {}).get('level') or '无'}")
-        obj = ask_wave_state(df, anchors, prev)
+        obj = ask_wave_state(df, anchors, prev, production_rung(asof))
         if obj:
             print("    agent：" + json.dumps(obj, ensure_ascii=False)[:400])
             if a.apply:
