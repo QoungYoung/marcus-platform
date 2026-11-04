@@ -55,12 +55,23 @@ def detect(h, l, c, o, v, j, w=5, tol=0.04, min_gap=3, lookback=60):
     broke = c[j] > neck * 1.005 and v[j] > 1.2 * np.mean(v[max(0, j - 19):j + 1])
     pos = (c[j] - l[j]) / max(1e-9, h[j] - l[j])
 
+    # ★ 2026-11-04 修（用户：为什么还是"待确认"）：**结构成立 ≠ 颈线突破**。
+    #   他的原话：「昨天就是右脚，今天才是**三根K线出结构**」
+    #   ⇒ 右脚之后出现底分型（中间那根高低点都最低）就是「结构成立」；
+    #     颈线突破是他之后才谈的确认，不该卡住"成立"这一步。
+    _dk = (l_right >= 1 and l_right + 1 <= j
+           and l[l_right] <= l[l_right - 1] and l[l_right] <= l[l_right + 1]
+           and h[l_right] <= h[l_right - 1] and h[l_right] <= h[l_right + 1])
     if broke:
         st = f"颈线突破（颈线 {neck:.2f}，今日收 {c[j]:.2f}）"
+    elif _dk:
+        st = (f"双脚成立·三根K线出结构（左 {l[l_left]:.2f} / 右 {l[l_right]:.2f}；"
+              f"颈线 {neck:.2f} 待突破，还差 {abs(dist):.1f}%）")
     elif days_right <= 1 and pos >= 0.6:
         st = f"右脚候选（{days_right} 日前探 {l[l_right]:.2f} 后收回，收位 {pos*100:.0f}%）"
     else:
-        st = f"双脚成立待确认（左 {l[l_left]:.2f} / 右 {l[l_right]:.2f}，颈线 {neck:.2f}，还差 {abs(dist):.1f}%）"
+        st = (f"双脚已现·等底分型（左 {l[l_left]:.2f} / 右 {l[l_right]:.2f}；"
+              f"需右脚步之后再收出一根，且该根高低点都不高于它）")
     return dict(state=st, l_left=round(float(l[l_left]), 2), l_right=round(float(l[l_right]), 2),
                 neck=round(neck, 2), dist_neck=round(dist, 2), days_since_right=days_right,
                 right_pos=round(pos * 100), **base)
