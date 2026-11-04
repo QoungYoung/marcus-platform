@@ -463,6 +463,62 @@ def wave_intraday(day: str) -> dict | None:
         return None
 
 
+def push_intraday_wave(day: str, wi: dict | None) -> dict | None:
+    """盘中浪型**写生产**（用户 2026-11-04：生产只观察去掉，要即时反应）。
+
+    只在真的出现反转信号（differs / reset）时写，避免每天刷；写完由收盘的
+    wave_ladder_chain 用同一套规则覆盖成 confirmed。
+    写 PG（wave_store 默认 PG 优先 ⇒ 生产立刻生效）+ 同步 data/wave_state.json。
+    """
+    if not wi or not (wi.get("differs") or wi.get("reset")):
+        return None
+    if os.getenv("WOLF_WAVE_INTRADAY_WRITE", "1").strip() not in ("1", "true", "yes"):
+        return None
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "apps", "main_line"))
+        import wave_ladder as WL
+        d = fetch_daily(IDX, day, api="index_daily")
+        q = tx_today(IDX, day)
+        cols = ["open", "high", "low", "close", "vol"]
+        if q:
+            row = dict(trade_date=day, open=q["open"], high=q["high"], low=q["low"],
+                       close=q["close"], vol=q["vol"])
+            if d.trade_date.iloc[-1] == day:
+                for c in cols:
+                    d.loc[d.index[-1], c] = row[c]
+            else:
+                d = pd.concat([d, pd.DataFrame([row])], ignore_index=True)
+        rows = [(r.trade_date, float(r.close), float(r.high), float(r.low)) for r in d.itertuples()]
+        ev = WL.evaluate(rows, day, prev=wi.get("prev_rung"))
+        ws = WL.to_wave_state(ev, day) if ev else None
+        if not ws:
+            return None
+        iso = f"{day[:4]}-{day[4:6]}-{day[6:]}"
+        ws["session_date"] = iso
+        ws["status"] = "provisional"          # 收盘后由 chain 覆盖成 confirmed
+        ws["intraday"] = True
+        ws["as_of_time"] = wi.get("as_of_time")
+        ws["source"] = "b_rebound_intraday"
+        try:
+            sys.path.insert(0, os.path.join(ROOT, "apps", "main_line"))
+            from wave_pg import upsert as _pg_upsert
+            _pg_upsert(ws)
+        except Exception as e:
+            print(f"[warn] 盘中浪型写 PG 失败: {str(e)[:60]}", file=sys.stderr)
+        try:
+            _p = os.path.join(ROOT, "data", "wave_state.json")
+            if os.path.isdir(os.path.dirname(_p)):
+                json.dump(ws, open(_p + ".tmp", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+                os.replace(_p + ".tmp", _p)
+        except Exception as e:
+            print(f"[warn] 盘中浪型写文件失败: {str(e)[:60]}", file=sys.stderr)
+        return dict(written=True, rung=ws.get("sub_level"), status="provisional",
+                    as_of_time=wi.get("as_of_time"), reason=(wi.get("reason") or "")[:120])
+    except Exception as e:
+        print(f"[warn] 盘中浪型反哺失败: {type(e).__name__} {str(e)[:70]}", file=sys.stderr)
+        return None
+
+
 def production_wave(asof: str) -> dict | None:
     """生产浪型 wave_state（**裁决源**）：它被 gate/选股/交易链消费，段位名以它为准。
     b_rebound_wave_state 只负责「在这一档里的哪一段」。"""
@@ -661,7 +717,7 @@ def read(day: str, cut: str = CUT) -> dict:
         volume_turn=volume_turn,
         wave=wave_block(day),
         production_wave=production_wave(day),
-        wave_intraday=_wi,
+        wave_intraday=dict(**_wi, pushed=push_intraday_wave(day, _wi)) if _wi else None,
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
         source_note="盘中量已按截至 %s 的累计量折算（÷%.3f）；历史日用日线" % (cut, PRE_CUT_SHARE) if intraday else "日线口径",
     )
