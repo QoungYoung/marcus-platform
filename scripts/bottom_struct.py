@@ -3,7 +3,7 @@
 
 状态机（按时间推进）：
   无结构 → 左脚已现 → 右脚候选 → 双脚成立(待确认) → 颈线突破
-判据全是账本原话：双脚价差 ≤4%、间隔 ≥3 根、颈线=两脚之间最高点、
+判据全是账本原话：**双脚价差 ≤2%**、间隔 ≥1 根、颈线=两脚之间最高点、
 突破要放量；并附 MA5/MA10 与「站上没站上」（他 11/04 13:44 三条件之一）。
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ def pivots_low(l, w=5):
     return [i for i in range(w, len(l) - w) if l[i] == min(l[i - w:i + w + 1])]
 
 
-def detect(h, l, c, o, v, j, w=5, tol=0.04, min_gap=3, lookback=60):
+def detect(h, l, c, o, v, j, w=5, tol=0.02, min_gap=3, lookback=60):
     """返回 dict：state / l_left / l_right / neck / dist_neck / days_since_right /
     ma5 / ma10 / above_ma5 / above_ma10"""
     ma5 = float(np.mean(c[max(0, j - 4):j + 1]))
@@ -59,6 +59,16 @@ def detect(h, l, c, o, v, j, w=5, tol=0.04, min_gap=3, lookback=60):
     #   他的原话：「昨天就是右脚，今天才是**三根K线出结构**」
     #   ⇒ 右脚之后出现底分型（中间那根高低点都最低）就是「结构成立」；
     #     颈线突破是他之后才谈的确认，不该卡住"成立"这一步。
+    # ★ 2026-11-04 修（用户：10-30 也出双脚了？）：
+    #   10-30 低 3595.26 只是**当天的新低**（收位 5.8%，几乎收最低），
+    #   却被当成"右脚"和 10-23 的 3574.27 配成双底 ⇒ 误报（其后 11-02/11-03 继续新低 ✗）。
+    #   规则：**当天才出的低点，只有收回上半区（收位 ≥60%）才配叫"右脚候选"**；
+    #   收在下方的是"又下一个新低"，右脚根本没成立，不能配对。
+    _fresh = (l_right == j)
+    if _fresh and pos < 0.6:
+        return dict(state=(f"左脚已现·今日又探低收低（低 {l[l_right]:.2f}，收位 {pos*100:.0f}%）"
+                           f"⇒ 不是右脚，等真正收回的脚"),
+                    l_left=round(float(l[l_right]), 2), l_right=None, **base)
     _dk = (l_right >= 1 and l_right + 1 <= j
            and l[l_right] <= l[l_right - 1] and l[l_right] <= l[l_right + 1]
            and h[l_right] <= h[l_right - 1] and h[l_right] <= h[l_right + 1])
