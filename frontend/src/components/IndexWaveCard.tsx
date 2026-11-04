@@ -96,6 +96,10 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
   const [apiLast, setApiLast] = useState<Wave | null>(null);
   const [waveVer, setWaveVer] = useState('');
   const [note, setNote] = useState('');
+  // ★ 2026-11-04：上证 / 创业板 切换。创业板的 K线+底部结构是他真在看的（8-03 就在看创业板），
+  //   但浪型色带是**机械套用**（他的浪型口径以上证为准）⇒ 切过去时要显式标注。
+  const [code, setCode] = useState('000001.SH');
+  const isMain = code === '000001.SH';
   const [today, setToday] = useState<TodaySummary | null>(null);
   const [bottom, setBottom] = useState<BottomStruct | null>(null);
   const [structNote, setStructNote] = useState('');
@@ -105,7 +109,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    waveApi.getIndexHistory(days)
+    waveApi.getIndexHistory(days, code)
       .then((r) => {
         if (!alive) return;
         const d = r.data || {};
@@ -124,7 +128,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
       .catch((e) => { if (alive) setErr(String((e && e.message) || e)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [days]);
+  }, [days, code]);
 
   // `last` = 最新判定（后端 `last`）；取不到才退回窗口内最后一条 ✓
   const last = useMemo(
@@ -360,8 +364,19 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
   return (
     <div className="cp-threat-card" style={{ padding: '10px 12px' }}>
       <div className="cp-threat-head">
-        <span className="cp-threat-label">上证指数 · 浪型链</span>
-        <span className="cp-threat-en">SSE INDEX · WAVE LADDER</span>
+        <span className="cp-threat-label">{isMain ? '上证指数' : '创业板指'} · 浪型链</span>
+        <span className="cp-threat-en">{isMain ? 'SSE INDEX' : 'CHINEXT'} · WAVE LADDER</span>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+          {([['000001.SH', '上证'], ['399006.SZ', '创业板']] as const).map(([c, label]) => (
+            <button key={c} onClick={() => setCode(c)}
+                    style={{
+                      fontSize: 10, padding: '1px 6px', borderRadius: 3,
+                      border: '1px solid ' + (code === c ? LINE : GRID),
+                      background: code === c ? '#eaf3fb' : 'transparent',
+                      color: code === c ? INK : MUTED, cursor: 'pointer',
+                    }}>{label}</button>
+          ))}
+        </span>
         {last && <span className="cp-threat-dot safe" />}
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', margin: '2px 0 6px' }}>
@@ -394,6 +409,13 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
             <span style={{ color: lastColor, fontWeight: 700, fontSize: 12 }}>
               {OP_CN[last.operation] || last.operation || '-'}
             </span>
+            {!isMain && (
+              <span title="他的浪型口径以上证为准；这里只是把同一套算法套到该指数上"
+                    style={{ fontSize: 10, color: '#c98a12', border: '1px dashed #e3c98a',
+                             borderRadius: 3, padding: '0 4px' }}>
+                浪型为机械套用
+              </span>
+            )}
             {last.mode && <span style={{ color: '#c98a12', fontWeight: 700 }}>模式 {last.mode}</span>}
             {last.invest != null && <span style={{ color: MUTED, fontSize: 11 }}>投入系数 {Number(last.invest).toFixed(2)}</span>}
           </>
