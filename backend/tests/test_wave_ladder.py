@@ -247,6 +247,8 @@ def test_to_wave_state_level_mapping():
 
 def test_write_wave_state_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(W, "DATA", str(tmp_path))
+    # ★ 2026-11-04：默认**停写文件**（PG 是唯一真源）。这条测的是导出路径 ⇒ 显式打开
+    monkeypatch.setattr(W, "FILE_EXPORT", True)
     rows = mk(CHOP)
     p = W.write_wave_state(rows=rows, dated=True)
     assert p and os.path.exists(p)
@@ -432,8 +434,8 @@ def test_write_wave_state_without_ev_uses_latched_walk(monkeypatch, tmp_path):
     ⇒ 实测直接把生产档从 defense 写成 t_only ✗）。假数据：破位后小幅反弹（<5%）⇒ 锁必须保持 ✓"""
     import datetime as dt
     import json
-
     import wave_ladder as W
+    monkeypatch.setattr(W, "FILE_EXPORT", True)      # 2026-11-04：默认停写文件，导出需显式开
 
     d = dt.date(2026, 1, 5)
 

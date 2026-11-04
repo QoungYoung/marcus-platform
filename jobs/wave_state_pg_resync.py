@@ -70,7 +70,20 @@ def _fp(ws):
     return tuple(out)
 
 
+def _guard() -> None:
+    """★ 2026-11-04（用户：停写文件 / 统一 PG）：本脚本方向是**文件 → PG**。
+
+    文件停写后它是一个**危险脚本**：会拿过期的 wave_state*.json 把 PG 改回去。
+    故默认拒绝运行；确实要修数据时显式开 WOLF_WAVE_FILE_EXPORT=1。
+    """
+    import os, sys
+    if os.getenv("WOLF_WAVE_FILE_EXPORT", "0").strip() not in ("1", "true", "yes"):
+        print("[resync] 已停用：PG 是唯一真源，文件不再是权威（确需运行请设 WOLF_WAVE_FILE_EXPORT=1）")
+        sys.exit(0)
+
+
 def main():
+    _guard()
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="真写库（默认 dry-run ✓）")
     ap.add_argument("--sample", type=int, default=5, help="打印几条差异明细（默认 5 ✓）")

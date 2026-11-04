@@ -120,6 +120,10 @@ BREAK_W1_MIN = _envf("WOLF_WAVE_LADDER_BREAK_W1_MIN", 0.005)
 ORIGIN_EDGE_BARS = ORIGIN_EDGE_BARS  # 锚点距窗口边界 ≤N 根 ⇒ 预警（快被顶替）
 RESET_W1_STREAK = int(_envf("WOLF_WAVE_LADDER_RESET_W1_STREAK", 3))
 RESET_W1_ON = os.getenv("WOLF_WAVE_LADDER_RESET_W1", "1").strip() in ("1", "true", "yes")
+# ★ 2026-11-04（用户：停写）：data/wave_state*.json 只在需要导出时才写。
+#   PG 是唯一真源；停写文件后回测走 wave_store.get_wave_asof（读 PG）。
+#   要临时导出：WOLF_WAVE_FILE_EXPORT=1
+FILE_EXPORT = os.getenv("WOLF_WAVE_FILE_EXPORT", "0").strip() in ("1", "true", "yes")
 LOW60_TRIGGER = os.getenv("WOLF_WAVE_LADDER_LOW60", "0").strip() in ("1", "true", "yes")
 # ↑ 2026-10-15 起**默认关**：60 日新低是早期拍的代理；换教材「铁律②」后它退为参考量，=1 可 A/B 回旧行为 ✓
 
@@ -1434,6 +1438,19 @@ def write_wave_state(asof: Optional[str] = None, dated: bool = False,
     #   实时写入（08:10）⇒ 就是**运行当天**（最准确 ✓）；回填/历史 ⇒ 取数据日的下一个工作日（近似 ✓）。
     ws["session_date"] = session_date or next_session_date(ws["as_of"])
     d = ws["as_of"]
+    # ★ 2026-11-04：**停写文件**（默认）。PG 已是唯一真源；
+    #   文件只在 WOLF_WAVE_FILE_EXPORT=1 时导出（回测/审计临时需要）。
+    #   顺序也变了：先写 PG，再（可选）导出文件 —— 让 PG 成为主路径而不是副产物。
+    _pg_ok = False
+    try:
+        from wave_pg import upsert as _pg_upsert
+        _pg_ok = bool(_pg_upsert(ws))
+        if not _pg_ok:
+            print("[wave_ladder] 写库未成功", flush=True)
+    except Exception as _e_pg:
+        print("[wave_ladder] 写库异常: %s" % str(_e_pg)[:120], flush=True)
+    if not FILE_EXPORT:
+        return "pg:wave_state" if _pg_ok else None
     try:
         os.makedirs(DATA, exist_ok=True)
         p = os.path.join(DATA, "wave_state.json")
