@@ -289,7 +289,11 @@ def _waves(code: str) -> List[Dict[str, Any]]:
                         "legs_stale": bool((ws.get("features") or {}).get("legs_stale")),
                         "leg_cycle": ws.get("leg_cycle") or "",
                         "generator_version": ws.get("generator_version") or "",
-                        "main_up": ev.get("main_up") or "", "reasons": ev.get("reasons") or ""})
+                        "main_up": ev.get("main_up") or "", "reasons": ev.get("reasons") or "",
+                        # ★ 2026-11-04（对齐今天）：1浪顶 = 他的右侧一买判据（连续3天收盘站上），
+                        #   原来只在 ev.levels 里，接口没透出 ⇒ 前端只能看到我们算的颈线，看不到他的关键位 ✗
+                        "wave1_top": (ev.get("levels") or {}).get("wave1_top"),
+                        "wave1_top_date": (ev.get("levels") or {}).get("wave1_top_date") or ""})
         _CACHE[ck] = (time.time(), out)
         return out
     except Exception as e:
@@ -312,7 +316,8 @@ def _scripts_dir() -> str:
     return ""
 
 
-def _bottom_and_today(bars: List[Dict[str, Any]], last: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _bottom_and_today(bars: List[Dict[str, Any]], last: Optional[Dict[str, Any]],
+                      waves: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """底部结构（双脚/颈线/MA）+ 今日摘要（价位/量能/关键位距离）。
 
     2026-11-04 加：接口原来只有浪型档位，看不到「底部结构」和「今天到底怎么样」。
@@ -333,6 +338,14 @@ def _bottom_and_today(bars: List[Dict[str, Any]], last: Optional[Dict[str, Any]]
                         vol_ratio20=(round(amt / a20, 2) if a20 else None))
     # 关键位（1浪顶）：来自浪型判定里带的 levels；没有就说没有，不猜
     w1 = ((last or {}).get("features") or {}).get("wave1_top") or ((last or {}).get("levels") or {}).get("wave1_top")
+    if not w1:
+        try:
+            from app.services import wave_store as _ws2          # PG 唯一真源
+            w1 = ((_ws2.get_wave() or {}).get("levels") or {}).get("wave1_top")
+        except Exception:
+            w1 = None
+    if not w1:
+        w1 = (waves[-1].get("wave1_top") if waves else None)
     if w1:
         streak = 0
         for x in reversed(bars):
@@ -340,10 +353,14 @@ def _bottom_and_today(bars: List[Dict[str, Any]], last: Optional[Dict[str, Any]]
                 streak += 1
             else:
                 break
-        out["today"]["key_level"] = dict(name="1浪顶", price=round(float(w1), 2),
-                                         gap_pct=round((float(b["close"]) / float(w1) - 1) * 100, 2),
-                                         above=bool(float(b["close"]) > float(w1)),
-                                         streak_days=streak)
+        out["today"]["key_level"] = dict(
+            name="1浪顶", price=round(float(w1), 2),
+            gap_pct=round((float(b["close"]) / float(w1) - 1) * 100, 2),
+            above=bool(float(b["close"]) > float(w1)),
+            streak_days=streak,
+            need_days=3,
+            ready=bool(streak >= 3),
+            criterion="他 2026-11-04 14:05：连续 3 个交易日收盘站上 1浪顶 ⇒ B反 的右侧一买位置")
     d = _scripts_dir()
     if not d:
         out["note"] = "scripts/ 未找到 ⇒ 底部结构不可用"
@@ -358,7 +375,12 @@ def _bottom_and_today(bars: List[Dict[str, Any]], last: Optional[Dict[str, Any]]
         c = np.array([float(x["close"]) for x in bars])
         o = np.array([float(x.get("open") or x["close"]) for x in bars])
         v = np.array([float(x.get("vol") or 0) for x in bars])
-        out["bottom_structure"] = _detect(h, l, c, o, v, len(bars) - 1)
+        _bs = _detect(h, l, c, o, v, len(bars) - 1)
+        if isinstance(_bs, dict):
+            _bs["neck_criterion"] = ("颈线=两只脚之间的最高点，是**我们算法自己的形态位**；"
+                                     "他的确认标准是 1浪顶 站上 3 天（见 today.key_level），"
+                                     "两者不要混用")
+        out["bottom_structure"] = _bs
     except Exception as e:
         out["note"] = "底部结构计算失败: %s" % str(e)[:80]
     return out
@@ -382,7 +404,17 @@ def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000
     if not waves:
         note = (note + " ｜ " if note else "") + "浪型链不可用（" + (_LAST_ERR["waves"] or "缺指数数据") + "）⇒ 只画 K 线 ✓"
     disp = _display_patterns(code, bars)
-    _extra = _bottom_and_today(bars, last)
+    # ★ 2026-11-04：盘中反哺会写入 status=provisional 的行 ⇒ 接口必须透出，前端才能标「盘中，待收盘确认」
+    if isinstance(last, dict):
+        try:
+            from app.services import wave_store as _ws3
+            _pw = _ws3.get_wave() or {}
+            last = dict(last, status=(_pw.get("status") or ""),
+                        intraday=bool(_pw.get("intraday")),
+                        as_of_time=(_pw.get("as_of_time") or ""))
+        except Exception:
+            pass
+    _extra = _bottom_and_today(bars, last, waves)
     return {"code": code, "asof": today, "bars": bars, "waves": waves, "display_patterns": disp,
             "bottom_structure": _extra.get("bottom_structure"),
             "today": _extra.get("today"),
