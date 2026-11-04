@@ -72,6 +72,13 @@ def detect(h, l, c, o, v, j, w=5, tol=0.02, min_gap=3, lookback=60):
     _dk = (l_right >= 1 and l_right + 1 <= j
            and l[l_right] <= l[l_right - 1] and l[l_right] <= l[l_right + 1]
            and h[l_right] <= h[l_right - 1] and h[l_right] <= h[l_right + 1])
+    # ── 量能特征（他 2025-03-19「上穿带量突破 → 缩量回踩均线 → 继续带量上涨」）──
+    #   记录两脚与突破日的量比，用来描述"抛压有没有衰减"，**不硬判**（他没给量化门槛）
+    _v20 = float(np.mean(v[max(0, j - 19):j + 1])) or 1.0
+    vol_left = round(float(v[l_left]) / _v20, 2)
+    vol_right = round(float(v[l_right]) / _v20, 2)
+    vol_today = round(float(v[j]) / _v20, 2)
+
     if broke:
         st = f"颈线突破（颈线 {neck:.2f}，今日收 {c[j]:.2f}）"
     elif _dk:
@@ -82,9 +89,24 @@ def detect(h, l, c, o, v, j, w=5, tol=0.02, min_gap=3, lookback=60):
     else:
         st = (f"双脚已现·等底分型（左 {l[l_left]:.2f} / 右 {l[l_right]:.2f}；"
               f"需右脚步之后再收出一根，且该根高低点都不高于它）")
+    # ★ 他 2025-03-19「上穿带量突破均线 → **缩量回踩均线** → 继续带量上涨」：
+    #   放量突破颈线之后，若今日缩量且仍站在颈线上方 ⇒ 这是"回踩确认"这一步（比"待突破"更靠后）
+    _break_idx = None
+    for k in range(l_right + 1, j + 1):
+        if c[k] > neck * 1.005 and v[k] > 1.2 * float(np.mean(v[max(0, k - 19):k + 1])):
+            _break_idx = k
+            break
+    if _break_idx is not None and c[j] > neck and \
+            v[j] < 0.8 * float(np.mean(v[max(0, j - 19):j + 1]) or 1.0):
+        st = (f"放量突破后缩量回踩（{j - _break_idx} 日前放量过颈线 {neck:.2f}，"
+              f"今日缩量 {round(float(v[j]) / (float(np.mean(v[max(0, j - 19):j + 1])) or 1.0), 2)}× 仍在其上）")
     return dict(state=st, l_left=round(float(l[l_left]), 2), l_right=round(float(l[l_right]), 2),
                 neck=round(neck, 2), dist_neck=round(dist, 2), days_since_right=days_right,
-                right_pos=round(pos * 100), **base)
+                right_pos=round(pos * 100),
+                vol_left=vol_left, vol_right=vol_right, vol_today=vol_today,
+                vol_right_vs_left=(round(vol_right / vol_left, 2) if vol_left else None),
+                vol_note="两脚与今日的量比（各自 ÷ 20 日均量）；他 2025-03-19「带量突破 → 缩量回踩 → 带量上涨」",
+                **base)
 
 
 # ── 兼容旧接口 ──

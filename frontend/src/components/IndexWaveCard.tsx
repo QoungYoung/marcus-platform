@@ -41,6 +41,9 @@ interface BottomStruct {
   days_since_right?: number; right_pos?: number;
   ma5?: number; ma10?: number; above_ma5?: boolean; above_ma10?: boolean;
   neck_criterion?: string;
+  // ★ 2026-11-04：量能特征（他 2025-03-19「带量突破 → 缩量回踩 → 带量上涨」）
+  vol_left?: number; vol_right?: number; vol_today?: number; vol_right_vs_left?: number;
+  vol_note?: string;
 }
 // level 的内部枚举 → 人话（原来直接把 `down` 打在卡片上 ✗）
 const LEVEL_CN: Record<string, string> = {
@@ -444,6 +447,14 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
           )}
           {bottom.neck != null && (
             <span title={bottom.neck_criterion || ''}>颈线 {bottom.neck.toFixed(2)}（辅助）</span>
+          )}
+          {bottom.vol_left != null && (
+            <span title={bottom.vol_note || ''} style={{ color: MUTED }}>
+              量 左脚{bottom.vol_left}× / 右脚{bottom.vol_right}× / 今{bottom.vol_today}×
+              {bottom.vol_right_vs_left != null
+                ? `（右/左 ${bottom.vol_right_vs_left}${bottom.vol_right_vs_left < 1 ? ' 缩' : ' 放'}）`
+                : ''}
+            </span>
           )}
           {structNote && <span style={{ color: '#d64545' }}>{structNote}</span>}
         </div>
