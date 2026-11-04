@@ -189,7 +189,9 @@ def main() -> int:
         st_json = json.load(open(STATE, encoding="utf-8")) or {}
     except Exception:
         st_json = {}
-    key = f"{day}:{round(float(neck), 2)}"
+    # ★ 去重 key 用**整数点位**：颈线由数据实时算，盘中可能因新高低点微调
+    #   （3708.20 → 3708.19），用两位小数会变成新 key ⇒ 同一根颈线重复推 ✗
+    key = f"{day}:{int(round(float(neck)))}"
     rec = st_json.get(key) or {"stage": "NONE", "pushes": 0}
     if not isinstance(rec, dict):                      # 兼容旧格式（string 时间戳）
         rec = {"stage": "BREAK", "pushes": 1, "first_break": str(rec)}
