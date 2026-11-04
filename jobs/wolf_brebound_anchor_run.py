@@ -203,7 +203,10 @@ def ask_wave_state(df: pd.DataFrame, anchors: list[dict], prev: dict | None) -> 
         "1. **completed 里必须包含最后一个已确认锚点**（日期+价格），否则视为无效。\n"
         "2. running 写「现在在走哪一段」，要能由最后一个锚点推出来。\n"
         "3. 只有出现明确依据才改 level，否则沿用上一版。\n"
-        "4. 输出**只一个 JSON 对象**，不要解释：\n"
+        "4. **命名规则（硬）**：level_key 只能从枚举里选；level / running 里**不许自造编号**\n"
+        "   （1-3 / 1-4 / 1-5、「下跌1浪的第3腿」这类）——库里没有这套编号。\n"
+        "   要表达推进关系就用锚点 label + 价格序列，例如「4-4顶 3995.18 → 3574.27 → 3708.20」。\n"
+        "5. 输出**只一个 JSON 对象**，不要解释：\n"
         '{"level_key":"稳定短标签，从这些里选一个 4-2反弹|4-3下跌|4-4反弹|4-5下跌|下跌1浪|B反中|看不清",'
         '"level":"","completed":"","running":"","next_watch":"","rejudge_trigger":"","evidence":"一句话，引用数字"}'
     )
