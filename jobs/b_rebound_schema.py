@@ -48,6 +48,20 @@ DDL = (
     "alter table b_rebound_anchors add column if not exists level text",
     "create index if not exists idx_bra_asof "
     "on b_rebound_anchors(instrument, status, confirmed_at)",
+    # 盘中浪型反哺（观察级）：**不写生产 wave_state** —— wave_store 默认 PG 优先，
+    # 写进去会直接进 p2_entry_gate / t_monitor / wolf_pick 的交易门禁 ✗
+    """create table if not exists b_rebound_wave_intraday (
+  id          bigserial primary key,
+  session_date varchar(8) not null unique,
+  as_of_time   varchar(8),
+  rung_today   varchar(16),
+  rung_index   int,
+  prev_rung    int,
+  reset        boolean default false,
+  reason       text,
+  differs      boolean default false,
+  created_at   timestamptz default now()
+)""",
 )
 
 

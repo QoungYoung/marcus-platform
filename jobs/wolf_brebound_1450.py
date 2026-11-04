@@ -419,6 +419,50 @@ def levels_vs_price(closes, anchors: list[dict], cur: float) -> list[dict]:
     return out
 
 
+def wave_intraday(day: str) -> dict | None:
+    """盘中浪型反哺（**观察级**）：用 wave_ladder 的规则 + 今日盘中 bar 算一次。
+    结果只写 b_rebound_wave_intraday 并进推送，**绝不写 wave_state**
+    —— wave_store 默认 PG 优先，写进生产表会直接进交易门禁 ✗"""
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "apps", "main_line"))
+        import wave_ladder as WL
+        d = fetch_daily(IDX, day, api="index_daily")
+        q = tx_today(IDX, day)
+        cols = ["open", "high", "low", "close", "vol"]
+        if q:
+            row = dict(trade_date=day, open=q["open"], high=q["high"], low=q["low"],
+                       close=q["close"], vol=q["vol"])
+            if d.trade_date.iloc[-1] == day:
+                for c in cols:
+                    d.loc[d.index[-1], c] = row[c]
+            else:
+                d = pd.concat([d, pd.DataFrame([row])], ignore_index=True)
+        rows = [(r.trade_date, float(r.close), float(r.high), float(r.low)) for r in d.itertuples()]
+        iso = f"{day[:4]}-{day[4:6]}-{day[6:]}"
+        prev = None
+        try:
+            import psycopg2
+            dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+            with psycopg2.connect(dsn, connect_timeout=5) as conn:
+                cur = conn.cursor()
+                cur.execute("select rung from wave_state where session_date < %s "
+                            "order by session_date desc limit 1", (iso,))
+                r = cur.fetchone()
+            prev = int(r[0]) if r and r[0] is not None else None
+        except Exception:
+            prev = None
+        ev = WL.evaluate(rows, day, prev=prev)
+        if not ev:
+            return None
+        return dict(rung_today=ev.get("key"), rung_index=ev.get("rung_index"),
+                    prev_rung=prev, reset=bool(ev.get("reset")),
+                    reason=(ev.get("reset_reason") or "")[:160] or (ev.get("reasons") or "")[:160],
+                    differs=(prev is not None and ev.get("rung_index") != prev))
+    except Exception as e:
+        print(f"[warn] 盘中浪型失败: {type(e).__name__} {str(e)[:70]}", file=sys.stderr)
+        return None
+
+
 def production_wave(asof: str) -> dict | None:
     """生产浪型 wave_state（**裁决源**）：它被 gate/选股/交易链消费，段位名以它为准。
     b_rebound_wave_state 只负责「在这一档里的哪一段」。"""
@@ -558,6 +602,27 @@ def read(day: str, cut: str = CUT) -> dict:
         warn = "盘中实时数据未取到 ⇒ 本次用的是上一交易日日线，读数不代表今日"
     elif intraday and not cut_ok:
         warn = f"快照时间 {qt[8:12] if len(qt)>12 else '?'}，非 14:50 口径：量比未计算，量额为累计值"
+    _wi = wave_intraday(day)
+    if _wi:
+        _wi["as_of_time"] = (cb or {}).get("quote_time", "")[8:12] if intraday else "close"
+        try:
+            import psycopg2
+            _dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+            with psycopg2.connect(_dsn, connect_timeout=5) as _c:
+                _cur = _c.cursor()
+                _cur.execute(
+                    "insert into b_rebound_wave_intraday(session_date,as_of_time,rung_today,rung_index,"
+                    "prev_rung,reset,reason,differs) values (%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "on conflict (session_date) do update set as_of_time=excluded.as_of_time, "
+                    "rung_today=excluded.rung_today, rung_index=excluded.rung_index, "
+                    "prev_rung=excluded.prev_rung, reset=excluded.reset, reason=excluded.reason, "
+                    "differs=excluded.differs, created_at=now()",
+                    (day, _wi["as_of_time"], _wi.get("rung_today"), _wi.get("rung_index"),
+                     _wi.get("prev_rung"), bool(_wi.get("reset")), _wi.get("reason"),
+                     bool(_wi.get("differs"))))
+                _c.commit()
+        except Exception as _e:
+            print(f"[warn] 写 b_rebound_wave_intraday 失败: {str(_e)[:60]}", file=sys.stderr)
     wv = wave_block(day) or {}
     _levels = levels_vs_price(idx_d.close.values, wv.get("key_levels") or wv.get("anchors_index") or [],
                               float(idx_d.close.iloc[-1]))
@@ -591,6 +656,7 @@ def read(day: str, cut: str = CUT) -> dict:
         volume_turn=volume_turn,
         wave=wave_block(day),
         production_wave=production_wave(day),
+        wave_intraday=_wi,
         space=dict(above=up, below=dn, dist_above_pct=round((up[0] / c[j] - 1) * 100, 1) if up else None),
         source_note="盘中量已按截至 %s 的累计量折算（÷%.3f）；历史日用日线" % (cut, PRE_CUT_SHARE) if intraday else "日线口径",
     )
