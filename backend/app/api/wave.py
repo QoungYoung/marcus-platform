@@ -332,7 +332,7 @@ def _b_rebound_daily() -> Optional[Dict[str, Any]]:
             cur = conn.cursor()
             cur.execute("select session_date,bottom_state,cond_feet,cond_volume,cond_ma5,cond_count,"
                         "intraday_turn,volume_phase,ma5,verdict,position_pct,position_reason,"
-                        "position_used,position_delta,episode_days "
+                        "position_used,position_delta,episode_days,position_source "
                         "from b_rebound_daily order by session_date desc limit 1")
             r = cur.fetchone()
         if not r:
@@ -345,6 +345,7 @@ def _b_rebound_daily() -> Optional[Dict[str, Any]]:
                     position_used=(float(r[12]) if r[12] is not None else None),
                     position_delta=(float(r[13]) if r[13] is not None else None),
                     episode_days=(int(r[14]) if r[14] is not None else None),
+                    position_source=r[15] or "",
                     criterion="他 2026-11-04 13:44：「双脚位置 + 缩转放 + 站上5日线 ⇒ 仓位推上去」")
     except Exception:
         return None

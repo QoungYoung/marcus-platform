@@ -71,6 +71,7 @@ DDL = (
     "alter table b_rebound_daily add column if not exists position_used numeric",
     "alter table b_rebound_daily add column if not exists position_delta numeric",
     "alter table b_rebound_daily add column if not exists episode_days int",
+    "alter table b_rebound_daily add column if not exists position_source varchar(24)",
     """create table if not exists b_rebound_wave_intraday (
   id          bigserial primary key,
   session_date varchar(8) not null unique,

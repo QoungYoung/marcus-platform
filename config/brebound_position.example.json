@@ -1,0 +1,6 @@
+{
+  "_说明": "「已用仓位」手动覆盖模板。系统默认读 stock 账户账本（paper_positions）；只有账本里没有你真想跟踪的仓位时，才把它复制到 data/brebound_position.json 并填 pct。",
+  "pct": 30,
+  "as_of": "20261104",
+  "note": "半导体 30%"
+}

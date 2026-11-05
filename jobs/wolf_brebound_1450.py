@@ -534,6 +534,72 @@ def production_wave(asof: str) -> dict | None:
         return None
 
 
+def position_used_actual() -> dict:
+    """「已用仓位」的真实来源，优先级：手动文件 > 模拟盘账本 > 推断（前一日目标档）。
+
+    · 手动：`data/brebound_position.json` = {"pct": 35, "as_of": "20261104", "note": "..."}
+      —— 系统不接交易，真实账户仓位只能人填；填了就以它为准。
+    · 账本：`paper_positions` 有持仓时，按最新收盘算市值 ÷ 总资产。
+    · 都没有 ⇒ 返回 None，上层退回"前一日目标档"推断。
+    """
+    import json as _json
+    # ① 手动文件
+    try:
+        p = os.path.join(ROOT, "data", "brebound_position.json")
+        if os.path.isfile(p):
+            j = _json.load(open(p, encoding="utf-8")) or {}
+            if j.get("pct") is not None:
+                return dict(pct=float(j["pct"]), source="manual",
+                            note=f"手动填报（{j.get('as_of') or '-'}）{j.get('note') or ''}".strip())
+    except Exception:
+        pass
+    # ② 模拟盘账本 —— **只读 stock 账户**（用户 2026-11-04：接入 stock 这个账户）
+    #   仓位% = 持仓市值 ÷ (可用现金 + 冻结 + 持仓市值)；市值优先用最新收盘，取不到退成本价
+    try:
+        import psycopg2
+        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        with psycopg2.connect(dsn, connect_timeout=5) as conn:
+            cur = conn.cursor()
+            cur.execute("select available_cash, frozen_cash, initial_capital from paper_account_info "
+                        "where account_id='stock'")
+            ra = cur.fetchone()
+            if not ra:
+                return None
+            cash = float(ra[0] or 0) + float(ra[1] or 0)
+            cur.execute("select symbol, volume, avg_price from paper_positions where account_id='stock'")
+            poss = cur.fetchall()
+        if not poss:
+            tot = cash or float(ra[2] or 0)
+            return dict(pct=0.0, source="ledger",
+                        note=f"stock 账户空仓（可用 {cash:,.0f}）") if tot > 0 else None
+        mv = 0.0
+        px_note = []
+        for sym, vol, avg in poss:
+            px, how = None, "成本价"
+            try:
+                from core.tushare_relay import relay_query
+                ts = sym if "." in str(sym) else (
+                    str(sym)[:6] + (".SH" if str(sym)[:1] in "56" else ".SZ"))
+                d = relay_query("daily", ts_code=ts, start_date="20260101", end_date="20991231")
+                if len(d):
+                    px = float(pd.to_numeric(d.sort_values("trade_date").close, errors="coerce").iloc[-1])
+                    how = "收盘"
+            except Exception:
+                px = None
+            if not px:
+                px = float(avg or 0)
+            mv += float(vol or 0) * float(px or 0)
+            px_note.append(f"{sym} {vol}×{px:.2f}({how})")
+        tot = cash + mv
+        if tot <= 0:
+            return None
+        return dict(pct=round(min(100.0, mv / tot * 100), 1), source="ledger",
+                    note=f"stock 账户：市值 {mv:,.0f} ÷ 总资产 {tot:,.0f}（{'、'.join(px_note)}）")
+    except Exception as e:
+        print(f"[warn] 读账本失败: {str(e)[:60]}", file=sys.stderr)
+    return None
+
+
 def brebound_ladder(cond_count: int, streak: int, neck_broken: bool, broken: bool,
                     feet_formed: bool = False) -> dict:
     """B反 的**分批仓位阶梯**（按条件推进，不是"一次性 1/3"）。
@@ -740,8 +806,11 @@ def read(day: str, cut: str = CUT) -> dict:
                             "where session_date < %s order by session_date desc limit 1", (day,))
                 _pr = _k2.fetchone()
                 _prev_pct = float(_pr[1]) if _pr else 0.0
+                _real = position_used_actual()
+                _used = float(_real["pct"]) if _real else _prev_pct
+                _used_src = (_real or {}).get("source") or "target(推断)"
                 _today_pct = float(_lad["position_pct"])
-                _delta = max(0.0, _today_pct - _prev_pct)
+                _delta = max(0.0, _today_pct - _used)
                 _episode = 1
                 _k2.execute("select session_date, coalesce(position_pct,0) from b_rebound_daily "
                             "where session_date < %s order by session_date desc limit 10", (day,))
@@ -753,8 +822,8 @@ def read(day: str, cut: str = CUT) -> dict:
                 _k2.execute(
                     "insert into b_rebound_daily(session_date,bottom_state,cond_feet,cond_volume,cond_ma5,"
                     "cond_count,intraday_turn,volume_phase,ma5,right_side_streak,right_side_ready,verdict,"
-                    "position_pct,position_reason,position_used,position_delta,episode_days) "
-                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "position_pct,position_reason,position_used,position_delta,episode_days,position_source) "
+                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                     "on conflict (session_date) do update set "
                     "bottom_state=excluded.bottom_state, cond_feet=excluded.cond_feet, "
                     "cond_volume=excluded.cond_volume, cond_ma5=excluded.cond_ma5, "
@@ -768,7 +837,7 @@ def read(day: str, cut: str = CUT) -> dict:
                      (volume_turn or {}).get("phase"), _bs.get("ma5"),
                      None, False,
                      _verdict,
-                     _today_pct, _lad["reason"], _prev_pct, _delta, _episode))
+                     _today_pct, _lad["reason"], _used, _delta, _episode, _used_src))
                 _c2.commit()
     except Exception as _e2:
         print(f"[warn] 写 b_rebound_daily 失败: {str(_e2)[:70]}", file=sys.stderr)
