@@ -66,6 +66,8 @@ DDL = (
   verdict       text,
   created_at    timestamptz default now()
 )""",
+    "alter table b_rebound_daily add column if not exists position_pct numeric",
+    "alter table b_rebound_daily add column if not exists position_reason text",
     """create table if not exists b_rebound_wave_intraday (
   id          bigserial primary key,
   session_date varchar(8) not null unique,

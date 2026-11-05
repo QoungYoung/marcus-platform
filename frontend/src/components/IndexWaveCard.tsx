@@ -448,12 +448,14 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
             </span>
           )}
           {breb && (
-            <span title={breb.criterion || ''}
+            <span title={`${breb.position_reason || ''}\n${breb.criterion || ''}\n阶梯：三条件30% → 连3日站上1浪顶50% → 放量破颈线70%\n跌破双脚低点 ⇒ 清零`}
                   style={{ border: '1px solid ' + (breb.cond_count >= 3 ? UP_COLOR : LINE),
                            borderRadius: 4, padding: '0 5px',
                            color: breb.cond_count >= 3 ? UP_COLOR : MUTED }}>
               B反三条件 {breb.cond_count}/3
-              {breb.cond_count >= 3 ? ' ⇒ 可试探 ≤1/3（反弹仓）' : ''}
+              {breb.position_pct != null
+                ? ` ⇒ 反弹仓上限 ${breb.position_pct}%`
+                : (breb.cond_count >= 3 ? ' ⇒ 可试探' : '')}
             </span>
           )}
           {last?.status === 'provisional' && (

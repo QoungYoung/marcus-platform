@@ -331,8 +331,8 @@ def _b_rebound_daily() -> Optional[Dict[str, Any]]:
         with psycopg2.connect(dsn, connect_timeout=4) as conn:
             cur = conn.cursor()
             cur.execute("select session_date,bottom_state,cond_feet,cond_volume,cond_ma5,cond_count,"
-                        "intraday_turn,volume_phase,ma5,verdict from b_rebound_daily "
-                        "order by session_date desc limit 1")
+                        "intraday_turn,volume_phase,ma5,verdict,position_pct,position_reason "
+                        "from b_rebound_daily order by session_date desc limit 1")
             r = cur.fetchone()
         if not r:
             return None
@@ -340,6 +340,7 @@ def _b_rebound_daily() -> Optional[Dict[str, Any]]:
                     cond_volume=bool(r[3]), cond_ma5=bool(r[4]), cond_count=int(r[5] or 0),
                     intraday_turn=r[6] or "", volume_phase=r[7] or "",
                     ma5=(float(r[8]) if r[8] is not None else None), verdict=r[9] or "",
+                    position_pct=(float(r[10]) if r[10] is not None else None), position_reason=r[11] or "",
                     criterion="他 2026-11-04 13:44：「双脚位置 + 缩转放 + 站上5日线 ⇒ 仓位推上去」")
     except Exception:
         return None

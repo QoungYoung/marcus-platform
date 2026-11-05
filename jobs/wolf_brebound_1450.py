@@ -534,6 +534,34 @@ def production_wave(asof: str) -> dict | None:
         return None
 
 
+def brebound_ladder(cond_count: int, streak: int, neck_broken: bool, broken: bool) -> dict:
+    """B反 的**分批仓位阶梯**（按条件推进，不是"一次性 1/3"）。
+
+    为什么改：他 2026-11-04 的实际动作是 半导体 5%→30%（三条件成立当天推 25%），
+    「预判仓 ≤1/3」这个固定上限与他的做法不符。他的仓位一直是**收盘对关键位的阶梯函数**：
+      · 2025-12-03：「3888 收盘没站上 50%｜3850 收盘跌破 35%｜3816 企稳加回 50%｜站稳 3922-3930 70%」
+      · 2025-10-28：「收盘前如果没有站稳 4006，收盘前降低到 65% 仓位（目前 80%）」
+    所以这里也做成阶梯，档位锚定他观察到的量级（30 / 50 / 70）。
+
+    返回 position_pct（今日建议上限）与 reason/ladder。
+    """
+    ladder = [
+        ("三条件成立（双脚+缩转放+站上5日线）", 30, "他 11-04 半导体 5%→30%"),
+        ("连续 3 天收盘站上 1浪顶", 50, "右侧一买；他 12-03 的 50% 档"),
+        ("放量突破颈线并站稳", 70, "加强；他 12-03 的 70% 档"),
+    ]
+    if broken:
+        return dict(position_pct=0, reason="已跌破双脚低点 ⇒ 反弹仓作废，清零", ladder=ladder)
+    if cond_count < 3:
+        return dict(position_pct=0, reason=f"三条件 {cond_count}/3 ⇒ 只观察，不开反弹仓", ladder=ladder)
+    pct, why = 30, "三条件成立 ⇒ 试探仓 30%（他 11-04 半导体 5%→30%）"
+    if streak >= 3:
+        pct, why = 50, "三条件 + 连续3日站上1浪顶 ⇒ 右侧一买 50%"
+    if neck_broken:
+        pct, why = 70, "三条件 + 站上1浪顶 + 放量突破颈线 ⇒ 加强 70%"
+    return dict(position_pct=pct, reason=why, ladder=ladder)
+
+
 def bottom_for(code: str, day: str) -> dict:
     """任意指数的底部结构（v3 中间态 + MA5/MA10）。含今日盘中 bar。"""
     try:
@@ -685,8 +713,10 @@ def read(day: str, cut: str = CUT) -> dict:
         _it = (vol_trend(IDX) or {}).get("intraday_turn") or {}
         _cvol = bool(_it.get("occurred")) or ((volume_turn or {}).get("phase") == "缩转放")
         _cnt = sum([_cfeet, _cvol, _cm5])
-        _verdict = ("三条件成立 ⇒ 可推**试探仓 ≤1/3**（反弹仓，不动趋势仓）" if _cnt == 3
-                    else f"三条件 {_cnt}/3 ⇒ 只观察" if _cnt >= 1 else "三条件 0/3 ⇒ 不做")
+        _broken = bool(_bs.get("l_left") and float(idx_d.close.iloc[-1]) < float(_bs.get("l_left")))
+        _lad = brebound_ladder(_cnt, 0, bool(_bs.get("state", "").startswith("颈线突破")), _broken)
+        _verdict = (f"三条件 {_cnt}/3 ⇒ 反弹仓上限 {_lad['position_pct']}%"
+                    f"（{_lad['reason']}）")
         if True:
             import psycopg2
             _dsn2 = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
@@ -699,19 +729,22 @@ def read(day: str, cut: str = CUT) -> dict:
                 _k2 = _c2.cursor()
                 _k2.execute(
                     "insert into b_rebound_daily(session_date,bottom_state,cond_feet,cond_volume,cond_ma5,"
-                    "cond_count,intraday_turn,volume_phase,ma5,right_side_streak,right_side_ready,verdict) "
-                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (session_date) do update set "
+                    "cond_count,intraday_turn,volume_phase,ma5,right_side_streak,right_side_ready,verdict,"
+                    "position_pct,position_reason) "
+                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (session_date) do update set "
                     "bottom_state=excluded.bottom_state, cond_feet=excluded.cond_feet, "
                     "cond_volume=excluded.cond_volume, cond_ma5=excluded.cond_ma5, "
                     "cond_count=excluded.cond_count, intraday_turn=excluded.intraday_turn, "
                     "volume_phase=excluded.volume_phase, ma5=excluded.ma5, "
                     "right_side_streak=excluded.right_side_streak, right_side_ready=excluded.right_side_ready, "
-                    "verdict=excluded.verdict, created_at=now()",
+                    "verdict=excluded.verdict, position_pct=excluded.position_pct, "
+                    "position_reason=excluded.position_reason, created_at=now()",
                     (day, _bs.get("state"), _cfeet, _cvol, _cm5, _cnt,
                      f"{_it.get('from_time')}→{_it.get('to_time')} {_it.get('ratio')}×" if _it.get("occurred") else "",
                      (volume_turn or {}).get("phase"), _bs.get("ma5"),
                      None, False,
-                     _verdict))
+                     _verdict,
+                     _lad["position_pct"], _lad["reason"]))
                 _c2.commit()
     except Exception as _e2:
         print(f"[warn] 写 b_rebound_daily 失败: {str(_e2)[:70]}", file=sys.stderr)
