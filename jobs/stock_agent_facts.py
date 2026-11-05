@@ -27,12 +27,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "jobs"))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from mainline_common import last_trade_date, pct, trade_dates, write_json  # noqa: E402
 from core.tushare_relay import relay_query  # noqa: E402
 from position_rules import classify, load_cfg  # noqa: E402
 
 THEME = os.path.join(ROOT, "config", "mainline", "generated", "universe_theme.yaml")
+
+
+def load_theme_cfg():
+    try:
+        from app.services.theme_universe_store import load_theme_config
+        x = load_theme_config()
+        if x: return x
+    except Exception:
+        pass
+    return load_yaml(THEME)
 MAINLINE_CFG = os.path.join(ROOT, "config", "mainline", "universe_mainline.yaml")
 
 
@@ -93,8 +104,18 @@ def _dc_members(code: str, date8: str) -> Set[str]:
 
 
 def members_for(t: Dict[str, Any], date8: str) -> Set[str]:
+    # PG membership 优先；没有该日期再回退 sources
+    tid = t.get("id")
+    if tid:
+        try:
+            from app.services.theme_universe_store import load_members
+            pg = load_members(str(tid), date8)
+            if pg: return set(pg)
+        except Exception:
+            pass
     out: Set[str] = set()
-    for s in t.get("sources") or []:
+    _srcs = list(t.get("sources") or []) + list(((t.get("resolution") or {}).get("selected")) or [])
+    for s in _srcs:
         typ, code = s.get("type"), s.get("code")
         try:
             if typ == "csi":
@@ -153,6 +174,7 @@ def _fetch_earnings(code: str, date8: str) -> Dict[str, Any]:
 _BASIC_CACHE = os.path.join(ROOT, "data", "stock_basic_cache.json")
 _BARS_CACHE_DIR = os.path.join(ROOT, "data", "bars_cache")
 _BARS_MEM_CACHE: Dict[str, Dict[str, Any]] = {}
+_MARKET_DAY_DONE: Set[str] = set()
 
 
 def _stock_basic_map() -> Dict[str, Any]:
@@ -217,10 +239,42 @@ def _daily_chunk(part: List[str], start: str, end: str) -> Dict[str, Any]:
     return left
 
 
+def _fetch_market_day(date8: str, cache: Dict[str, Any]) -> int:
+    """一次拉当日全市场 daily，合并进 bars cache；同进程同日期只拉一次。"""
+    if date8 in _MARKET_DAY_DONE:
+        return 0
+    try:
+        d = relay_query("daily", trade_date=date8, limit=6000)
+    except Exception as e:
+        print(f"[bars] market day {date8} fail: {str(e)[:100]}", file=sys.stderr)
+        return 0
+    if d is None or len(d) == 0:
+        return 0
+    n = 0
+    for code, g in d.groupby("ts_code"):
+        c = str(code)
+        old = cache.get(c)
+        if old is not None and len(old):
+            cache[c] = pd.concat([old, g], ignore_index=True).drop_duplicates("trade_date", keep="last")
+        else:
+            cache[c] = g.copy()
+        n += 1
+    _MARKET_DAY_DONE.add(date8)
+    print(f"[bars] market day {date8}: {n} codes", file=sys.stderr)
+    return n
+
+
 def _fetch_bars_multi(codes: List[str], start: str, end: str, date8: str, chunk: int = 15) -> Dict[str, Any]:
     cache = _load_bars_cache(date8)
+    # 每次先用当日全市场 daily 一次拉（幂等），避免旧缓存只有部分代码时走按代码递归
+    _fetch_market_day(date8, cache)
+    _save_bars_cache(date8, cache)
     out = {c: cache[c] for c in codes if c in cache}
+    # 全市场 daily 之后仍缺失的，多半是停牌/无当日行情；不再递归逐只拉，避免超时
     missing = [c for c in codes if c not in cache]
+    if missing:
+        print(f"[bars] skip missing {len(missing)} codes after market day", file=sys.stderr)
+    return out
     for i in range(0, len(missing), chunk):
         if i > 0:
             time.sleep(0.5 + random.random() * 0.5)
@@ -447,6 +501,49 @@ def _attach_seats(cands: List[Dict[str, Any]], date8: str) -> None:
         }
 
 
+def _b_rebound_block(date8: str) -> dict:
+    """B反 环境（喂给选股 agent）：段位 + 三条件 + 反弹仓额度。
+
+    为什么要给：选股 agent 的 gate 原来是「defense ⇒ 只能 watch/reject」，
+    而他 2026-11-04 在下跌1浪里把半导体从 5% 推到 30% —— 那正是 B反 的反弹仓。
+    ⇒ 不把这块信息给它，它会把唯一该做的机会全判成 reject。
+    """
+    out: dict = {"as_of": date8}
+    try:
+        import psycopg2
+        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        with psycopg2.connect(dsn, connect_timeout=5) as conn:
+            cur = conn.cursor()
+            cur.execute("select session_date, level, sub_level, operation from wave_state "
+                        "where session_date <= %s order by session_date desc limit 1",
+                        (f"{date8[:4]}-{date8[4:6]}-{date8[6:]}",))
+            w = cur.fetchone()
+            if w:
+                out["wave"] = {"session_date": str(w[0]), "level": w[1], "sub_level": w[2],
+                               "operation": w[3]}
+            cur.execute("select session_date, cond_feet, cond_volume, cond_ma5, cond_count, "
+                        "position_pct, position_used, position_delta, position_reason, "
+                        "bottom_state, position_source from b_rebound_daily "
+                        "where session_date <= %s order by session_date desc limit 1", (date8,))
+            r = cur.fetchone()
+            if r:
+                out["three_conditions"] = {
+                    "session_date": r[0], "feet": bool(r[1]), "volume": bool(r[2]), "ma5": bool(r[3]),
+                    "count": int(r[4] or 0), "position_cap_pct": (float(r[5]) if r[5] is not None else None),
+                    "position_used_pct": (float(r[6]) if r[6] is not None else None),
+                    "position_room_pct": (float(r[7]) if r[7] is not None else None),
+                    "reason": r[8] or "", "bottom_state": r[9] or "",
+                    "used_source": r[10] or "",
+                }
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:80]}"
+    out["criterion"] = ("他 2026-11-04 13:44「双脚位置 缩转放 啧啧 仓位推上去咯」；"
+                        "13:59 半导体 5%→30%；14:05「3674 以上 3 天收盘 ⇒ B反 右侧一买」")
+    out["rule"] = ("三条件 3/3 且 position_room_pct>0 ⇒ 允许对 B反方向（半导体材料/设备、国算）给 probe，"
+                   "总仓位不超 position_cap_pct；其余方向在 defense 下仍只能 watch/reject")
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=datetime.now().strftime("%Y%m%d"))
@@ -469,7 +566,7 @@ def main() -> None:
         _ml = {}
     _ml_active = bool(_ml.get("mainline_active"))
     rows = {r["id"]: r for r in theme_json.get("themes", []) if "error" not in r}
-    cfg = load_yaml(THEME)
+    cfg = load_theme_cfg()
     tcfg = {t["id"]: t for t in (cfg.get("themes") or []) + (cfg.get("satellite_themes") or [])}
     # 只保留 L0 主线下的赛道/主题；避免把 L1 其它 trial 全塞进 P3
     _allowed_tracks = set()
@@ -624,7 +721,7 @@ def main() -> None:
             "members": len(mem), "pool_mode": ("full" if (a.full or a.top <= 0) else "top"), "advanced_top": a.advanced_top, "candidates": cands,
         })
     out = {"as_of": date8, "holding_days": 5, "mainline": theme_json.get("mainline_regime"),
-           "themes": out_themes}
+           "themes": out_themes, "b_rebound": _b_rebound_block(date8)}
     path = os.path.join(ROOT, "data", "mainline", date8, "stock_agent_facts.json")
     write_json(path, out)
     print(f"as_of={date8} themes={len(out_themes)}")

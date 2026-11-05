@@ -57,7 +57,11 @@ def main():
     facts = json.load(open(fp, encoding="utf-8"))
     payload = compact(facts)
     prompt = """你是狼大体系选股 agent。只从候选里选，不取数、不编代码、不下单。
-当前 gate：wave/mainline_active 见每只 position.wave；defense 或 mainline_active=false 时只能 watch/reject，不能 probe。
+当前 gate：wave/mainline_active 见每只 position.wave；defense 或 mainline_active=false 时通常只能 watch/reject。
+**唯一例外（B反 反弹仓）**：若 facts.b_rebound.three_conditions.count==3 且 position_room_pct>0，
+则允许对 B反方向（半导体材料 / 半导体设备 / 国算）给 probe，理由必须引用 b_rebound 的三条件与额度，
+且总仓位不得超 position_cap_pct；其他方向仍只能 watch/reject。
+两套口径要分清：wave.operation=defense 是**趋势仓**（不新建趋势仓）；b_rebound 是**反弹仓**（吃自救反弹）。
 规则：核心>风向标>龙头>龙2/二供>杂毛；高位不追、低位才考虑老龙头；老龙头必须有数据证据（seed_role/top3/limit_up/席位），不能只凭世界知识；业绩过期/缺失要扣分；同主题最多3只，含reject。
 输出 JSON 数组：
 [{"theme_id":"...","theme_view":"...","selected":[{"symbol":"...","name":"...","classification":"核心|风向标|龙头|龙2|二供|杂毛","old_leader":true,"verdict":"watch|reject","confidence":0.0,"evidence":["..."],"counter_evidence":["..."]}],"needs_human":false}]
