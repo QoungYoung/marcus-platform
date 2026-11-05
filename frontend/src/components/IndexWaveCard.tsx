@@ -103,6 +103,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
   const [today, setToday] = useState<TodaySummary | null>(null);
   const [bottom, setBottom] = useState<BottomStruct | null>(null);
   const [structNote, setStructNote] = useState('');
+  const [breb, setBreb] = useState<any>(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -123,6 +124,7 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
         setToday((d.today as TodaySummary) || null);
         setBottom((d.bottom_structure as BottomStruct) || null);
         setStructNote(d.structure_note || '');
+        setBreb(d.b_rebound || null);
         setErr((d.bars || []).length ? '' : '无指数数据');
       })
       .catch((e) => { if (alive) setErr(String((e && e.message) || e)); })
@@ -443,6 +445,15 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
               1浪顶 {today.key_level.price.toFixed(2)}
               {' '}连续 {today.key_level.streak_days}/{today.key_level.need_days} 天
               {today.key_level.ready ? ' ✅ 右侧一买' : ''}
+            </span>
+          )}
+          {breb && (
+            <span title={breb.criterion || ''}
+                  style={{ border: '1px solid ' + (breb.cond_count >= 3 ? UP_COLOR : LINE),
+                           borderRadius: 4, padding: '0 5px',
+                           color: breb.cond_count >= 3 ? UP_COLOR : MUTED }}>
+              B反三条件 {breb.cond_count}/3
+              {breb.cond_count >= 3 ? ' ⇒ 可试探 ≤1/3（反弹仓）' : ''}
             </span>
           )}
           {last?.status === 'provisional' && (

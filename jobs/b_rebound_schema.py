@@ -50,6 +50,22 @@ DDL = (
     "on b_rebound_anchors(instrument, status, confirmed_at)",
     # 盘中浪型反哺（观察级）：**不写生产 wave_state** —— wave_store 默认 PG 优先，
     # 写进去会直接进 p2_entry_gate / t_monitor / wolf_pick 的交易门禁 ✗
+    # B反 三条件（他 2026-11-04 13:44）日表：14:50 job 写，接口/卡片读
+    """create table if not exists b_rebound_daily (
+  session_date  varchar(8) not null unique,
+  bottom_state  text,
+  cond_feet     boolean default false,
+  cond_volume   boolean default false,
+  cond_ma5      boolean default false,
+  cond_count    int default 0,
+  intraday_turn text,
+  volume_phase  text,
+  ma5           numeric,
+  right_side_streak int,
+  right_side_ready  boolean default false,
+  verdict       text,
+  created_at    timestamptz default now()
+)""",
     """create table if not exists b_rebound_wave_intraday (
   id          bigserial primary key,
   session_date varchar(8) not null unique,

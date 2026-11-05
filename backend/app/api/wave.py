@@ -316,6 +316,35 @@ def _scripts_dir() -> str:
     return ""
 
 
+
+def _b_rebound_daily() -> Optional[Dict[str, Any]]:
+    """B反 三条件（他 2026-11-04 13:44：双脚 + 缩转放 + 站上5日线）的最新一行。
+
+    为什么要单独给：`operation=defense` 是**趋势仓**口径（下跌1浪不新建趋势仓），
+    而三条件成立时他要的是**反弹试探仓 ≤1/3** —— 两个口径都成立，不能只显示 defense。
+    """
+    try:
+        import psycopg2
+        dsn = (os.environ.get("DATABASE_URL") or "").strip()
+        if not dsn:
+            return None
+        with psycopg2.connect(dsn, connect_timeout=4) as conn:
+            cur = conn.cursor()
+            cur.execute("select session_date,bottom_state,cond_feet,cond_volume,cond_ma5,cond_count,"
+                        "intraday_turn,volume_phase,ma5,verdict from b_rebound_daily "
+                        "order by session_date desc limit 1")
+            r = cur.fetchone()
+        if not r:
+            return None
+        return dict(session_date=r[0], bottom_state=r[1], cond_feet=bool(r[2]),
+                    cond_volume=bool(r[3]), cond_ma5=bool(r[4]), cond_count=int(r[5] or 0),
+                    intraday_turn=r[6] or "", volume_phase=r[7] or "",
+                    ma5=(float(r[8]) if r[8] is not None else None), verdict=r[9] or "",
+                    criterion="他 2026-11-04 13:44：「双脚位置 + 缩转放 + 站上5日线 ⇒ 仓位推上去」")
+    except Exception:
+        return None
+
+
 def _bottom_and_today(bars: List[Dict[str, Any]], last: Optional[Dict[str, Any]],
                       waves: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """底部结构（双脚/颈线/MA）+ 今日摘要（价位/量能/关键位距离）。
@@ -419,6 +448,7 @@ def index_history(days: int = Query(250, ge=30, le=2000), code: str = Query("000
             "bottom_structure": _extra.get("bottom_structure"),
             "today": _extra.get("today"),
             "structure_note": _extra.get("note") or "",
+            "b_rebound": (_b_rebound_daily() if code == "000001.SH" else None),
             "last": last, "last_is_today": bool(last and today and last.get("date") == today),
             "wave_count": len(waves), "wave_version": (last or {}).get("generator_version") or "",
             "ohlc_source": src,

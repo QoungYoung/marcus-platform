@@ -677,6 +677,45 @@ def read(day: str, cut: str = CUT) -> dict:
                 _c.commit()
         except Exception as _e:
             print(f"[warn] 写 b_rebound_wave_intraday 失败: {str(_e)[:60]}", file=sys.stderr)
+    # ── 三条件落库（他 2026-11-04 13:44：双脚 + 缩转放 + 站上5日线）──
+    try:
+        _bs = bottom_for(IDX, day)
+        _cm5 = bool(_bs.get("above_ma5"))
+        _cfeet = "双脚成立" in str(_bs.get("state") or "")
+        _it = (vol_trend(IDX) or {}).get("intraday_turn") or {}
+        _cvol = bool(_it.get("occurred")) or ((volume_turn or {}).get("phase") == "缩转放")
+        _cnt = sum([_cfeet, _cvol, _cm5])
+        _verdict = ("三条件成立 ⇒ 可推**试探仓 ≤1/3**（反弹仓，不动趋势仓）" if _cnt == 3
+                    else f"三条件 {_cnt}/3 ⇒ 只观察" if _cnt >= 1 else "三条件 0/3 ⇒ 不做")
+        if True:
+            import psycopg2
+            _dsn2 = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+            with psycopg2.connect(_dsn2, connect_timeout=5) as _c2:
+                try:
+                    from b_rebound_schema import ensure_schema as _es2
+                except Exception:
+                    from jobs.b_rebound_schema import ensure_schema as _es2
+                _es2(_c2)
+                _k2 = _c2.cursor()
+                _k2.execute(
+                    "insert into b_rebound_daily(session_date,bottom_state,cond_feet,cond_volume,cond_ma5,"
+                    "cond_count,intraday_turn,volume_phase,ma5,right_side_streak,right_side_ready,verdict) "
+                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (session_date) do update set "
+                    "bottom_state=excluded.bottom_state, cond_feet=excluded.cond_feet, "
+                    "cond_volume=excluded.cond_volume, cond_ma5=excluded.cond_ma5, "
+                    "cond_count=excluded.cond_count, intraday_turn=excluded.intraday_turn, "
+                    "volume_phase=excluded.volume_phase, ma5=excluded.ma5, "
+                    "right_side_streak=excluded.right_side_streak, right_side_ready=excluded.right_side_ready, "
+                    "verdict=excluded.verdict, created_at=now()",
+                    (day, _bs.get("state"), _cfeet, _cvol, _cm5, _cnt,
+                     f"{_it.get('from_time')}→{_it.get('to_time')} {_it.get('ratio')}×" if _it.get("occurred") else "",
+                     (volume_turn or {}).get("phase"), _bs.get("ma5"),
+                     None, False,
+                     _verdict))
+                _c2.commit()
+    except Exception as _e2:
+        print(f"[warn] 写 b_rebound_daily 失败: {str(_e2)[:70]}", file=sys.stderr)
+
     wv = wave_block(day) or {}
     _levels = levels_vs_price(idx_d.close.values, wv.get("key_levels") or wv.get("anchors_index") or [],
                               float(idx_d.close.iloc[-1]))
