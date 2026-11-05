@@ -534,7 +534,8 @@ def production_wave(asof: str) -> dict | None:
         return None
 
 
-def brebound_ladder(cond_count: int, streak: int, neck_broken: bool, broken: bool) -> dict:
+def brebound_ladder(cond_count: int, streak: int, neck_broken: bool, broken: bool,
+                    feet_formed: bool = False) -> dict:
     """B反 的**分批仓位阶梯**（按条件推进，不是"一次性 1/3"）。
 
     为什么改：他 2026-11-04 的实际动作是 半导体 5%→30%（三条件成立当天推 25%），
@@ -546,6 +547,7 @@ def brebound_ladder(cond_count: int, streak: int, neck_broken: bool, broken: boo
     返回 position_pct（今日建议上限）与 reason/ladder。
     """
     ladder = [
+        ("双脚已现（右脚成立、底分型未出）", 10, "他 11-03 半导体 5% + 国算 8% ≈ 底仓 10%"),
         ("三条件成立（双脚+缩转放+站上5日线）", 30, "他 11-04 半导体 5%→30%"),
         ("连续 3 天收盘站上 1浪顶", 50, "右侧一买；他 12-03 的 50% 档"),
         ("放量突破颈线并站稳", 70, "加强；他 12-03 的 70% 档"),
@@ -553,6 +555,10 @@ def brebound_ladder(cond_count: int, streak: int, neck_broken: bool, broken: boo
     if broken:
         return dict(position_pct=0, reason="已跌破双脚低点 ⇒ 反弹仓作废，清零", ladder=ladder)
     if cond_count < 3:
+        if feet_formed:
+            return dict(position_pct=10,
+                        reason=f"三条件 {cond_count}/3，但双脚已现 ⇒ 底仓 10%（他 11-03 半导体5%+国算8%）",
+                        ladder=ladder)
         return dict(position_pct=0, reason=f"三条件 {cond_count}/3 ⇒ 只观察，不开反弹仓", ladder=ladder)
     pct, why = 30, "三条件成立 ⇒ 试探仓 30%（他 11-04 半导体 5%→30%）"
     if streak >= 3:
@@ -714,7 +720,9 @@ def read(day: str, cut: str = CUT) -> dict:
         _cvol = bool(_it.get("occurred")) or ((volume_turn or {}).get("phase") == "缩转放")
         _cnt = sum([_cfeet, _cvol, _cm5])
         _broken = bool(_bs.get("l_left") and float(idx_d.close.iloc[-1]) < float(_bs.get("l_left")))
-        _lad = brebound_ladder(_cnt, 0, bool(_bs.get("state", "").startswith("颈线突破")), _broken)
+        _feet = ("双脚已现" in str(_bs.get("state") or "")) or ("双脚成立" in str(_bs.get("state") or ""))
+        _lad = brebound_ladder(_cnt, 0, bool(_bs.get("state", "").startswith("颈线突破")),
+                               _broken, feet_formed=_feet)
         _verdict = (f"三条件 {_cnt}/3 ⇒ 反弹仓上限 {_lad['position_pct']}%"
                     f"（{_lad['reason']}）")
         if True:
@@ -727,11 +735,27 @@ def read(day: str, cut: str = CUT) -> dict:
                     from jobs.b_rebound_schema import ensure_schema as _es2
                 _es2(_c2)
                 _k2 = _c2.cursor()
+                # ★ 分批：用前一日的目标档当「已用」（他的阶梯是目标总仓位，不是当日增量）
+                _k2.execute("select session_date, coalesce(position_pct,0) from b_rebound_daily "
+                            "where session_date < %s order by session_date desc limit 1", (day,))
+                _pr = _k2.fetchone()
+                _prev_pct = float(_pr[1]) if _pr else 0.0
+                _today_pct = float(_lad["position_pct"])
+                _delta = max(0.0, _today_pct - _prev_pct)
+                _episode = 1
+                _k2.execute("select session_date, coalesce(position_pct,0) from b_rebound_daily "
+                            "where session_date < %s order by session_date desc limit 10", (day,))
+                for _row in _k2.fetchall():
+                    if float(_row[1] or 0) > 0:
+                        _episode += 1
+                    else:
+                        break
                 _k2.execute(
                     "insert into b_rebound_daily(session_date,bottom_state,cond_feet,cond_volume,cond_ma5,"
                     "cond_count,intraday_turn,volume_phase,ma5,right_side_streak,right_side_ready,verdict,"
-                    "position_pct,position_reason) "
-                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) on conflict (session_date) do update set "
+                    "position_pct,position_reason,position_used,position_delta,episode_days) "
+                    "values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "on conflict (session_date) do update set "
                     "bottom_state=excluded.bottom_state, cond_feet=excluded.cond_feet, "
                     "cond_volume=excluded.cond_volume, cond_ma5=excluded.cond_ma5, "
                     "cond_count=excluded.cond_count, intraday_turn=excluded.intraday_turn, "
@@ -744,7 +768,7 @@ def read(day: str, cut: str = CUT) -> dict:
                      (volume_turn or {}).get("phase"), _bs.get("ma5"),
                      None, False,
                      _verdict,
-                     _lad["position_pct"], _lad["reason"]))
+                     _today_pct, _lad["reason"], _prev_pct, _delta, _episode))
                 _c2.commit()
     except Exception as _e2:
         print(f"[warn] 写 b_rebound_daily 失败: {str(_e2)[:70]}", file=sys.stderr)

@@ -453,9 +453,11 @@ export default function IndexWaveCard({ days = 750, height = 340 }: { days?: num
                            borderRadius: 4, padding: '0 5px',
                            color: breb.cond_count >= 3 ? UP_COLOR : MUTED }}>
               B反三条件 {breb.cond_count}/3
-              {breb.position_pct != null
-                ? ` ⇒ 反弹仓上限 ${breb.position_pct}%`
-                : (breb.cond_count >= 3 ? ' ⇒ 可试探' : '')}
+              {breb.position_pct != null ? ` ⇒ 反弹仓上限 ${breb.position_pct}%` : ''}
+              {breb.position_delta != null && breb.position_delta > 0
+                ? ` ｜今日可加 ${breb.position_delta}%` : ''}
+              {breb.position_delta === 0 && breb.position_pct
+                ? ' ｜已到位，不加' : ''}
             </span>
           )}
           {last?.status === 'provisional' && (
