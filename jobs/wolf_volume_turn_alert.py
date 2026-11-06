@@ -96,15 +96,25 @@ def analyze(rows, q) -> dict | None:
     buckets = [sum(dv[i * BUCKET:(i + 1) * BUCKET]) for i in range(n)]
     if len(buckets) < 3:
         return None
-    fade_i = min(range(len(buckets)), key=lambda i: buckets[i])
+    # ★ 2026-11-06 14:05 修（用户：明显还在缩量，怎么推了缩转放）：
+    #   原判据拿「今天最淡的桶」当基准 —— 那几乎总是午休前 11:29 的地量桶，
+    #   午后随便有点量就会显得"放大"（实测最新桶/最淡 = 1.29×，而最新桶/中位 = 0.74×，仍在缩）✗
+    #   而且当时量能是**持续递减**（2068→2060→1838→1526），根本没有"转"。
+    #   正确口径（对应他「分时相对缩量转放量」）：
+    #     ① 基准 = 当日**中位数**桶（今天的常态），不是最淡
+    #     ② 必须有**拐点**：最新桶 ≥ 前一桶 ×1.1（由降转增），不是一路递减
     cur_i = len(buckets) - 1
-    ratio = buckets[cur_i] / buckets[fade_i] if buckets[fade_i] > 0 else 0.0
+    _hist = buckets[:-1] or buckets
+    base = sorted(_hist)[len(_hist) // 2]                     # 此前的中位数桶
+    ratio = buckets[cur_i] / base if base > 0 else 0.0        # 相对今天常态
+    last_vs_prev = (buckets[cur_i] / buckets[cur_i - 1]) if cur_i >= 1 and buckets[cur_i - 1] > 0 else 0.0
+    fade_i = cur_i - 1 if cur_i >= 1 else cur_i
     # 最近 15 分钟价格变化
     k = min(BUCKET, len(px_s) - 1)
     last15_pct = (px_s[-1] / px_s[-1 - k] - 1) * 100 if k > 0 and px_s[-1 - k] else 0.0
     return dict(px=px, vwap=round(vwap, 2), above_vwap=bool(px > vwap),
-                bucket_ratio=round(ratio, 2),
-                fade_time=t[min(len(t) - 1, fade_i * BUCKET + BUCKET - 1)],
+                bucket_ratio=round(ratio, 2), last_vs_prev=round(last_vs_prev, 2),
+                fade_time=t[min(len(t) - 1, max(0, fade_i) * BUCKET + BUCKET - 1)],
                 now_time=t[min(len(t) - 1, cur_i * BUCKET + BUCKET - 1)],
                 last15_pct=round(last15_pct, 2), buckets=len(buckets),
                 prev=float(q[4]), pct=(px / float(q[4]) - 1) * 100 if float(q[4]) else 0.0)
@@ -177,10 +187,10 @@ def main() -> int:
     #   他 10:59「缩量太大了」指的是相对 11-05 的约 9500 亿天量；
     #   而 20 日均（约 7600 亿）口径下今天 8658 亿是 1.13×"放量" ⇒ 会把真实的缩转放挡掉 ✗
     shrink = (dy is not None and dy < DAY_SHRINK_MAX)
-    turn = info["bucket_ratio"] >= TURN_MIN
+    turn = (info["bucket_ratio"] >= TURN_MIN) and (info.get("last_vs_prev") or 0) >= 1.1
     price_ok = info["above_vwap"] and info["last15_pct"] > 0
-    print(f"{hm} 价{info['px']:.2f} VWAP{info['vwap']} | 分时桶比 {info['bucket_ratio']}×"
-          f"（最淡 {info['fade_time']} → 现在）｜近15分 {info['last15_pct']:+.2f}%"
+    print(f"{hm} 价{info['px']:.2f} VWAP{info['vwap']} | 分时相对今天中位 {info['bucket_ratio']}×"
+          f"（前桶比 {info.get('last_vs_prev')}×）｜近15分 {info['last15_pct']:+.2f}%"
           f"｜今日折算 {dy}× 昨日（{est_yi}亿 vs {prev_yi}亿；20日均 {dr}×）⇒ 整体{'缩量' if shrink else '不缩'} "
           f"｜分时{'放量' if turn else '未放'} ｜价{'配合' if price_ok else '未配合'}")
 
@@ -210,8 +220,8 @@ def main() -> int:
              "⇒ 缩转放是**第二次机会**，不是重仓信号；他原话「除此之外没有别的任何的买点了」")
     txt = (f"【缩转放】{q[1]} {hm[:2]}:{hm[2:]}（今日第 {n} 次）\n"
            f"现价 **{info['px']:.2f}**（{info['pct']:+.2f}%）｜VWAP {info['vwap']}\n"
-           f"分时：**{info['fade_time']} 最淡 → 现在放大 {info['bucket_ratio']}×**，"
-           f"近 15 分钟 {info['last15_pct']:+.2f}%\n"
+           f"分时：最新 15 分钟量 = 今天常态的 **{info['bucket_ratio']}×**"
+           f"（比前一个 15 分钟 {info.get('last_vs_prev')}×），近 15 分钟 {info['last15_pct']:+.2f}%\n"
            f"整体：今日折算 **{dy}× 昨日**（约 {est_yi} 亿 vs 昨日 {prev_yi} 亿；"
            f"20 日均 {dr}×）⇒ {'缩量' if shrink else '非缩量'}\n"
            f"—— 他 11-06 11:21：「缩转放只能是**分时相对缩量转放量**」\n"
