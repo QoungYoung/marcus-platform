@@ -110,24 +110,37 @@ def analyze(rows, q) -> dict | None:
                 prev=float(q[4]), pct=(px / float(q[4]) - 1) * 100 if float(q[4]) else 0.0)
 
 
-def day_amount_ratio(hm: str) -> tuple[float | None, float | None]:
-    """今日折算全天量 ÷ 20 日均量（>1 = 放量；他说的"缩了 3300 亿"= 这条 <1）。"""
+def day_amount_ratio(hm: str):
+    """→ (对20日均的倍数, 今日折算亿元, 对昨日的倍数, 昨日亿元)
+
+    **对昨日**才是他说的"缩量"（他 11-06 10:59「缩量太大了」= 相对 11-05 的约 9500 亿天量）；
+    对 20 日均只作参考展示 —— 用它当门槛会把真实缩转放挡掉（11-06 13:48 实测 ✗）。
+    """
+    import pandas as pd
+    from core.tushare_relay import relay_query
+    amt_wan = None
     try:
-        import pandas as pd
-        from core.tushare_relay import relay_query
         q = urllib.request.urlopen(urllib.request.Request(
             "https://qt.gtimg.cn/q=sh000001",
             headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}),
             timeout=10).read().decode("gbk", "ignore").split("~")
         amt_wan = float(q[37])                       # 万元（累计）
+    except Exception as e:
+        print(f"[warn] 取量失败: {str(e)[:60]}", file=sys.stderr)
+    try:
         d = relay_query("index_daily", ts_code=IDX, start_date="20260601", end_date="20991231")
-        a20 = pd.to_numeric(d.sort_values("trade_date").amount, errors="coerce").iloc[-21:-1].mean() / 1e5
+        a = pd.to_numeric(d.sort_values("trade_date").amount, errors="coerce") / 1e5   # 千元→亿元
+        a20 = a.iloc[-21:-1].mean() if len(a) > 21 else None
+        prev_yi = float(a.iloc[-1]) if len(a) else None
+        if amt_wan is None:
+            return None, None, None, prev_yi
         sh = max(0.05, time_share(hm))
         est_yi = amt_wan / sh / 1e4                  # 万元 → 亿元
-        return (round(est_yi / a20, 2) if a20 else None), round(est_yi)
+        return ((round(est_yi / a20, 2) if a20 else None), round(est_yi),
+                (round(est_yi / prev_yi, 2) if prev_yi else None), (round(prev_yi) if prev_yi else None))
     except Exception as e:
         print(f"[warn] 日级量比失败: {str(e)[:60]}", file=sys.stderr)
-        return None, None
+        return None, (round(amt_wan / max(0.05, time_share(hm)) / 1e4) if amt_wan else None), None, None
 
 
 def push(text: str) -> bool:
@@ -158,14 +171,17 @@ def main() -> int:
     if not info:
         print("[skip] 分时数据不足")
         return 2
-    dr, est_yi = day_amount_ratio(hm)
+    dr, est_yi, dy, prev_yi = day_amount_ratio(hm)
 
-    shrink = (dr is not None and dr < DAY_SHRINK_MAX)
+    # ★ 2026-11-06 13:48 实测修正：「缩量」的基准是**昨日**，不是 20 日均。
+    #   他 10:59「缩量太大了」指的是相对 11-05 的约 9500 亿天量；
+    #   而 20 日均（约 7600 亿）口径下今天 8658 亿是 1.13×"放量" ⇒ 会把真实的缩转放挡掉 ✗
+    shrink = (dy is not None and dy < DAY_SHRINK_MAX)
     turn = info["bucket_ratio"] >= TURN_MIN
     price_ok = info["above_vwap"] and info["last15_pct"] > 0
     print(f"{hm} 价{info['px']:.2f} VWAP{info['vwap']} | 分时桶比 {info['bucket_ratio']}×"
           f"（最淡 {info['fade_time']} → 现在）｜近15分 {info['last15_pct']:+.2f}%"
-          f"｜今日折算 {dr}×（{est_yi}亿）⇒ 整体{'缩量' if shrink else '不缩'} "
+          f"｜今日折算 {dy}× 昨日（{est_yi}亿 vs {prev_yi}亿；20日均 {dr}×）⇒ 整体{'缩量' if shrink else '不缩'} "
           f"｜分时{'放量' if turn else '未放'} ｜价{'配合' if price_ok else '未配合'}")
 
     if not (shrink and turn and price_ok) and not a.force:
@@ -196,7 +212,8 @@ def main() -> int:
            f"现价 **{info['px']:.2f}**（{info['pct']:+.2f}%）｜VWAP {info['vwap']}\n"
            f"分时：**{info['fade_time']} 最淡 → 现在放大 {info['bucket_ratio']}×**，"
            f"近 15 分钟 {info['last15_pct']:+.2f}%\n"
-           f"整体：今日折算 **{dr}×** 20 日均量（{'缩量' if shrink else '非缩量'}，约 {est_yi} 亿）\n"
+           f"整体：今日折算 **{dy}× 昨日**（约 {est_yi} 亿 vs 昨日 {prev_yi} 亿；"
+           f"20 日均 {dr}×）⇒ {'缩量' if shrink else '非缩量'}\n"
            f"—— 他 11-06 11:21：「缩转放只能是**分时相对缩量转放量**」\n"
            f"{_tone}")
     if a.dry:
