@@ -19,6 +19,22 @@ POS_FILE = os.path.join(DATA, "theme_sleeve_positions.json")
 STATE_FILE = os.path.join(DATA, "theme_sleeve_exit_state.json")
 
 
+def _canon_symbol(sym: str) -> str:
+    """SH600118.SH / SH600118 / 600118.SH → 600118.SH。"""
+    s = str(sym or "").upper().replace(" ", "")
+    for p in ("SH", "SZ", "BJ"):
+        if s.startswith(p):
+            s = s[2:]
+            break
+    if "." in s:
+        return s
+    if s.startswith(("6", "9", "5")):
+        return s + ".SH"
+    if s.startswith(("4", "8", "92")):
+        return s + ".BJ"
+    return s + ".SZ"
+
+
 class ThemeSleeveMonitor:
     def __init__(self, executor=None, interval: int = 30):
         self.executor = executor
@@ -46,7 +62,7 @@ class ThemeSleeveMonitor:
             import psycopg2
             c = psycopg2.connect(os.environ["DATABASE_URL"]); cur = c.cursor()
             cur.execute("SELECT symbol,volume,avg_price FROM paper_positions WHERE account_id=%s AND volume>0", ("stock",))
-            rows = [{"symbol": r[0], "volume": int(r[1]), "avg_price": float(r[2])} for r in cur.fetchall()]
+            rows = [{"symbol": _canon_symbol(r[0]), "volume": int(r[1]), "avg_price": float(r[2])} for r in cur.fetchall()]
             c.close()
             return {r["symbol"]: r for r in rows}
         except Exception:
@@ -126,10 +142,52 @@ class ThemeSleeveMonitor:
         except Exception as e:
             return {"status": "error", "error": str(e)[:160]}
 
+    AB_SLOTS = ("09:45","10:15","10:45","11:15","13:15","13:45","14:15","14:45")
+    _last_ab_slot = None
+
+    def _ensure_ab_table(self):
+        try:
+            import psycopg2
+            with psycopg2.connect(os.environ["DATABASE_URL"]) as c:
+                with c.cursor() as cur:
+                    cur.execute("""
+                    create table if not exists theme_ab_trigger (
+                      trade_date date not null,
+                      slot text not null,
+                      status text not null default 'pending',
+                      created_at timestamptz default now(),
+                      primary key (trade_date, slot)
+                    )""")
+        except Exception:
+            pass
+
+    def _maybe_trigger_ab(self):
+        """每 30 分钟入队一次 A/B 触发；不阻塞监控循环。"""
+        now = self._now()
+        if now.weekday() >= 5:
+            return
+        hm = now.strftime("%H:%M")
+        if hm not in self.AB_SLOTS or hm == self._last_ab_slot:
+            return
+        self._last_ab_slot = hm
+        try:
+            import psycopg2
+            self._ensure_ab_table()
+            with psycopg2.connect(os.environ["DATABASE_URL"]) as c:
+                with c.cursor() as cur:
+                    cur.execute("""
+                    insert into theme_ab_trigger(trade_date,slot,status)
+                    values(%s,%s,'pending') on conflict do nothing
+                    """, (now.strftime("%Y-%m-%d"), hm))
+            print(f"[theme-monitor] AB trigger {now.strftime('%Y-%m-%d')} {hm}", file=sys.stderr)
+        except Exception as e:
+            print(f"[theme-monitor] AB trigger fail {str(e)[:100]}", file=sys.stderr)
+
     def _loop(self):
         time.sleep(8)
         while self.running:
             try:
+                self._maybe_trigger_ab()
                 if self._trading() and self._exec_window():
                     pos = self._pos()
                     levels = self._levels("stock")

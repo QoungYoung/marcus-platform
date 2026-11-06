@@ -38,6 +38,12 @@ def b_done_today(today: str) -> set:
 
 
 def latest_selected():
+    try:
+        from theme_sleeve_store import latest_date
+        d = latest_date("selected")
+        if d: return d
+    except Exception:
+        pass
     base = os.path.join(ROOT, "data", "mainline")
     ds = [x for x in os.listdir(base) if x.isdigit() and os.path.exists(os.path.join(base, x, "theme_sleeve_selected.json"))]
     return max(ds) if ds else None
@@ -46,16 +52,23 @@ def latest_selected():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--execute", action="store_true")
+    ap.add_argument("--date", default="", help="历史回放日期 YYYYMMDD；默认取 latest")
     a = ap.parse_args()
-    d = latest_selected()
+    d = a.date or latest_selected()
     if not d:
         print("no theme_sleeve_selected.json"); return 0
     p = os.path.join(ROOT, "data", "mainline", d, "theme_sleeve_selected.json")
-    sel = json.load(open(p, encoding="utf-8"))
+    try:
+        from theme_sleeve_store import load as load_sleeve
+        sel = load_sleeve(d, "selected")
+    except Exception:
+        sel = None
+    if not sel:
+        sel = json.load(open(p, encoding="utf-8"))
     state_p = os.path.join(ROOT, "data", "theme_sleeve_trade_state.json")
     try: state = json.load(open(state_p, encoding="utf-8"))
     except Exception: state = {}
-    today = datetime.now().strftime("%Y%m%d")
+    today = d
     done = set(state.get(today) or [])
     b_done = b_done_today(today)
     results = []
@@ -92,6 +105,9 @@ def main():
             results.append({"symbol": sym, "ok": False, "error": "calc:" + str(e)[:120]}); continue
         q = pos.get("quantity") or {}
         shares = int(q.get("probe_shares") or 0)
+        _sz = float(x.get("size_multiplier") or 1.0)  # 已由题材策略算好，agent 不参与
+        if _sz < 1.0 and shares >= 100:
+            shares = max(100, int(shares * _sz / 100) * 100)
         price = float(pos.get("current_price") or 0)
         rec = {"symbol": sym, "theme_id": x.get("theme_id"), "shares": shares, "price": price,
                "all_pass": pos.get("all_pass"), "warnings": (pos.get("warnings") or [])[:4],
