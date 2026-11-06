@@ -11,6 +11,27 @@ settings:
       enabled: true
       recipient: BF1510663A6C14D6E00E42B46108F51E
 tasks:
+- id: wolf_volume_turn_alert
+  name: 缩转放监控（盘中每3分钟）
+  description: '盯「缩转放」——他 2026-11-06 11:21 定义：缩转放只能是**分时相对缩量转放量**（不是日级对比昨日/均量，他明确否掉了"把上午缩的量在下午补回来"这种理解）。11:16 用法：「今天第二次机会在下午可能的缩转放，除此之外没有别的任何的买点了」。三条同时满足才推：① 今日折算全天量 <1.0×20日均（整体在缩）② 最近15分钟量 ÷ 今天最淡的15分钟桶 ≥1.3×（分时相对放量）③ 现价在VWAP上且近15分钟上行。每天最多推2条。'
+  enabled: true
+  schedule:
+    type: cron
+    expr: '*/3 9-15 * * mon-fri'
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_volume_turn_alert.py
+    args: []
+  output:
+    log_file: logs/wolf_volume_turn_alert_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_neck_break_alert
   name: 颈线突破提醒（盘中每5分钟）
   description: '盘中盯上证颈线（两只脚之间的最高点）。现价突破颈线 +0.5% 且同刻量比 ≥1.03× ⇒ 推 QQ。每天每个颈线只推一次。判据语料：他 2026-02-03「反弹 → 过颈线 → 加强」、2026-01-12「突破颈线的加速」——过颈线是加强/加仓信号，不是结构成立条件（结构由三根K线定）。'
