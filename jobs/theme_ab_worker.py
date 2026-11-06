@@ -59,6 +59,10 @@ def main():
             c.commit()
             try:
                 apath=next((os.path.join(ROOT,'data/asof',f'{day}_{x}.json') for x in ('a_intraday','a_facts') if os.path.exists(os.path.join(ROOT,'data/asof',f'{day}_{x}.json'))),None)
+                if not apath:
+                    import subprocess
+                    subprocess.run([sys.executable,os.path.join(ROOT,'jobs/theme_intraday_live.py'),'--date',day],env=os.environ,check=False,timeout=900)
+                    apath=next((os.path.join(ROOT,'data/asof',f'{day}_{x}.json') for x in ('a_intraday','a_facts') if os.path.exists(os.path.join(ROOT,'data/asof',f'{day}_{x}.json'))),None)
                 if not apath: raise RuntimeError('no A data')
                 holding=load_holding(); wave=load_wave(day)
                 A,araw=call(prompt('a_source')+f"\n\n数据：{apath}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_a_{day}_{slot}')
