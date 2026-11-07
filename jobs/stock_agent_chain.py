@@ -20,6 +20,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +31,32 @@ STEPS = (
     ("P3 agent 选股", "stock_agent_select.py", ()),
     ("P3 选股→仓位", "stock_agent_position.py", ()),
 )
+
+
+def has_theme(date: str) -> bool:
+    p = os.path.join(ROOT, "data", "mainline", date, "theme.json")
+    if os.path.exists(p):
+        return True
+    try:
+        import psycopg2
+        with psycopg2.connect(os.environ["DATABASE_URL"], connect_timeout=3) as c:
+            with c.cursor() as cur:
+                cur.execute("select 1 from theme_snapshot where trade_date=%s", (date[:4] + "-" + date[4:6] + "-" + date[6:],))
+                return cur.fetchone() is not None
+    except Exception:
+        return False
+
+
+def wait_theme(date: str, timeout: int = 1800) -> bool:
+    """L2 可能因上游 502 重试到 17:15；P3 不能只靠 16:55 文件。"""
+    t0 = time.time()
+    while not has_theme(date):
+        if time.time() - t0 > timeout:
+            print(f"[chain] wait theme timeout {timeout}s", flush=True)
+            return False
+        print("[chain] waiting theme.json / theme_snapshot ...", flush=True)
+        time.sleep(30)
+    return True
 
 
 def run(script: str, date: str, extra=()) -> bool:
@@ -47,6 +74,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=datetime.now().strftime("%Y%m%d"))
     a = ap.parse_args()
+    if not wait_theme(a.date):
+        print("[chain] P3 前置未就绪：theme.json/theme_snapshot 缺失", flush=True)
+        return 1
     for i, (label, script, extra) in enumerate(STEPS, 1):
         print("[chain] ▶ %s（%d/%d）" % (label, i, len(STEPS)), flush=True)
         if not run(script, a.date, extra):
