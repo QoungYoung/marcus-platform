@@ -40,6 +40,24 @@ def _clean(v):
     return v
 
 
+def latest_date(kind: str = "facts"):
+    ensure()
+    with _conn() as c:
+        with c.cursor() as cur:
+            cur.execute(f"SELECT max(trade_date) FROM theme_sleeve_daily WHERE {kind} IS NOT NULL")
+            r = cur.fetchone()
+            return r[0].strftime("%Y%m%d") if r and r[0] else None
+
+
+def load(date8: str, kind: str):
+    ensure(); d = "%s-%s-%s" % (date8[:4], date8[4:6], date8[6:8])
+    with _conn() as c:
+        with c.cursor() as cur:
+            cur.execute(f"SELECT {kind} FROM theme_sleeve_daily WHERE trade_date=%s", (d,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+
 def save(date8: str, kind: str, payload) -> bool:
     """kind: facts / selected / trade"""
     if kind not in ("facts", "selected", "trade"):

@@ -57,7 +57,18 @@ class ThemeSleeveMonitor:
         self.running = False
 
     def _pos(self):
-        """读 PG 持仓（上下位在 position_levels，不在 JSON）。"""
+        """优先读交易 API 持仓，失败回退 PG；统一 symbol。"""
+        try:
+            import urllib.request, json as _json
+            base = (os.getenv("MARCUS_API_URL") or "http://127.0.0.1:8000").rstrip("/")
+            with urllib.request.urlopen(base + "/api/v1/portfolio/positions?account=stock", timeout=3) as r:
+                data = _json.loads(r.read().decode())
+            rows = [{"symbol": _canon_symbol(x.get("symbol")), "volume": int(x.get("volume") or 0),
+                     "avg_price": float(x.get("avg_price") or 0)} for x in data if int(x.get("volume") or 0) > 0]
+            if rows:
+                return {r["symbol"]: r for r in rows}
+        except Exception:
+            pass
         try:
             import psycopg2
             c = psycopg2.connect(os.environ["DATABASE_URL"]); cur = c.cursor()

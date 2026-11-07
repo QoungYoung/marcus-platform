@@ -143,6 +143,25 @@ def _start_services(settings):
     # from app.services.t_build import start_t_build_service
     # start_t_build_service()
 
+    # 题材 A+B worker 常驻消费（不依赖 APScheduler 5 分钟任务）
+    try:
+        import subprocess as _sp
+        _root = str(Path(__file__).resolve().parent.parent)
+        _env = dict(os.environ)
+        _env.setdefault("PYTHONPATH", _root)
+        def _ab_loop():
+            while True:
+                try:
+                    _sp.run([sys.executable, os.path.join(_root, "jobs/theme_ab_worker.py"), "--once", "--apply"],
+                            cwd=_root, env=_env, timeout=900)
+                except Exception as _e:
+                    print(f"[Worker] theme_ab_worker loop: {_e}", file=sys.stderr)
+                time.sleep(30)
+        threading.Thread(target=_ab_loop, daemon=True, name="theme-ab-worker").start()
+        print("[Worker] ✅ theme_ab_worker 常驻线程已启动")
+    except Exception as _e:
+        print(f"[Worker] ⚠️ theme_ab_worker 启动失败: {_e}", file=sys.stderr)
+
     # 做T回测任务执行（worker 侧轮询 pending，重活不阻塞 API）
     from app.services.t_backtest_runner import start_t_backtest_worker
     start_t_backtest_worker()

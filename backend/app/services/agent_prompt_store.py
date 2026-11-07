@@ -6,7 +6,7 @@ from typing import Optional
 
 def _conn():
     import psycopg2
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    return psycopg2.connect(os.environ["DATABASE_URL"], connect_timeout=3)
 
 def ensure_schema() -> None:
     with _conn() as c:
@@ -41,11 +41,12 @@ def put_prompt(name: str, version: str, content: str, meta: Optional[dict] = Non
         with c.cursor() as cur:
             cur.execute("""
             insert into agent_prompts(name,version,content,meta,active)
-            values(%s,%s,%s,%s,%s)
-            on conflict(name,version) do update set content=excluded.content, meta=excluded.meta
-            """, (name, version, content, json.dumps(meta or {}, ensure_ascii=False), bool(activate)))
+            values(%s,%s,%s,%s,false)
+            on conflict(name,version) do update set content=excluded.content, meta=excluded.meta, active=false
+            """, (name, version, content, json.dumps(meta or {}, ensure_ascii=False)))
             if activate:
-                cur.execute("update agent_prompts set active=false where name=%s and version<>%s", (name, version))
+                cur.execute("update agent_prompts set active=false where name=%s", (name,))
+                cur.execute("update agent_prompts set active=true where name=%s and version=%s", (name, version))
 
 def activate(name: str, version: str) -> None:
     with _conn() as c:

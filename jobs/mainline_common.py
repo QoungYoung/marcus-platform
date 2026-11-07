@@ -75,6 +75,19 @@ def index_amount(typ: str, code: str, start: str, end: str) -> pd.Series:
 
 
 def daily_snapshot(date8: str) -> pd.DataFrame:
+    # 优先 PG 已落库日线（mkt_bars_daily），避免每次全市场重拉 API
+    try:
+        import psycopg2
+        with psycopg2.connect(os.environ["DATABASE_URL"], connect_timeout=3) as c:
+            with c.cursor() as cur:
+                cur.execute("select ts_code, close from mkt_bars_daily where trade_date=%s", (date8,))
+                rows = cur.fetchall()
+        if rows:
+            d = pd.DataFrame(rows, columns=["ts_code", "close"])
+            d["close"] = pd.to_numeric(d["close"], errors="coerce")
+            return d.dropna()
+    except Exception:
+        pass
     df = relay_query("daily", trade_date=date8)
     if df is None or len(df) == 0:
         return pd.DataFrame(columns=["ts_code", "close"])

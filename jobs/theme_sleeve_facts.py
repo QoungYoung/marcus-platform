@@ -41,16 +41,58 @@ def _i(v):
     return 0 if f != f else int(f)
 
 
+def _strict_open_times(symbol: str, date8: str, limit_price: float) -> dict:
+    """从 1 分钟线识别“真开板”：连续 >=2 分钟收在涨停价下方，算一次。"""
+    try:
+        from tushare_relay import relay_query
+        x = relay_query("stk_mins", ts_code=symbol, freq="1min",
+                        start_date=f"{date8[:4]}-{date8[4:6]}-{date8[6:]} 09:30:00",
+                        end_date=f"{date8[:4]}-{date8[4:6]}-{date8[6:]} 15:00:00", limit=1000)
+        if x is None or len(x) == 0: return {}
+        x = x.sort_values("trade_time")
+        closes = [float(c) for c in x["close"]]
+        # 只看首次触及涨停之后的分钟，之前是拉升段
+        first = next((i for i, c in enumerate(closes) if c >= float(limit_price) - 1e-6), None)
+        if first is None: return {}
+        below = [c < float(limit_price) - 1e-6 for c in closes[first:]]
+        episodes = 0; i = 0
+        while i < len(below):
+            if below[i]:
+                j = i
+                while j < len(below) and below[j]: j += 1
+                if j - i >= 2: episodes += 1
+                i = j
+            else:
+                i += 1
+        lows = [float(v) for v in x["low"]][first:]
+        return {"open_times_strict": episodes, "open_minutes_strict": sum(below),
+                "max_dip_strict": round((min(lows) / float(limit_price) - 1) * 100, 3) if lows else None}
+    except Exception:
+        return {}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=datetime.now().strftime("%Y%m%d"))
     ap.add_argument("--skip-intraday", action="store_true")
     a = ap.parse_args()
     base = os.path.join(ROOT, "data", "mainline", a.date)
-    theme = json.load(open(os.path.join(base, "theme.json"), encoding="utf-8"))
+    try:
+        from app.services.theme_snapshot_store import load as load_snapshot
+        theme = load_snapshot(a.date)
+    except Exception:
+        theme = None
+    if not theme:
+        theme = json.load(open(os.path.join(base, "theme.json"), encoding="utf-8"))
     ml = json.load(open(os.path.join(base, "mainline.json"), encoding="utf-8"))
     mcfg = load_yaml(os.path.join(ROOT, "config", "mainline", "universe_mainline.yaml"))
-    tcfg = load_yaml(os.path.join(ROOT, "config", "mainline", "generated", "universe_theme.yaml"))
+    try:
+        from app.services.theme_universe_store import load_theme_config
+        tcfg = load_theme_config() or {}
+    except Exception:
+        tcfg = {}
+    if not tcfg:
+        tcfg = load_yaml(os.path.join(ROOT, "config", "mainline", "generated", "universe_theme.yaml"))
     ts = {x["id"]: x for x in (tcfg.get("themes") or []) + (tcfg.get("satellite_themes") or [])}
     main_tracks = set()
     for m in mcfg.get("mainlines") or []:
@@ -143,9 +185,38 @@ def main():
     for _tid in _inc:
         if _tid not in _active_ids and _tid in tcfg:
             _active_ids.append(_tid)
+    # 只做指定题材（A 也从这几个里找）
+    try:
+        _allow_cfg=load_yaml(os.path.join(ROOT,'config','mainline','theme_allowed.yaml')) or {}
+        _allow_ids=set(_allow_cfg.get('allowed_theme_ids') or [])
+        if _allow_ids:
+            _active_ids=[x for x in _active_ids if x in _allow_ids]
+    except Exception as _e:
+        print('[theme] allow filter skip:',str(_e)[:80],flush=True)
+    # 源题材/持仓题材即使 verdict=avoid 也要保留，否则 A 看不到源
+    for _tid in ('robot_actuator','humanoid_robot'):
+        if _tid in ts and _tid not in _active_ids:
+            _active_ids.append(_tid)
+    try:
+        import psycopg2
+        c=psycopg2.connect(os.environ['DATABASE_URL']); cur=c.cursor()
+        cur.execute("select symbol from paper_positions where account_id='stock' and volume>0")
+        held=[r[0] for r in cur.fetchall()]
+        if held:
+            cur.execute("select distinct theme_id from theme_membership where symbol=any(%s) and as_of_date=(select max(as_of_date) from theme_membership)",(held,))
+            for (tid,) in cur.fetchall():
+                if tid in ts and tid not in _active_ids: _active_ids.append(tid)
+        c.close()
+    except Exception as e:
+        print('[theme] held theme skip:',str(e)[:80],flush=True)
     out = []
     _active = set(_active_ids)
-    for x in (theme.get("focus") or []) + (theme.get("trial") or []) + (theme.get("watch") or []):
+    _items = list((theme.get("focus") or []) + (theme.get("trial") or []) + (theme.get("watch") or []))
+    _seen = {x.get("id") for x in _items}
+    for _tid in _active_ids:
+        if _tid not in _seen:
+            _items.append({"id": _tid, "name": (full.get(_tid) or {}).get("name") or _tid})
+    for x in _items:
         tid = x.get("id")
         if tid not in _active:
             continue
@@ -210,7 +281,8 @@ def main():
         tag = "plain"
         if u or zz:
             if open_max >= 2 or (zz and (len(zz) / max(1, len(u) + len(zz))) >= 0.4 and len(zz) >= 2):
-                tag = "failed"
+                # 炸板只作证据；不再打 failed 结论
+                tag = "open_heavy"
             elif len(u) >= 4 and mx <= 1:
                 tag = "graduation"
             elif ladder["1"] >= 1 and ladder["2"] >= 1 and (ladder["3+"] >= 1 or ladder["2"] >= 2):
@@ -244,10 +316,22 @@ def main():
                    "wind": [{k: x.get(k) for k in ("symbol", "first_time", "open_times", "fd_amount", "limit_times", "pct")} for x in wind],
                    "mid": [{k: x.get(k) for k in ("symbol", "first_time", "open_times", "fd_amount", "limit_times", "pct")} for x in mid],
                }}
+        if leader:
+            _st = _strict_open_times(leader["symbol"], a.date, leader.get("close") or 0)
+            if _st:
+                rec["b4"].update(_st)
+                _ld = rec["role_detail"].get("leader") or {}
+                _ld.update(_st); rec["role_detail"]["leader"] = _ld
+                leader["open_times_strict"] = _st.get("open_times_strict")
+        try:
+            from app.services.theme_bellwether_bridge import attach as attach_bellwether
+            attach_bellwether(rec,set(mem),a.date)
+        except Exception as _be:
+            rec["bellwether_error"]=str(_be)[:80]
+
         tier = "watch"
-        if tag in ("graduation", "failed"):
-            tier = "reject"
-        elif tag == "complete" and (fx.get("breadth") or 0) >= 0.5:
+        # B4 只作为证据，不再单凭 open_max/z 否决整个题材
+        if tag == "complete" and (fx.get("breadth") or 0) >= 0.5:
             tier = "probe_candidate"
         elif (fx.get("ret1") or 0) > 0.03 and (fx.get("breadth") or 0) > 0.5:
             tier = "watch_strong"
@@ -304,7 +388,9 @@ def main():
         if rec.get("intraday") and rec["intraday"].get("roles"):
             rs = [z.get("r") for z in rec["intraday"]["roles"] if z.get("r") is not None]
             if rs:
-                _sync = {"mean": round(sum(rs) / len(rs), 2), "burst": sum(1 for x in rs if x >= 1.5), "n": len(rs)}
+                # burst 没有狼大出处，只保留逐票 r 与均值描述，不生成硬阈值字段
+                _sync = {"mean": round(sum(rs) / len(rs), 2), "n": len(rs),
+                         "roles": [{"symbol": z.get("symbol"), "r": z.get("r")} for z in rec["intraday"]["roles"]]}
         _state = "weak"
         _flags = []
         if _lp is not None and _lp <= 0:
@@ -320,7 +406,7 @@ def main():
         rec["first_linkage"] = bool(_state == "linked" and not _prev_linked)
         if _state == "broken":
             rec["tier"] = "reject"
-        elif _state == "linked" and rec["first_linkage"] and (fx.get("ret1") or 0) > 0.03 and (fx.get("breadth") or 0) >= 0.5 and tag not in ("failed", "graduation"):
+        elif _state == "linked" and rec["first_linkage"] and (fx.get("ret1") or 0) > 0.03 and (fx.get("breadth") or 0) >= 0.5:
             rec["tier"] = "probe_candidate"
         elif _state == "linked" and rec.get("tier") == "watch" and (fx.get("ret1") or 0) > 0 and (fx.get("breadth") or 0) >= 0.4:
             rec["tier"] = "watch_strong"
@@ -351,6 +437,11 @@ def main():
     res = {"as_of": a.date, "sleeve": "theme", "mainline": ml.get("mainline"), "tracks": sorted(main_tracks), "themes": out}
     p = os.path.join(base, "theme_sleeve_facts.json")
     json.dump(res, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    try:
+        from theme_sleeve_store import save as save_sleeve
+        save_sleeve(a.date, "facts", res)
+    except Exception as e:
+        print("[theme] PG facts save fail:", str(e)[:100], flush=True)
     print("written", p, "themes", len(out))
     for z in out:
         print(z["tier"], z["theme_id"], "| b4", z["b4"]["tag"], z["b4"]["u"], "/", z["b4"]["z"],

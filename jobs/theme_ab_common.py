@@ -4,6 +4,7 @@ from __future__ import annotations
 import json, os, re, sys
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0,os.path.join(ROOT,'backend'))
+sys.path.insert(0,ROOT)
 sys.path.insert(0,os.path.join(ROOT,'core'))
 
 def connect():
@@ -51,4 +52,10 @@ def validate_b(B):
     if not valid_symbol(leader): return False,'leader_not_code'
     seg=str(B.get('leader_segment') or '').lower()
     if seg in ('support','配套','配套段'): return False,'leader_support_segment'
+    try:
+        from app.services.wolf_leader_rules import check
+        ok, why = check(leader)
+        if not ok: return False, why
+    except Exception:
+        pass
     return True,'ok'

@@ -61,9 +61,7 @@ def _validate_account(account: str) -> None:
 def _make_executor(request: Request, account: str = "stock"):
     """按账户创建执行器：stock 走 VN.PY bridge，其他账户走 PaperTradingEngine 直连。"""
     from app.core.trading.marcus_trade import MarcusVNPyExecutor
-    bridge = getattr(request.app.state, 'vnpy_bridge', None)
-    if account == "stock":
-        return MarcusVNPyExecutor(bridge=bridge, account_id=account)
+    # 统一走 PaperTradingEngine 持久化账本；stock 不再使用 VN.PY bridge 内存账本
     from paper_engine import PaperTradingEngine
     from workspace_detector import DATA_DIR
     engine = PaperTradingEngine(data_dir=str(DATA_DIR), account_id=account)
@@ -280,6 +278,14 @@ def execute_trade(trade: TradeRequest, request: Request):
 
         # Success
         print(f"[交易] ✅ {direction} {trade.symbol} x{result.get('volume', trade.volume)} @ ¥{trade.price:.2f}", flush=True)
+        try:
+            from app.services.paper_ledger_sync import sync as _sync_ledger
+            _sync_ledger({"order_id": result.get("order_id") or result.get("orderid"),
+                          "symbol": trade.symbol, "direction": direction,
+                          "price": trade.price, "volume": int(result.get("volume") or trade.volume),
+                          "reason": trade.reason or ""}, account=trade.account)
+        except Exception as _e:
+            print(f"[交易] ⚠️ paper ledger sync fail: {str(_e)[:120]}", flush=True)
         # ⑧ 狼大买点生产化：在狼大/Pi 建仓落单处写 buy_point_log 前向验证（模拟盘生产；仅记录不拦）
         if trade.side.lower() == "buy":
             try:

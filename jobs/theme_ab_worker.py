@@ -7,6 +7,7 @@ from datetime import datetime
 from theme_ab_common import load_holding,load_wave,validate_b
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0,os.path.join(ROOT,'backend'))
+sys.path.insert(0,ROOT)
 sys.path.insert(0,os.path.join(ROOT,'core'))
 
 def db():
@@ -27,7 +28,7 @@ def ensure(c):
           primary key(trade_date, slot)
         )""")
 
-def call(prompt, sid, timeout=600):
+def call(prompt, sid, timeout=1200):
     import requests
     url=os.getenv('WOLF_V3_AGENT_URL','http://dsh:3001/chat')
     r=requests.post(url,json={'message':prompt,'session_id':f'{sid}_{int(time.time()*1000)}'},timeout=timeout)

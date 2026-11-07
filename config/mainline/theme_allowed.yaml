@@ -1,0 +1,24 @@
+version: 1
+# 只做这些题材；其他一律不进 A/B 候选池
+allowed:
+  - 商业航天
+  - 卫星互联网
+  - 人形机器人
+  - 减速器
+  - 机器人执行器
+  - 机器人概念
+  - 贵金属
+  - 黄金
+  - 医药
+  - 医疗器械
+  - 创新药
+  - CXO
+  - AI应用
+allowed_theme_ids:
+  - space
+  - satellite
+  - humanoid_robot
+  - robot_actuator
+  - ai_app
+  - medical_device
+  - innovative_drug
