@@ -1,0 +1,6 @@
+version: 2
+as_of: "2026-10-27"
+holding_days: 5
+criteria_pass_min: 4
+review_on_fail: true
+description: "5 天持有复核；只输出每日涨幅和判据上下文，买卖由用户判断。"

@@ -1,0 +1,74 @@
+version: 1
+as_of: '2026-11-03'
+description: 狼大题材策略规范（只记录原话/明确语义，不写自设阈值）
+rules:
+- id: role_triad
+  text: 一个龙头，两个风向，三个 10CM 中流砥柱
+  source: 狼大发言
+  applies:
+  - theme
+  - mainline
+  note: 选股先分角色，不是只选当日最强
+- id: overhang_light
+  text: 业绩不业绩无所谓，重点是套牢要少
+  source: 狼大发言
+  applies:
+  - theme
+  - mainline
+  - trend
+- id: leader_first
+  text: 大哥先涨，二哥不掉
+  source: 狼大发言
+  applies:
+  - theme
+- id: leader_dead_exit
+  text: 龙头风向标死了就不能做了，麻溜跑
+  source: 狼大发言
+  applies:
+  - theme
+  - mainline
+- id: climax_spillover
+  text: 高潮/炸板切外溢
+  source: 狼大发言
+  applies:
+  - theme
+- id: first_linkage
+  text: 独立资金第一次尝试做板块联动；第一波不挣钱，第二波才是拿来挣钱
+  source: 狼大发言
+  applies:
+  - theme
+- id: t_done
+  text: 我早都 T 完了
+  source: 狼大发言
+  applies:
+  - theme
+  - mainline
+- id: prior_leader_rotation
+  text: 先涨的都不是之前的人气标，后涨的一定是之前一批人气标
+  source: 狼大发言
+  applies:
+  - theme
+- id: intraday_sync
+  text: 13:30 进量
+  source: 狼大发言
+  applies:
+  - theme
+- id: high_low_split
+  text: 高位和低位是两套规则
+  source: 狼大发言
+  applies:
+  - theme
+unsourced_thresholds:
+- id: b4_open_max_failed
+  current: jobs/theme_sleeve_facts.py open_max>=2 -> failed
+  status: 已降级为证据，但历史代码仍需审计
+resolved_thresholds:
+- id: breadth_0_35
+  status: removed_from_select
+  date: '2026-11-03'
+- id: tier_whitelist
+  status: removed_from_select
+  date: '2026-11-03'
+- id: action_not_buy
+  status: replaced_by_new_buy
+  date: '2026-11-03'

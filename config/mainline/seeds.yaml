@@ -1,0 +1,384 @@
+version: 1
+as_of: '2026-10-26'
+description: 'P0.5 语义种子：只写“主题叫什么、别名、层级意图、是否卫星、父赛道提示”， 不写任何代码。代码、父赛道、成员、leader、caps
+  由 mainline_resolve_universe.py 从 Tushare 的申万/中证/东财/同花顺数据推导。
+
+  '
+track_seeds:
+- id: semiconductor
+  name: 半导体
+  aliases:
+  - 半导体
+  sleeve: track
+  parent_mainline: ai_tech
+- id: components
+  name: 元件
+  aliases:
+  - 元件
+  sleeve: track
+  parent_mainline: ai_tech
+- id: optical
+  name: 光学光电子
+  aliases:
+  - 光学光电子
+  - 光学
+  sleeve: track
+  parent_mainline: ai_tech
+- id: communication_equipment
+  name: 通信设备
+  aliases:
+  - 通信设备
+  sleeve: track
+  parent_mainline: ai_tech
+- id: computer_equipment
+  name: 计算机设备
+  aliases:
+  - 计算机设备
+  sleeve: track
+  parent_mainline: ai_tech
+- id: computer_application
+  name: 计算机应用
+  aliases:
+  - 计算机应用
+  - 软件开发
+  - IT服务
+  sleeve: track
+  parent_mainline: ai_tech
+- id: automation
+  name: 电气自动化设备
+  aliases:
+  - 电气自动化设备
+  - 自动化设备
+  - 机器人
+  sleeve: track
+  parent_mainline: ai_tech
+- id: power_equipment
+  name: 电源设备
+  aliases:
+  - 电源设备
+  sleeve: track
+  parent_mainline: new_energy
+- id: aerospace
+  name: 航天装备
+  aliases:
+  - 航天装备
+  - 航天
+  sleeve: track
+  parent_mainline: ai_tech
+- id: aviation
+  name: 航空装备
+  aliases:
+  - 航空装备
+  - 航空
+  sleeve: track
+  parent_mainline: ai_tech
+- id: medicine
+  name: 医药
+  aliases:
+  - 化学制药
+  - 化学制剂
+  - 生物制品
+  - 医疗器械
+  sleeve: track
+  parent_mainline: pharma
+- id: resources
+  name: 资源/周期
+  aliases:
+  - 工业金属
+  - 有色金属
+  - 黄金
+  sleeve: satellite
+  parent_mainline: null
+- id: agriculture
+  name: 农业
+  aliases:
+  - 畜禽养殖
+  - 农业综合
+  - 种植业
+  sleeve: satellite
+  parent_mainline: null
+- id: finance
+  name: 金融
+  aliases:
+  - 证券
+  - 银行
+  - 保险
+  sleeve: satellite
+  parent_mainline: null
+- id: construction
+  name: 基建
+  aliases:
+  - 基础建设
+  - 建筑装饰
+  - 专业工程
+  sleeve: satellite
+  parent_mainline: null
+theme_seeds:
+- id: storage
+  name: 存储芯片
+  aliases:
+  - 存储芯片
+  - 存储
+  - DRAM
+  - NAND
+  level_hint: theme
+  sleeve: theme
+  parent_hint: semiconductor
+- id: semi_equipment
+  name: 半导体设备
+  aliases:
+  - 半导体设备
+  level_hint: industry
+  sleeve: theme
+  parent_hint: semiconductor
+- id: semi_material
+  name: 半导体材料
+  aliases:
+  - 半导体材料
+  level_hint: industry
+  sleeve: theme
+  parent_hint: semiconductor
+- id: chip_design
+  name: 芯片设计
+  aliases:
+  - 芯片设计
+  - 集成电路
+  - 数字芯片设计
+  level_hint: industry
+  sleeve: theme
+  parent_hint: semiconductor
+- id: packaging
+  name: 先进封装
+  aliases:
+  - 先进封装
+  - 集成电路封测
+  - 封测
+  level_hint: industry
+  sleeve: theme
+  parent_hint: semiconductor
+- id: pcb
+  name: PCB
+  aliases:
+  - PCB
+  - 印制电路板
+  level_hint: industry
+  sleeve: theme
+  parent_hint: components
+- id: passive
+  name: 被动元件
+  aliases:
+  - 被动元件
+  level_hint: industry
+  sleeve: theme
+  parent_hint: components
+- id: cpo
+  name: CPO
+  aliases:
+  - CPO
+  - 光电共封装
+  - 共封装光学
+  - 光通信
+  level_hint: route
+  sleeve: theme
+  parent_hint: communication_equipment
+- id: optical_module
+  name: 光模块
+  aliases:
+  - 光模块
+  - 光通信
+  level_hint: theme
+  sleeve: theme
+  parent_hint: communication_equipment
+- id: communication_transmission
+  name: 通信传输设备
+  aliases:
+  - 通信传输设备
+  - 通信网络设备及器件
+  - 通信线缆及配套
+  level_hint: industry
+  sleeve: theme
+  parent_hint: communication_equipment
+- id: compute
+  name: 算力
+  aliases:
+  - 算力
+  - 全球算力
+  - 算力概念
+  level_hint: theme
+  sleeve: theme
+  parent_hint: computer_equipment
+- id: ai_app
+  name: AI 应用
+  aliases:
+  - AI应用
+  - 人工智能
+  level_hint: theme
+  sleeve: theme
+  parent_hint: computer_application
+- id: humanoid_robot
+  name: 人形机器人
+  aliases:
+  - 人形机器人
+  - 机器人
+  level_hint: theme
+  sleeve: theme
+  parent_hint: automation
+- id: robot_actuator
+  name: 机器人执行器
+  aliases:
+  - 机器人执行器
+  - 减速器
+  - 丝杠
+  level_hint: theme
+  sleeve: theme
+  parent_hint: automation
+- id: liquid_cooling
+  name: 液冷
+  aliases:
+  - 液冷
+  - 液冷服务器
+  level_hint: theme
+  sleeve: theme
+  parent_hint: computer_equipment
+- id: battery
+  name: 电池
+  aliases:
+  - 电池
+  - 新能电池
+  - 锂电池
+  - 动力电池
+  level_hint: theme
+  sleeve: theme
+  parent_hint: power_equipment
+- id: pv
+  name: 光伏
+  aliases:
+  - 光伏
+  - 光伏产业
+  - 光伏设备
+  level_hint: theme
+  sleeve: theme
+  parent_hint: power_equipment
+- id: optical_component
+  name: 光学元件
+  aliases:
+  - 光学元件
+  level_hint: industry
+  sleeve: theme
+  parent_hint: optical
+- id: space
+  name: 航天
+  aliases:
+  - 航天装备
+  - 航天
+  level_hint: industry
+  sleeve: theme
+  parent_hint: aerospace
+- id: satellite
+  name: 卫星
+  aliases:
+  - 卫星
+  - 卫星导航
+  level_hint: theme
+  sleeve: theme
+  parent_hint: aerospace
+- id: aviation
+  name: 航空装备
+  aliases:
+  - 航空装备
+  - 航空
+  level_hint: industry
+  sleeve: theme
+  parent_hint: aviation
+- id: innovative_drug
+  name: 创新药
+  aliases:
+  - 创新药
+  - 化学制剂
+  level_hint: theme
+  sleeve: theme
+  parent_hint: medicine
+- id: medical_device
+  name: 医疗器械
+  aliases:
+  - 医疗器械
+  - 医疗设备
+  - 医疗耗材
+  level_hint: industry
+  sleeve: theme
+  parent_hint: medicine
+- id: resources
+  name: 资源/周期
+  aliases:
+  - 工业金属
+  - 有色金属
+  - 黄金
+  level_hint: theme
+  sleeve: satellite
+  parent_track: resources
+- id: agriculture
+  name: 农业
+  aliases:
+  - 畜禽养殖
+  - 农业综合
+  - 种植业
+  level_hint: theme
+  sleeve: satellite
+  parent_track: agriculture
+- id: finance
+  name: 金融
+  aliases:
+  - 证券
+  - 银行
+  - 保险
+  level_hint: theme
+  sleeve: satellite
+  parent_track: finance
+- id: construction
+  name: 基建
+  aliases:
+  - 基础建设
+  - 建筑装饰
+  - 专业工程
+  level_hint: theme
+  sleeve: satellite
+  parent_track: construction
+- id: media
+  name: 传媒文娱
+  aliases:
+  - 传媒
+  - 影视概念
+  - 影视院线
+  - 文娱消费
+  - 短剧互动游戏
+  - 游戏Ⅲ
+  level_hint: theme
+  sleeve: theme
+  parent_hint: ai_tech
+- id: data_elements
+  name: 数据要素
+  aliases:
+  - 数据要素
+  - 数据确权
+  - 数据资产
+  level_hint: theme
+  sleeve: theme
+  parent_hint: computer_application
+- id: goods_economy
+  name: 谷子经济
+  aliases:
+  - 谷子经济
+  - 谷子
+  - IP经济
+  level_hint: theme
+  sleeve: theme
+  parent_hint: media
+- id: xinchuang
+  name: 信创
+  aliases:
+  - 信创
+  - 国产软件
+  - 国产操作系统
+  level_hint: theme
+  sleeve: theme
+  parent_hint: computer_application

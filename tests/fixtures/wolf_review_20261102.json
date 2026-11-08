@@ -1,0 +1,96 @@
+{
+ "ok": true,
+ "date": "20261102",
+ "violations": [
+  {
+   "rule_id": "climax_spillover",
+   "severity": "medium",
+   "theme_id": "media",
+   "evidence": "media、data_elements、xinchuang 三个主题的 spillover 是同一份 5 条名单：humanoid_robot 001266.SZ、robot_actuator 605189.SH、satellite 600345.SH、innovative_drug 002940.SZ、space 688311.SH——即「其余每个主题各取一只龙头」，不带 r/v1330/vopen，不带触发条件与目标仓位。而这些候选在同一份数据里全部处于不可做状态：space u=0、ret1=-0.039、first_linkage=false；satellite u=1、first_linkage=false、winner_rate=22.91/price_vs_cost85=-0.1995（全批套牢最重）；innovative_drug 三个中军 limit_times 全 0；humanoid_robot leader open_times=2、中军全未封。与此同时 13:30 进量最强的两只——xinchuang 300377.SZ(r=0.173、20CM 13:33:33 封死 open_times=0) 与 robot_actuator 300508.SZ(r=0.227、13:31 封板)——都不在名单里。本轮所有主题 selected=false、new_buy=false，无实际下单",
+   "why": "狼大原话「高潮/炸板切外溢」。切外溢的前提是切到一个「能做」的方向，现在名单机械取各主题龙头，不看主题是否成立：space 一个涨停都没有、板块整体亏 3.9%，satellite 是全批套牢最重，innovative_drug 中军一个都没封。从 media 高潮里切到这些地方，等于从一个不能追的高潮换到一个根本不能做的板块；真正有午后进量、龙头封死的 xinchuang/robot 反被排除（它们自己也被判 climax），逻辑自相矛盾——外溢目标必须比源主题更健康",
+   "fix": "spillover 候选必须过狼大规则再入列：role_triad 成立（leader 封板 + ≥2 wind 封板 + ≥3 mid 封板）、first_linkage≠false、overhang 不劣于源主题；禁止机械取各主题龙头，禁止把 u=0/ret1<0 的主题列为承接；承接排序用 13:30 进量 + 封板时点 + 套牢轻重合成"
+  },
+  {
+   "rule_id": "role_triad",
+   "severity": "medium",
+   "theme_id": "global",
+   "evidence": "聚合值与角色明细直接矛盾：xinchuang 的 roles.mid 只有 1 个（003019.SZ），role_detail.mid 只有 2 条（003019.SZ 与 002929.SZ），而 002929.SZ 同时出现在 role_detail.wind 里且数值完全相同，sync.n 已降到 4；agent 自己在 counter_evidence 里也写「mid仅003019.SZ一家_二哥不足」，但 internal_linkage 仍报 mid_hold=3、wind_up=2、state=linked。space 的 roles.wind 只有 1 个（688552.SH）、role_detail.wind 也只有 1 条、sync.n=5，internal_linkage 仍报 wind_up=2、mid_hold=3、linked。media/data_elements 的 mid_hold=3、wind_up=2 与明细一致，可作对照",
+   "why": "狼大要求「一个龙头，两个风向，三个 10CM 中流砥柱」。xinchuang 中军实际只剩 1 个、space 风向标只剩 1 个，聚合字段却仍报 2 风 3 中军且 state=linked——说明 internal_linkage 是独立赋值，不是从 role_detail 聚合。这个假值恰好决定「能不能做」：按 mid_hold=3 就该进候选，按真实的 1 个中军就该否决，结论随一个写死的常数而变。本轮无 selected，故按中等计",
+   "fix": "internal_linkage 的 wind_up/mid_hold 必须由 role_detail 去重后计数生成，并与 roles 数组长度、sync.n 三方一致，任一不一致即报错终止而不是静默输出 linked；同一 symbol 只能占一个角色（002929.SZ 不得同时算 mid 与 wind）"
+  },
+  {
+   "rule_id": "climax_spillover",
+   "severity": "medium",
+   "theme_id": "global",
+   "evidence": "spillover 条目只有 name/symbol/theme_id 三个字段，上一版还带 r/v1330/vopen，这一版全部删掉；三个主题共用同一份名单，无触发条件（什么价位/时点切）、无目标仓位、无失效条件。counter_evidence 写「按高潮/炸板切外溢_不给新仓追龙头_只等切出」，但「等切出」等的是什么、切给谁、切多少，输出里没有任何可执行信息",
+   "why": "狼大原话「高潮/炸板切外溢」是一个动作，动作必须可执行：切到哪、什么条件触发、切多少。现在只给静态 5 只名单且不带量能证据（r/v1330 被删），无法判断这些标的是不是「正在被资金承接」，「切外溢」退化成观察清单，与 trim 无本质区别。本轮无下单，故中等",
+   "fix": "spillover 每条至少带承接强度证据（r/v1330、封板时点、封单额）、触发条件（次日不破板/回踩不破均线/放量过前高）、目标仓位与失效条件；三个 climax 主题应给出各自不同的承接名单（源主题不同，套牢与位置不同），共用同一份名单视为未完成"
+  },
+  {
+   "rule_id": "intraday_sync",
+   "severity": "medium",
+   "theme_id": "global",
+   "evidence": "r 的构造是 v1330/vopen（上一版 media spillover 可反推：301052 6482/327599≈0.020、300133 70764/767131≈0.092、600892 682/468085≈0.0015）。后果仍在：media 三个中军 9:41-9:50 封板，r=0.001/0.001/0.008；未封的 300133 r=0.092 居首。robot_actuator 封死的 605189 r=0.017，未封的 000026 r=0.11、300508 r=0.227 居前。xh 且本轮 r 不再附着于任何 spillover 候选，13:30 进量证据在承接环节完全消失",
+   "why": "狼大原话「13:30 进量」。用「13:30 后成交量占全日比」度量进量，对早封板标的是系统性惩罚：封得越早越牢，13:30 越没量，r 越接近 0，反被判「没进量」；没封住、全天换手的票 r 最高。这与「大哥先涨，二哥不掉」正好相反。这一版又把 r 从 spillover 删掉后，13:30 进量既不影响买入、也不影响承接排序，规则在决策链上彻底消失",
+   "fix": "进量指标按封板状态分流：早封板用「封板时点 + 封单额/流通市值」判定，未封板才用 13:30 后量占比；r 的定义与适用对象写进规范并单测；spillover 承接排序必须带进量证据"
+  },
+  {
+   "rule_id": "b4_open_max_failed",
+   "severity": "medium",
+   "theme_id": "global",
+   "evidence": "policy 中唯一残留的 unsourced_threshold（open_max>=2 -> failed，已降级为证据、历史代码仍需审计）。标签改名 open_heavy 后仍不单调：media open_max=7/open_sum=96/u=43 → open_heavy；robot_actuator open_max=2/open_sum=3/u=3 → open_heavy；humanoid open_max=2/open_sum=2/u=1 → open_heavy；innovative_drug open_max=1 但 z=2 → open_heavy；satellite open_max=1、z=0 → plain；space open_max=0 → plain。open_max=2 与 open_max=7 同标签，open_max=1 也命中",
+   "why": "改名只换了口吻，底层仍是同一条无出处阈值在 facts 层生成标签，且连自己的「open_max>=2」都没对齐（说明混入了 z>=2）。狼大原话是「高潮/炸板切外溢」，炸板该触发切外溢分支，不需要一个自设标签概括板块质量；该标签仍进入 agent 的 counter_evidence（media「tag=open_heavy_涨停家数多且无晋级」、data_elements「tag=open_heavy_无晋级」），与 climax 判定互相喂料",
+   "fix": "从 theme_sleeve_facts.py 删除 open_max>=2 -> 标签的生成逻辑，只保留 open_max/open_sum/z 原始数值；open_heavy 若要保留必须是纯描述字段并注明由哪一条数值决定；修正 open_max=1、u=1 却命中 open_heavy 的不一致"
+  },
+  {
+   "rule_id": "leader_first",
+   "severity": "medium",
+   "theme_id": "global",
+   "evidence": "20CM 龙头的 leader_pct 仍按 10CM 口径记录：media role_detail.leader 300413.SZ pct=20.0，internal_linkage.leader_pct=9.8039；data_elements leader 300085.SZ pct=20.018，internal_linkage.leader_pct=10.0159；xinchuang leader 300377.SZ pct=20.0，internal_linkage.leader_pct=10.0159。10CM 标的全部对得上（humanoid 001266 10.006、robot_actuator 605189 10.021、satellite 600345 10.014、innovative_drug 002940 10.0047、space 688311 10.3896）",
+   "why": "狼大原话「大哥先涨，二哥不掉」，大哥涨多少是这条规则的度量。所有 300 开头创业板龙头被系统性按 10% 记账（实际 20%），主板/科创口径正常，说明聚合层统一按 10% 截断。agent 理由文本已用正确的 +20.0%，但 state=linked 与 wind_up/mid_hold 仍由错误聚合值驱动，度量层未修",
+   "fix": "leader_pct 必须与 role_detail 同源计算并按板块涨跌幅限制（10CM/20CM）标注；internal_linkage 只允许由 role_detail 聚合，禁止独立赋值或统一截断；补单测覆盖 300/688/605/001 四类代码"
+  },
+  {
+   "rule_id": "overhang_light",
+   "severity": "medium",
+   "theme_id": "global",
+   "evidence": "8 个主题 price_vs_cost85 全为负，winner_rate 22.91~52.4。media 自身 52.4/-0.0781 是全批套牢最轻，但它的 spillover 承接名单里包含 satellite（22.91/-0.1995，全批最重）与 space（29.71/-0.1492），不含任何套牢轻于自己的方向；overhang 在整份输出里只出现在 counter_evidence 文本中，不参与任何排序或仓位计算（8 个主题 size 全为 0）",
+   "why": "狼大原话「业绩不业绩无所谓，重点是套牢要少」。被列为「重点」的维度双向失效：买入侧套牢最轻的 media 与最重的 satellite 得到同样的 0 仓；承接侧把资金从套牢最轻的 media（-7.81%）指向套牢最重的 satellite（-19.95%）——切外溢切到了更差的位置，与「重点是套牢要少」完全相反",
+   "fix": "overhang 必须成为承接名单的一级排序键：切外溢只能切到套牢不劣于源主题的方向，否则宁可不切；买入侧与承接侧都要给出套牢分档，仅在 counter_evidence 出现视为未落地"
+  },
+  {
+   "rule_id": "high_low_split",
+   "severity": "low",
+   "theme_id": "global",
+   "evidence": "8 个主题 price_vs_cost85 全为负（satellite -0.1995、space -0.1492、xinchuang -0.1409、innovative_drug -0.1392、humanoid -0.1344、data_elements -0.133、robot_actuator -0.1033、media -0.0781），winner_rate 从 22.91 到 52.4 跨度一倍多；media（52.4、ret1 8.16%，首波即高潮，高位）与 satellite（22.91、-0.1995，低位深套）走同一套 b4/overhang/仓位规则，最终同样 size=0",
+   "why": "狼大原话「高位和低位是两套规则」。当前既不区分位置也不区分第一波与高潮：media 的高位结构该「切外溢」，satellite 的低位深套该「等第二波或直接放弃」，两者共用同一套标签与同一套零仓结论，等于把两套规则压成一套。本轮无 selected，影响停留在框架层",
+   "fix": "按位置拆两套：低位用 overhang_light + first_linkage + 第二波确认；高位用 leader_dead_exit + climax_spillover；仓位与 b4 判定阈值按位置分别取值，禁止跨位置共用同一套标签与门限"
+  },
+  {
+   "rule_id": "first_linkage",
+   "severity": "low",
+   "theme_id": "media",
+   "evidence": "agent 理由写「first_linkage=true ret1 0.0816_breadth 0.7382_第一波最强」，b4 ladder {1:43,2:0,3+:0}，ret1 已 8.16%；处置是 state=climax、action=trim、size=0，spillover 指向其它主题的龙头，没有本主题第二波候选、没有回补时点；全部主题无 prior_leader 字段",
+   "why": "狼大原话「独立资金第一次尝试做板块联动；第一波不挣钱，第二波才是拿来挣钱」。media 今天就是第一波、且已涨 8.16%，按原话第一波本不该指望挣钱，真正要做的是等第二波——落地只到 trim + 切到别家龙头，没有「media 自己的第二波由谁承接、什么条件触发、什么时候回补」的计划，first_linkage 的后半句没有落地",
+   "fix": "first_linkage=true 且处于第一波高潮时，除 trim 外必须输出本主题的第二波观察计划（候选人气标、触发条件、回补时点），并与 prior_leader 名单衔接；第一波收益不得作为 edge 计入"
+  },
+  {
+   "rule_id": "prior_leader_rotation",
+   "severity": "low",
+   "theme_id": "global",
+   "evidence": "全部主题无 prior_leader/历史人气标字段；roles.leader 均为当日涨幅最高者；603171.SH 同时计入 data_elements 与 xinchuang，两边 sync r 都是 0.036；002929.SZ 在 xinchuang 内同时占 mid 与 wind，数值完全相同。（对比：688776.SH 已从 space 的 wind 中移除，跨主题重复已修掉一处）",
+   "why": "狼大原话「先涨的都不是之前的人气标，后涨的一定是之前一批人气标」。当前只按当日涨幅贴角色标签，没有「是否此前人气标」身份，无法区分第一波（非人气标先涨）与第二波（人气标接力）；603171 跨主题连 r 都相同，说明成分被复用，不是各主题的真实归属",
+   "fix": "增加 prior_leader 字段（历史人气标名单 + 最近一次涨停日），第二波判定要求 leader/wind 命中 prior_leader；同一 symbol 跨主题出现须标注唯一归属，禁止重复计角色与复用同一 sync 值"
+  },
+  {
+   "rule_id": "t_done",
+   "severity": "low",
+   "theme_id": "media",
+   "evidence": "media ret1=0.0816、winner_rate=52.4、b4 u43/z3/open_max7、leader 112548 封板，agent 给 state=climax、action=trim、size=0（方向正确）；但全部主题无 position/已 T 次数/底仓/浮盈字段，trim 无法落到具体持仓数量，spillover 也没有「切出多少」的数量",
+   "why": "狼大原话「我早都 T 完了」。当前数据结构没有持仓与 T 状态，trim 只能表达「不买」，无法表达「T 掉多少、还剩多少底仓、T 后是否回补」；spillover 同样只有方向没有数量。在获利盘过半的高位主题上，缺少 T 状态意味着减仓与切换都无法执行",
+   "fix": "增加 position/t_state 字段（底仓、已 T 次数、浮盈），高潮 theme 且已 T 完时 new_buy=false 并输出具体减仓数量与切出金额；仓位上限按 T 状态分档"
+  }
+ ],
+ "summary": "按本轮新口径，high 为 0：8 个主题 selected 全为 false、8 个 agent_state 的 new_buy 也全为 false，没有任何「已有选中/计划下单」，也没有「new_buy=true 被硬门压掉」，因此全部违规最高只到 medium。同时明确两项为零：agent_overridden = 0（没有说买被挡，反而一个买的都没有）；climax_conflict = 0（media/data_elements/xinchuang 都是 climax + trim，没有高潮追龙头；robot_actuator 已从 climax 降回 unclear，理由引用 133115 午后进量）。共 11 条：medium 7、low 4。两个最实的中等问题都在「切外溢」上：一是 spillover 仍是机械地「其余每个主题各取一只龙头」，三个 climax 主题共用同一份 5 只名单（001266/605189/600345/002940/688311），而这 5 只在同一份数据里全部不可做——space u=0/ret1=-3.9%、satellite 套牢全批最重（22.91/-0.1995）、innovative_drug 三个中军 limit_times 全 0、humanoid leader open_times=2 且中军全未封；真正 13:30 进量最强的 300377（r=0.173、13:33:33 封死）与 300508（r=0.227、13:31 封板）反而不在名单里，切外溢切到了比源主题更差的方向，media（-7.81%）要切到 satellite（-19.95%）直接违背「重点是套牢要少」；二是 spillover 这一版把上一版的 r/v1330/vopen 全删了，只剩名字，没有触发条件、目标仓位、失效条件，「等切出」等什么无从执行。另外 role_triad 的聚合字段已与明细公开矛盾：xinchuang roles.mid 只剩 1 个（003019）、role_detail.mid 2 条（002929 与 wind 重复）、sync.n=4，agent 自己都写了「mid仅003019.SZ一家_二哥不足」，internal_linkage 却仍报 mid_hold=3、state=linked；space roles.wind 只剩 1 个仍报 wind_up=2、linked——internal_linkage 是独立赋值而非聚合。其余中等问题：intraday_sync 的 r=v1330/vopen 仍系统性惩罚早封板（media 三个 9:41-9:50 封板的中军 r=0.001/0.001/0.008，未封的 300133 r=0.092 居首），且 r 不再进入承接排序；b4 的 open_heavy 仍不单调（open_max=1 的 innovative_drug 也命中、u=1 的 humanoid 也叫 open_heavy、2 与 7 同标签），仍从 facts 层生成并进 counter_evidence；leader_pct 仍把 300 开头 20CM 龙头按 10% 记账。low 层：high_low_split 未拆（全负、22.91~52.4 共用一套）、first_linkage 只到 trim+切别家龙头没有本主题第二波计划、prior_leader 缺字段（688776 的一处跨主题重复已修好，但 603171 仍跨两个主题且 r 都是 0.036）、t_done 无持仓/T 状态。修复顺序：先给 spillover 加狼大门槛（role_triad 成立、first_linkage≠false、overhang 不劣于源主题）并把 13:30 进量作为承接排序键，再补触发条件与目标仓位；随后把 internal_linkage 改成由 role_detail 去重聚合、与 roles 长度和 sync.n 三方校验；再修 r 的封板分流口径、清掉 open_heavy 生成逻辑、修 leader_pct 口径；最后补第二波计划、prior_leader 与 T 状态。",
+ "raw": "{\"violations\":[{\"rule_id\":\"climax_spillover\",\"severity\":\"medium\",\"theme_id\":\"media\",\"evidence\":\"media、data_elements、xinchuang 三个主题的 spillover 是同一份 5 条名单：humanoid_robot 001266.SZ、robot_actuator 605189.SH、satellite 600345.SH、innovative_drug 002940.SZ、space 688311.SH——即「其余每个主题各取一只龙头」，不带 r/v1330/vopen，不带触发条件与目标仓位。而这些候选在同一份数据里全部处于不可做状态：space u=0、ret1=-0.039、first_linkage=false；satellite u=1、first_linkage=false、winner_rate=22.91/price_vs_cost85=-0.1995（全批套牢最重）；innovative_drug 三个中军 limit_times 全 0；humanoid_robot leader open_times=2、中军全未封。与此同时 13:30 进量最强的两只——xinchuang 300377.SZ(r=0.173、20CM 13:33:33 封死 open_times=0) 与 robot_actuator 300508.SZ(r=0.227、13:31 封板)——都不在名单里。本轮所有主题 selected=false、new_buy=false，无实际下单\",\"why\":\"狼大原话「高潮/炸板切外溢」。切外溢的前提是切到一个「能做」的方向，现在名单机械取各主题龙头，不看主题是否成立：space 一个涨停都没有、板块整体亏 3.9%，satellite 是全批套牢最重，innovative_drug 中军一个都没封。从 media 高潮里切到这些地方，等于从一个不能追的高潮换到一个根本不能做的板块；真正有午后进量、龙头封死的 xinchuang/robot 反被排除（它们自己也被判 climax），逻辑自相矛盾——外溢目标必须比源主题更健康\",\"fix\":\"spillover 候选必须过狼大规则再入列：role_triad 成立（leader 封板 + ≥2 wind 封板 + ≥3 mid 封板）、first_linkage≠false、overhang 不劣于源主题；禁止机械取各主题龙头，禁止把 u=0/ret1<0 的主题列为承接；承接排序用 13:30 进量 + 封板时点 + 套牢轻重合成\"},{\"rule_id\":\"role_triad\",\"severity\":\"medium\",\"theme_id\":\"global\",\"evidence\":\"聚合值与角色明细直接矛盾：xinchuang 的 roles.mid 只有 1 个（003019.SZ），role_detail.mid 只有 2 条（003019.SZ 与 002929.SZ），而 002929.SZ 同时出现在 role_detail.wind 里且数值完全相同，sync.n 已降到 4；agent 自己在 counter_evidence 里也写「mid仅003019.SZ一家_二哥不足」，但 internal_linkage 仍报 mid_hold=3、wind_up=2、state=linked。space 的 roles.wind 只有 1 个（688552.SH）、role_detail.wind 也只有 1 条、sync.n=5，internal_linkage 仍报 wind_up=2、mid_hold=3、linked。media/data_elements 的 mid_hold=3、wind_up=2 与明细一致，可作对照\",\"why\":\"狼大要求「一个龙头，两个风向，三个 10CM 中流砥柱」。xinchuang 中军实际只剩 1 个、space 风向标只剩 1 个，聚合字段却仍报 2 风 3 中军且 state=linked——说明 internal_linkage 是独立赋值，不是从 role_detail 聚合。这个假值恰好决定「能不能做」：按 mid_hold=3 就该进候选，按真实的 1 个中军就该否决，结论随一个写死的常数而变。本轮无 selected，故按中等计\",\"fix\":\"internal_linkage 的 wind_up/mid_hold 必须由 role_detail 去重后计数生成，并与 roles 数组长度、sync.n 三方一致，任一不一致即报错终止而不是静默输出 linked；同一 symbol 只能占一个角色（002929.SZ 不得同时算 mid 与 wind）\"},{\"rule_id\":\"climax_spillover\",\"severity\":\"medium\",\"theme_id\":\"global\",\"evidence\":\"spillover 条目只有 name/symbol/theme_id 三个字段，上一版还带 r/v1330/vopen，这一版全部删掉；三个主题共用同一份名单，无触发条件（什么价位/时点切）、无目标仓位、无失效条件。counter_evidence 写「按高潮/炸板切外溢_不给新仓追龙头_只等切出」，但「等切出」等的是什么、切给谁、切多少，输出里没有任何可执行信息\",\"why\":\"狼大原话「高潮/炸板切外溢」是一个动作，动作必须可执行：切到哪、什么条件触发、切多少。现在只给静态 5 只名单且不带量能证据（r/v1330 被删），无法判断这些标的是不是「正在被资金承接」，「切外溢」退化成观察清单，与 trim 无本质区别。本轮无下单，故中等\",\"fix\":\"spillover 每条至少带承接强度证据（r/v1330、封板时点、封单额）、触发条件（次日不破板/回踩不破均线/放量过前高）、目标仓位与失效条件；三个 climax 主题应给出各自不同的承接名单（源主题不同，套牢与位置不同），共用同一份名单视为未完成\"},{\"rule_id\":\"intraday_sync\",\"severity\":\"medium\",\"theme_id\":\"global\",\"evidence\":\"r 的构造是 v1330/vopen（上一版 media spillover 可反推：301052 6482/327599≈0.020、300133 70764/767131≈0.092、600892 682/468085≈0.0015）。后果仍在：media 三个中军 9:41-9:50 封板，r=0.001/0.001/0.008；未封的 300133 r=0.092 居首。robot_actuator 封死的 605189 r=0.017，未封的 000026 r=0.11、300508 r=0.227 居前。xh 且本轮 r 不再附着于任何 spillover 候选，13:30 进量证据在承接环节完全消失\",\"why\":\"狼大原话「13:30 进量」。用「13:30 后成交量占全日比」度量进量，对早封板标的是系统性惩罚：封得越早越牢，13:30 越没量，r 越接近 0，反被判「没进量」；没封住、全天换手的票 r 最高。这与「大哥先涨，二哥不掉」正好相反。这一版又把 r 从 spillover 删掉后，13:30 进量既不影响买入、也不影响承接排序，规则在决策链上彻底消失\",\"fix\":\"进量指标按封板状态分流：早封板用「封板时点 + 封单额/流通市值」判定，未封板才用 13:30 后量占比；r 的定义与适用对象写进规范并单测；spillover 承接排序必须带进量证据\"},{\"rule_id\":\"b4_open_max_failed\",\"severity\":\"medium\",\"theme_id\":\"global\",\"evidence\":\"policy 中唯一残留的 unsourced_threshold（open_max>=2 -> failed，已降级为证据、历史代码仍需审计）。标签改名 open_heavy 后仍不单调：media open_max=7/open_sum=96/u=43 → open_heavy；robot_actuator open_max=2/open_sum=3/u=3 → open_heavy；humanoid open_max=2/open_sum=2/u=1 → open_heavy；innovative_drug open_max=1 但 z=2 → open_heavy；satellite open_max=1、z=0 → plain；space open_max=0 → plain。open_max=2 与 open_max=7 同标签，open_max=1 也命中\",\"why\":\"改名只换了口吻，底层仍是同一条无出处阈值在 facts 层生成标签，且连自己的「open_max>=2」都没对齐（说明混入了 z>=2）。狼大原话是「高潮/炸板切外溢」，炸板该触发切外溢分支，不需要一个自设标签概括板块质量；该标签仍进入 agent 的 counter_evidence（media「tag=open_heavy_涨停家数多且无晋级」、data_elements「tag=open_heavy_无晋级」），与 climax 判定互相喂料\",\"fix\":\"从 th"
+}

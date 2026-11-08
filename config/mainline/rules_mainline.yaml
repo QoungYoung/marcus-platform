@@ -1,0 +1,61 @@
+version: 1
+as_of: "2026-10-26"
+layer: L0
+description: L0 主线规则。总仓位由现有仓位函数决定；本文件只定义主线层的判断规则与项目级 caps。
+rules:
+  - id: ML1
+    name: 主线月频
+    source: "2026-10-26 P0 / 2026-10-26 用户：主线按月度算"
+    applies_when: "layer == L0"
+    check: "frequency == 'monthly'"
+    severity: hard
+    on_fail: reject
+    known_cases: ["2026 日频 top1 27.5% vs 月频主线 8/8"]
+  - id: ML2
+    name: 主线宇宙
+    source: "2025-02-20 只做主线 / 2026-10-21 下半年 PCB 二线光 材料"
+    applies_when: "layer == L0"
+    check: "mainline.id in ['ai_tech','new_energy','pharma']"
+    severity: hard
+    on_fail: reject
+    known_cases: ["资源/农业/军工/金融/医药/基建是卫星题材，不进主线"]
+  - id: ML3
+    name: 主线确认
+    source: "2026-10-26 月度主线 8/8"
+    applies_when: "layer == L0"
+    check: "monthly_excess > 0 and breadth_ma20 >= 0.5 and leader_rs > 0 and data_coverage >= 0.9 and top2_months >= 2"
+    severity: hard
+    on_fail: uncertain
+    known_cases: ["2026-01~08 AI/科技 8/8"]
+  - id: ML4
+    name: 主线不确定
+    source: "docs/ai-agent-lessons-from-b-rebound.md §2.4/§2.6"
+    applies_when: "layer == L0"
+    check: "not confirmed or data_warning"
+    severity: hard
+    on_fail: watch_only
+    known_cases: ["数据缺失不用昨日冒充今日"]
+  - id: ML5
+    name: 卫星题材不计入主线
+    source: "2026-10-26 用户：资源/农业/军工/金融/医药/基建是明确不做的题材"
+    applies_when: "layer == L0"
+    check: "mainline.id not in satellite_names"
+    severity: hard
+    on_fail: exclude
+    known_cases: ["2026-01~08 13 主题日频 top1 常被新能源/电池粘住；非科技日不计入主线"]
+  - id: ML6
+    name: 数据口径
+    source: "docs/agent-time-windows.md"
+    applies_when: "layer == L0"
+    check: "as_of <= today and stale_days <= 1 and membership_pit == true"
+    severity: hard
+    on_fail: uncertain
+    known_cases: ["CSI 权重按月/季；东财成员非 PIT"]
+  - id: ML7
+    name: 不定义总仓位
+    source: "2026-10-26 用户：不要单独写仓位函数"
+    applies_when: "layer == L0"
+    check: "no total_position_or_cash_field"
+    severity: hard
+    on_fail: reject
+    known_cases: ["总仓位由现有仓位函数决定；本系统只加项目级 caps"]

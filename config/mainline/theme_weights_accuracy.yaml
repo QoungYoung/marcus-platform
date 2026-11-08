@@ -1,0 +1,11 @@
+version: 1
+as_of: "2026-10-27"
+profile: "accuracy"
+source: "P2.5b 21/95 cases: 去 1d 加 20d，holdout top3 命中 0.26->0.53，但 T+5 超额 -2.03%->-3.15%"
+weights:
+  ex1: 0.00
+  ex5: 0.30
+  ex20: 0.20
+  breadth: 0.25
+  leader_rs: 0.15
+  amount_ratio: 0.10

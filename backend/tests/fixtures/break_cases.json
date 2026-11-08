@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "source": "docs/plan-breakdown-stop-loss.md §1.4 / 狼大原话（2025-11 ~ 2026-10）",
+  "notes": "P1 只校验 level；action/target 供 P2/P3 使用。index 判例用 data/index_daily_000001.json（2016-2024 有 OHLC，2025-2026 仅 close 的行已由 break_levels 用 close 代 high/low 并标记 data_quality）。",
+  "cases": [
+    {
+      "id": "C1",
+      "date": "20251121",
+      "asof": "20251120",
+      "domain": "index",
+      "symbol": "000001.SH",
+      "quote": "收盘跌破3922，我就40%仓位；收盘跌破3900，剩20%仓位。盘中跌破不算。",
+      "expected_levels": [
+        {
+          "type": "platform_low_20",
+          "price": 3922.58,
+          "tol_pct": 1.0
+        },
+        {
+          "type": "round_number",
+          "price": 3900.0,
+          "tol_pct": 0.5
+        }
+      ],
+      "expected_severity": "B3",
+      "expected_action": "cap_custom",
+      "expected_target_pct": 0.4
+    },
+    {
+      "id": "C2",
+      "date": "20251121",
+      "asof": "20251120",
+      "domain": "index",
+      "symbol": "000001.SH",
+      "quote": "跌破趋势…只要没有站回趋势线上，也就是3922，都视为跌破了趋势，按无趋势做。",
+      "expected_levels": [
+        {
+          "type": "platform_low_20",
+          "price": 3922.58,
+          "tol_pct": 1.0
+        }
+      ],
+      "expected_severity": "B3",
+      "expected_action": "trend_broken"
+    },
+    {
+      "id": "C3",
+      "date": "20251203",
+      "asof": "20251202",
+      "domain": "index",
+      "symbol": "000001.SH",
+      "quote": "3888收盘没站上 50%仓位；3850收盘跌破 35%仓位；3816企稳 加回50%；站稳3922-3930 70%仓位。",
+      "expected_levels": [
+        {
+          "type": "ma5",
+          "price": 3887.95,
+          "tol_pct": 1.0
+        },
+        {
+          "type": "round_number",
+          "price": 3850.0,
+          "tol_pct": 0.5
+        }
+      ],
+      "expected_severity": "B3",
+      "expected_action": "cap_custom",
+      "expected_target_pct": 0.35
+    },
+    {
+      "id": "C4",
+      "date": "20250917",
+      "asof": "20250916",
+      "domain": "index",
+      "symbol": "000001.SH",
+      "quote": "3828是底，放量跌破，且同时30年国债涨，外资大幅流出降低到50%仓位。",
+      "expected_levels": [],
+      "expected_severity": "B3",
+      "expected_action": "cap_50",
+      "note": "3828 是分时/60min 结构位，日线平台/均线不必然命中；P1 日线不校验，P2 用分时补充。",
+      "expected_target_pct": 0.5
+    },
+    {
+      "id": "C5",
+      "date": "20260129",
+      "domain": "stock",
+      "symbol": "SYNTH_PLATFORM",
+      "quote": "跌破平台我一定减仓。我只是想活下去。收盘跌破平台减仓是为了被动止盈、保收益。",
+      "expected_levels": [
+        {
+          "type": "platform_low_20",
+          "price": null,
+          "tol_pct": 2.0
+        }
+      ],
+      "expected_severity": "B2",
+      "expected_action": "reduce_half",
+      "synthetic": true
+    },
+    {
+      "id": "C6",
+      "date": "20260304",
+      "domain": "stock",
+      "symbol": "SYNTH_SHRINK_VS_VOLUME",
+      "quote": "缩量跌破不算 缩量是要看反弹是否过颈线 如果不过才算 放量跌破就直接算。",
+      "expected_levels": [],
+      "expected_severity": "B2",
+      "expected_action": "shrink_wait_rebound / volume_direct_confirm",
+      "synthetic": true
+    },
+    {
+      "id": "C7",
+      "date": "20260305",
+      "domain": "stock",
+      "symbol": "SYNTH_13D_MINUS_3",
+      "quote": "13日内跌破波段低点的-3%没有收回 直接止损；13日内需要碰新高，否则这个票呆的意义就不大。",
+      "expected_levels": [
+        {
+          "type": "swing_low_minus_3",
+          "price": null,
+          "tol_pct": 0.1
+        }
+      ],
+      "expected_severity": "B4",
+      "expected_action": "alert_or_reduce",
+      "synthetic": true
+    },
+    {
+      "id": "C8",
+      "date": "20260506",
+      "domain": "sector",
+      "symbol": "SYNTH_SECTOR",
+      "quote": "突破之后以今天收盘点为止损点…个股可能有差别 但是以板块指数为准。",
+      "expected_levels": [],
+      "expected_severity": "B2",
+      "expected_action": "sector_first",
+      "synthetic": true
+    },
+    {
+      "id": "C9",
+      "date": "20260521",
+      "domain": "stock",
+      "symbol": "SYNTH_ETF_2X",
+      "quote": "半导体ETF今天就是卖点了…今天放量跌破昨天的红K 量能多一倍。",
+      "expected_levels": [
+        {
+          "type": "prior_day_high",
+          "price": null,
+          "tol_pct": 1.0
+        }
+      ],
+      "expected_severity": "B2",
+      "expected_action": "reduce_half",
+      "synthetic": true
+    },
+    {
+      "id": "C10",
+      "date": "20261015",
+      "asof": null,
+      "domain": "index",
+      "symbol": "000001.SH",
+      "quote": "有效跌破3764，确认熊市；反弹的目的是自救。",
+      "expected_levels": [
+        {
+          "type": "wave_anchor",
+          "price": 3764.15,
+          "tol_pct": 0.1
+        }
+      ],
+      "expected_severity": "B3",
+      "expected_action": "cap_0_30",
+      "note": "3764 是 4-3 结构低点…；A 方案：down-wave cap 0-30%，默认 0，有短线仓才允许 30%。"
+    },
+    {
+      "id": "C11",
+      "date": "20260205",
+      "asof": "20260204",
+      "domain": "index",
+      "symbol": "000001.SH",
+      "quote": "只要当天收盘没有跌破前一天低点 都是70%仓位 没走弱不用减仓。",
+      "expected_levels": [
+        {
+          "type": "prior_day_low",
+          "price": 4062.68,
+          "tol_pct": 0.1
+        }
+      ],
+      "expected_severity": "B2",
+      "expected_action": "hold_or_reduce",
+      "note": "02-05 收盘 4075.92 在 4062.68 上方 → 持有；若放量跌破 + 3×15min 不收回 → B2 减仓（P2 校验）。"
+    },
+    {
+      "id": "C12",
+      "date": "20251211",
+      "asof": "20251210",
+      "domain": "index",
+      "symbol": "000001.SH",
+      "quote": "跌破昨天低点超过3个15分钟没有收回去 一旦反抽我就要减仓了。",
+      "expected_levels": [
+        {
+          "type": "prior_day_low",
+          "price": 3876.47,
+          "tol_pct": 0.1
+        }
+      ],
+      "expected_severity": "B2",
+      "expected_action": "reduce_on_rebound",
+      "note": "12-11 收盘 3873.32 已跌破 3876.47；3×15min 不收回 + 反抽减仓由 P2 状态机校验。"
+    }
+  ]
+}

@@ -1,0 +1,508 @@
+tasks:
+- id: pre_market_scan
+  name: 盘前扫描
+  description: 9:00 执行盘前扫描，美股联动分析 + 策略迭代
+  enabled: true
+  schedule:
+    type: cron
+    expr: 0 9 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/pre_market_scan.py
+    args:
+    - --debug
+  output:
+    log_file: logs/pre_market_scan_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: morning_diagnosis
+  name: 盘前诊断
+  description: 9:10 推送市场诊断仪表盘（趋势/震荡/极端）到QQ
+  enabled: true
+  schedule:
+    type: cron
+    expr: 10 9 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/morning_diagnosis.py
+    args: []
+  output:
+    log_file: logs/morning_diagnosis_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+- id: daily_review
+  name: 每日复盘
+  description: 16:00 收盘后市场分析与操作复盘
+  enabled: true
+  schedule:
+    type: cron
+    expr: 0 16 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_review_enhanced.py
+    args: []
+  output:
+    log_file: logs/daily_review_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on: []
+- id: rotation_universe_refresh
+  name: 主线子方向动态细分刷新
+  description: 8:05 每日按主线动态派生 sub-universe(derive_sub_universe)+重建 rotation_universe_result,
+    使宇宙跟主线不再周一滞后; 上游 taxonomy 由 build_concept_taxonomy 生成（注：crowding_blacklist 已于
+    2026-09-13 真删，本任务不再产出该文件）
+  enabled: true
+  schedule:
+    type: cron
+    expr: 5 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/derive_sub_universe.py
+    args:
+    - --refresh-result
+  output:
+    log_file: logs/rotation_universe_refresh_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: null
+- id: tranche_ladder_report
+  name: 建仓执行链盘前报告(试仓档)
+  description: 8:18 switch_builder(卖旧keep/buy_new DRY)+tranche升级联动 -> switch_builder_plan.json
+    + 报告块(三档状态/额度/升级/切换清单), 与wave调档/个股确认链共存
+  enabled: true
+  schedule:
+    type: cron
+    expr: 18 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/tranche_ladder_report.py
+    args: []
+  output:
+    log_file: logs/tranche_ladder_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - sector_g3_judge
+- id: sector_g3_judge
+  name: 板块洗盘收敛期判定(G3)
+  description: '8:15 持仓所属主题板块洗盘收敛期(相对自身常态: 主题概念收益波动20/60<0.8 且 |net|5/60<=0.8, concept_hist
+    合成) -> sector_g3_state.json; TMonitor no_t_gate 收敛期不自动T出(狼大''主力洗TMT洗干净才有下一波'')'
+  enabled: true
+  schedule:
+    type: cron
+    expr: 15 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/sector_g3_judge.py
+    args: []
+  output:
+    log_file: logs/sector_g3_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: null
+- id: stock_confirm_refresh
+  name: 成分股确认刷新
+  description: 8:20 每日按今日主线刷新个股确认(主线→THEME_CONCEPTS→成分→confirm_chain→stock_confirm_result.json),
+    使成分股确认始终跟主线(如消费/内需), 避免周度滞后旧主线; end_date动态
+  enabled: true
+  schedule:
+    type: cron
+    expr: 20 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/stock_confirm_judge.py
+    args: []
+  output:
+    log_file: logs/stock_confirm_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: null
+- depends_on: []
+  description: 每周一 8:20 东财概念高低位分类(position_class)+低位看逻辑AI判定(low_logic_agent)+个股确认比例(stock_confirm_judge)，供主线内轮动/风控过滤
+  enabled: true
+  id: position_judge
+  name: 概念高低位判定
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/position_judge_{date}.log
+  schedule:
+    expr: 20 8 * * mon
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/position_judge.py
+- depends_on: []
+  description: 季度末基金持仓回填(fund_portfolio)+真实拥挤度聚合(rotation_crowding)，供轮动门控拥挤侧/动态名单使用
+  enabled: true
+  id: fund_crowding_refresh
+  name: 基金持仓拥挤度刷新
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: true
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/fund_crowding_refresh_{date}.log
+  schedule:
+    expr: 30 8 25 1,4,7,10 *
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/refresh_fund_crowding.py
+- id: rotation_switch_arm
+  name: 主线内切换布腿器
+  description: 开盘前(09:20) 决策→布腿(卖vwap_break/买253/254)到TMonitor执行；不直接下单
+  enabled: true
+  schedule:
+    type: cron
+    expr: 20 9 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/rotation_switch_arm.py
+    args: []
+  output:
+    append: true
+    log_file: logs/rotation_switch_arm_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: plan_generate_daily
+  name: 今日计划生成
+  description: 每日收盘后生成今日计划(结构优先主题计划+指数关键位回补) → plan_library 表 + data/plan_library.json
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 15 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/generate_today_plan.py
+    args: []
+  output:
+    append: true
+    log_file: logs/plan_generate_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: chain_map_daily
+  name: '产业链图每日生成 (chain_map v3: mv+主营核实龙头 + AI裁决边界股)'
+  description: 盘后18:15 生成 data/chain_map_{date}.json(规则层mv+主营核实top3 -> rejected边界股DeepSeek裁决回补
+    source=ai -> kw自举累积 chain_kw_suggestions.json)
+  enabled: true
+  schedule:
+    type: cron
+    expr: 15 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/chain_map.py
+    args: []
+  output:
+    append: true
+    log_file: logs/chain_map_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: theme_gap_scan
+  name: 域外主线方向监控
+  description: 每日18:45 扫描 concept_hist 521概念中域外未覆盖方向, r20>=8%且概念>=3 输出 ALERT 候选(theme_gap_scan.json);
+    假域外(语义已覆盖)经别名抑制
+  enabled: true
+  schedule:
+    type: cron
+    expr: 45 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/scan_theme_gaps.py
+    args:
+    - --min-r20
+    - '8'
+  output:
+    append: true
+    log_file: logs/theme_gap_scan_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: chain_map_weekly
+  name: 产业链图每周全量强核
+  description: 周六10:00 chain_map 全量(--full --refresh-fina, AI全量重判+主营缓存全刷), 每日任务走增量缓存
+  enabled: true
+  schedule:
+    type: cron
+    expr: 0 10 * * 6
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/chain_map.py
+    args:
+    - --full
+    - --refresh-fina
+  output:
+    append: true
+    log_file: logs/chain_map_weekly_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: daily_decision
+  name: 每日决策对象 G1
+  description: 盘后把 L1 方向/L2 档位/L3 仓位/L4 选票/L5 买点/L6 兑现 汇成 data/decision/<date>.json，
+    供次日盘中所有腿引用（daily_decision.entry_allowed()）。开关 WOLF_DAILY_DECISION 默认 0=跳过； 准入闸
+    WOLF_DECISION_GATE 默认 0=仍放行（置 1 后「无决策对象 → 拒绝开新腿」）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 45 19 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_decision.py
+    args: []
+  output:
+    log_file: logs/daily_decision_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+- id: daily_archive
+  name: 每日存档 G2（文件 + 落库双写）
+  description: 盘后把当日全部产物快照到 data/_archive/<date>/ 并**双写**进 PostgreSQL daily_artifacts
+    （含 concept_long / theme_inst_flow / etf_share_flow / main_line_state / stock_confirm_result
+    这些当日覆盖型文件）。开关 WOLF_DAILY_ARCHIVE 默认 0=跳过。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 50 19 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_archive.py
+    args: []
+  output:
+    log_file: logs/daily_archive_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - daily_decision
+  retry:
+    enabled: true
+- id: daily_decision_am
+  name: 每日决策对象 G1（盘前确认）
+  description: 盘前 08:25（wave_judge 08:10 之后）重算当日决策对象，让盘中腿用上**当天**的档位与闸门状态； 与盘后 19:45
+    的 daily_decision 共用同一 job。开关 WOLF_DAILY_DECISION 默认 0=跳过。 **2026-09-16 修**：必须带
+    `--eod-probe last-closed` —— 开盘前当天日线必然 0 行，沿用默认 （探当天）会每天白等 6×300s 后 rc=2，导致 AM
+    对象从未产出（09-15、09-16 生产实锤）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/daily_decision.py
+    args:
+    - --eod-probe
+    - last-closed
+  output:
+    log_file: logs/daily_decision_am_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+- id: wolf_mainline_select
+  name: 方向层主线选择（D1）
+  description: 盘后算当日主线=**池(主题近5日成交额占比 topK ∩ 近5日相对强度>0) → 池内 r5 top1**（2026-09-13
+    起， 取代旧的 gate∩r5）；实测与他"股票主线层"对齐 recall 75%/top1 54%/top3 85%，2026 超额 +1.03%(t=3.37)、
+    2025 +0.34%(t=3.01)；gate 默认不参与选择(三方对照实测净负，WOLF_MS_USE_GATE=1 可回退)。 被否决的因子(边际加速/参与面/位置/联动/龙头)仅作诊断。写
+    wolf_mainline_select.json + daily_artifacts； 只写不交易。开关 WOLF_MAINLINE_SELECT 默认
+    0（生产已置 1）。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 55 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_mainline_select.py
+    args: []
+  output:
+    log_file: logs/wolf_mainline_select_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+- id: core_bellwether_daily
+  name: 每日风向标统一流水线（45子主题）
+  description: 每日 18:30（chain_map 后）统一跑：DSH agent原始数据确认 → 全45子主题状态 → 权限上下文；proxy 不再进入每日调度。输出
+    data/core_p05/confirmed_daily.json、data/core_p1/bellwether_state_latest.json、context_latest.json、daily_pipeline_latest.json。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 30 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/core_bellwether_daily.py
+    args: []
+  output:
+    log_file: logs/core_bellwether_daily_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - chain_map_daily
+  retry:
+    enabled: true
+- id: core_select_run
+  name: core 选股 + 风向标软 overlay（45子主题）
+  description: 每日 18:50（统一风向标流水线后）对 45 个子主题跑 select_core：core 选股仍走 stage×role；风向标只给
+    position_multiplier/标注，不硬删。输出 data/core_select/latest.json 与 select_core_<date>.csv。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 50 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/run_select_core.py
+    args: []
+  output:
+    log_file: logs/core_select_run_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: true
+    channels:
+    - qqbot
+  depends_on:
+  - core_bellwether_daily
+  retry:
+    enabled: true
+- id: theme_stats_native
+  name: 主题统计原生覆盖（补齐缺失父主题）
+  description: 每日 18:20 用子主题成分补齐 theme_strength/theme_breadth 的缺失父主题（当前为 传媒/游戏），并重算
+    r5/r20/share5 排名；不覆盖已有主题行。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 20 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/refresh_theme_stats.py
+    args: []
+  output:
+    log_file: logs/theme_stats_native_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+- id: bellwether_change_alert
+  name: 风向标状态变化提示（只读）
+  description: 18:35 对比上一交易日，只在子主题状态变化时推 QQ；不选股、不改仓位、不给买卖建议。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 40 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/bellwether_change_alert.py
+    args: []
+  output:
+    log_file: logs/bellwether_change_alert_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_bellwether_daily
+  retry:
+    enabled: false

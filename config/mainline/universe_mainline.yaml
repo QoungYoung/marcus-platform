@@ -1,0 +1,178 @@
+version: 1
+as_of: '2026-10-26'
+layer: L0
+frequency: monthly
+description: 'L0 主线宇宙。总仓位/现金由现有仓位函数决定；本文件只定义主线层可选范围、 数据源和项目级 caps（供现有仓位函数读取），不新增仓位函数。
+
+  '
+mainlines:
+- id: ai_tech
+  name: AI/科技
+  status: active
+  priority: 1
+  sub_mainlines:
+  - id: ai_compute
+    name: AI/算力
+    proxies:
+    - 931071.CSI
+    - 931656.CSI
+    - 931657.CSI
+    - 931723.CSI
+  - id: semiconductor
+    name: 半导体/芯片
+    proxies:
+    - 932580.CSI
+    - 931743.CSI
+    - 932040.CSI
+    - 801081.SI
+  proxies:
+  - code: 931071.CSI
+    name: 人工智能
+    source: csi
+  - code: 931656.CSI
+    name: 全球算力
+    source: csi
+  - code: 931657.CSI
+    name: 精选市场算力
+    source: csi
+  - code: 931723.CSI
+    name: 光通信
+    source: csi
+  - code: 932580.CSI
+    name: 存储芯片臻选
+    source: csi
+  - code: H30590.CSI
+    name: 机器人
+    source: csi
+  - code: 932666.CSI
+    name: PCB
+    source: csi
+  - code: 931743.CSI
+    name: 半导体材料设备
+    source: csi
+  - code: 932040.CSI
+    name: 芯片设计
+    source: csi
+  - code: 801081.SI
+    name: 半导体
+    source: sw_l2
+  benchmark: 000001.SH
+  caps:
+    max_weight: 0.7
+    max_tracks: 3
+    max_themes: 3
+    max_names: 6
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 主线 cap 只做项目级上限；总仓位/现金由现有仓位函数决定
+  tracks:
+  - semiconductor
+  - components
+  - optical
+  - communication_equipment
+  - computer_equipment
+  - computer_application
+  - automation
+- id: new_energy
+  name: 新能源/电池
+  status: backup
+  priority: 2
+  sub_mainlines:
+  - id: battery
+    name: 电池
+    proxies:
+    - 931555.CSI
+    - BK1303.DC
+  - id: pv
+    name: 光伏
+    proxies:
+    - 931151.CSI
+    - 857333.SI
+    - BK1031.DC
+  proxies:
+  - code: 931555.CSI
+    name: 新能电池
+    source: csi
+  - code: 931151.CSI
+    name: 光伏产业
+    source: csi
+  - code: 857333.SI
+    name: 光伏设备
+    source: sw_l3
+  - code: BK1303.DC
+    name: 锂电池
+    source: eastmoney
+  - code: BK1031.DC
+    name: 光伏设备
+    source: eastmoney
+  benchmark: 000001.SH
+  caps:
+    max_weight: 0.35
+    max_tracks: 2
+    max_themes: 2
+    max_names: 4
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: false
+    allow_add: false
+    allow_base: false
+    allow_t: false
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 非科技年的备用主线；连续 2 个月确认后才可激活
+- id: pharma
+  name: 医药
+  status: backup
+  priority: 3
+  sub_mainlines:
+  - id: innovative_drug
+    name: 创新药
+    proxies:
+    - 931152.CSI
+  - id: medical_device
+    name: 医疗器械
+    proxies:
+    - 931153.CSI
+  proxies:
+  - code: 801151.SI
+    name: 化学制药
+    source: sw_l2
+  - code: 801152.SI
+    name: 生物制品
+    source: sw_l2
+  - code: 801153.SI
+    name: 医疗器械
+    source: sw_l2
+  benchmark: 000001.SH
+  caps:
+    max_weight: 0.3
+    max_tracks: 2
+    max_themes: 2
+    max_names: 3
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: false
+    allow_add: false
+    allow_base: false
+    allow_t: false
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 备用主线；只在月度确认后激活

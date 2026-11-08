@@ -1,0 +1,125 @@
+version: 1
+as_of: "2026-10-26"
+layer: L2
+description: L2 细分规则。caps 只做项目级上限，供现有仓位函数读取；不定义总仓位。
+rules:
+  - id: TH1
+    name: 只做赛道内细分
+    source: "2025-02-20 主线内部软硬/设备/材料轮动"
+    applies_when: "layer == L2"
+    check: "theme.parent_track in current_track.focus + watch"
+    severity: hard
+    on_fail: exclude
+    known_cases: ["半导体 → 存储/设备/材料/设计/封测"]
+  - id: TH2
+    name: 父赛道映射
+    source: "2026-10-26 CPO/PCB/存储分级"
+    applies_when: "layer == L2"
+    check: "parent_track in ['semiconductor','components','communication_equipment','computer_equipment','computer_application','automation','power_equipment','aerospace','medicine']"
+    severity: hard
+    on_fail: reject
+    known_cases: ["CPO→通信设备；PCB→元件；存储→半导体"]
+  - id: TH3
+    name: 相对强度
+    source: "2025-12-06 强于板块/大盘"
+    applies_when: "layer == L2"
+    check: "theme.ret20 > theme.benchmark.ret20 and theme.leader_rs > 0"
+    severity: hard
+    on_fail: watch
+    known_cases: ["2026-10-23 机器人执行器 35/1，PCB 161/42"]
+  - id: TH4
+    name: 宽度与成交额
+    source: "2025-06-17 有活跃量能"
+    applies_when: "layer == L2"
+    check: "theme.breadth_up_ratio >= 0.5 and theme.amount_ratio >= 1.0"
+    severity: soft
+    on_fail: downgrade
+    known_cases: ["2026-10-23 存储 124/18；CPO 83/15"]
+  - id: TH5
+    name: 大哥与梯队
+    source: "2025-12-06 核心/风向标/龙头；2026-10-23 宇树大哥/梯队"
+    applies_when: "layer == L2"
+    check: "theme.leader exists and theme.ladder_count >= 3 and theme.ladder_breadth >= 0.5"
+    severity: hard
+    on_fail: watch
+    known_cases: ["存储：兆易/澜起/江波龙/佰维；机器人：宇树/兆威/绿的/三花"]
+  - id: TH6
+    name: 业绩/催化
+    source: "2026-02-04 避开业绩雷；2026-05-09 财报底/映射顶"
+    applies_when: "layer == L2"
+    check: "theme.q3_forecast_positive or theme.catalyst exists or theme.mapping_strong"
+    severity: soft
+    on_fail: downgrade
+    known_cases: ["存储 Q3 强；机器人 Q3 分化；CPO 看海外映射"]
+  - id: TH7
+    name: 拥挤扣分
+    source: "2026-07-28 公募踩踏；2026-10-23 存储被公募拖累"
+    applies_when: "layer == L2"
+    check: "theme.fund_float_pct <= 2.5 or soft_penalty"
+    severity: soft
+    on_fail: downgrade
+    known_cases: ["存储：兆易 12/2.8%，澜起 14/4.79%"]
+  - id: TH8
+    name: 技术确认
+    source: "2025-10-20 缩量止跌；2026-08-12 缩转放；2026-08-03 3 天站上 5 日线"
+    applies_when: "layer == L2"
+    check: "theme.stage in ['washout','rebound','breakout'] and theme.close > theme.ma5 and theme.vol_ratio >= 1.2"
+    severity: hard
+    on_fail: watch
+    known_cases: ["2026-10-23 震裕 +11.92%/1.54x；兆易 +5.51%/1.40x"]
+  - id: TH9
+    name: CPO 特殊规则
+    source: "2026-10-23 CPO 是技术路线题材，不是独立赛道"
+    applies_when: "theme.id == 'cpo'"
+    check: "parent_track == 'communication_equipment' and overseas_mapping not weak"
+    severity: soft
+    on_fail: watch
+    known_cases: ["CPO 与光模块高度重叠；看英伟达/博通/海外光模块"]
+  - id: TH10
+    name: PCB 特殊规则
+    source: "2026-10-21 下半年 PCB 二线光 半导体材料"
+    applies_when: "theme.id == 'pcb'"
+    check: "parent_track == 'components' and ai_server_demand_positive"
+    severity: soft
+    on_fail: watch
+    known_cases: ["PCB 是行业级细分；胜宏/沪电/生益"]
+  - id: TH11
+    name: 存储特殊规则
+    source: "2025-12-19 A 股存储标都是库存；2026-05-09 财报底/映射顶"
+    applies_when: "theme.id == 'storage'"
+    check: "sub_layer == 'design' or (sub_layer == 'module' and mapping_strong)"
+    severity: soft
+    on_fail: watch
+    known_cases: ["设计/原厂可做底仓；模组只做短差"]
+  - id: TH12
+    name: 两天迟滞
+    source: "docs/ai-agent-lessons-from-b-rebound.md §2.1"
+    applies_when: "layer == L2"
+    check: "new_focus_days >= 2 and exit_days >= 2"
+    severity: hard
+    on_fail: watch
+    known_cases: ["避免日频单日 flip-flop"]
+  - id: TH13
+    name: 系统闸门
+    source: "P2/P3 现有闸门"
+    applies_when: "layer == L2"
+    check: "system_gate.allow_new == true"
+    severity: hard
+    on_fail: watch
+    known_cases: ["P3 G3 空仓时 focus 降为 watch"]
+  - id: TH14
+    name: 项目级 caps
+    source: "2026-10-26 用户：不写总仓位函数，只加项目控制"
+    applies_when: "layer == L2"
+    check: "theme.caps.max_weight <= parent_track.caps.max_weight and theme.caps.max_names <= 2"
+    severity: hard
+    on_fail: reject
+    known_cases: ["存储 0.20、PCB 0.20、CPO 0.20、卫星 0.08-0.10"]
+  - id: TH15
+    name: 卫星题材
+    source: "2026-10-26 用户：资源/农业/军工/金融/医药/基建是题材"
+    applies_when: "theme.sleeve == 'satellite'"
+    check: "caps.max_weight <= 0.10 and allow_base == false"
+    severity: hard
+    on_fail: reject
+    known_cases: ["卫星题材只做短差，不计入主线"]

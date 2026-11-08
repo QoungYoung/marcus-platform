@@ -1,0 +1,6 @@
+version: 1
+as_of: "2026-10-27"
+auto_confirm_needs_human: true
+auto_confirm_requires_validation: true
+preserve_data_conflict_flag: true
+notes: "用户 2026-10-27：needs_human 直接确认；程序仍保留 data_conflict/置信度供审计。"

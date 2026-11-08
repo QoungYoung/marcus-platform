@@ -1,0 +1,1044 @@
+version: 1
+as_of: '2026-10-26'
+layer: L2
+frequency: weekly_daily
+description: 'L2 细分方向宇宙。来源分三类：申万 L3（行业级、PIT）、中证主题（官方成分/权重）、 东财概念（日频宽度/领涨）。caps 只做项目级上限，供现有仓位函数读取； 总仓位/现金由现有仓位函数决定，本文件不定义总仓位。
+
+  '
+themes:
+- id: storage
+  name: 存储芯片
+  status: active
+  parent_track: semiconductor
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 932580.CSI
+    name: 存储芯片臻选
+  - type: eastmoney
+    code: BK1137.DC
+    name: 存储芯片
+  benchmark: 932580.CSI
+  leader:
+    code: 603986.SH
+    name: 兆易创新
+  ladder:
+  - code: 688008.SH
+    name: 澜起科技
+  - code: 301308.SZ
+    name: 江波龙
+  - code: 688525.SH
+    name: 佰维存储
+  - code: 001309.SZ
+    name: 德明利
+  - code: 688766.SH
+    name: 普冉股份
+  - code: 688110.SH
+    name: 东芯股份
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 模组只做短差；设计/原厂优先；公募拥挤时只做 T
+- id: semi_equipment
+  name: 半导体设备
+  status: active
+  parent_track: semiconductor
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 931743.CSI
+    name: 半导体材料设备
+  - type: eastmoney
+    code: BK1326.DC
+    name: 半导体设备
+  - type: sw_l3
+    code: 850818.SI
+    name: 半导体设备
+  benchmark: 931743.CSI
+  leader:
+    code: 002371.SZ
+    name: 北方华创
+  ladder:
+  - code: 688072.SH
+    name: 拓荆科技
+  - code: 688012.SH
+    name: 中微公司
+  - code: 300604.SZ
+    name: 长川科技
+  - code: 688361.SH
+    name: 中科飞测
+  - code: 688120.SH
+    name: 华海清科
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 两长扩产链；订单/验证驱动
+- id: semi_material
+  name: 半导体材料
+  status: active
+  parent_track: semiconductor
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 850813.SI
+    name: 半导体材料
+  - type: eastmoney
+    code: BK1325.DC
+    name: 半导体材料
+  benchmark: 850813.SI
+  leader:
+    code: 300054.SZ
+    name: 鼎龙股份
+  ladder:
+  - code: 002409.SZ
+    name: 雅克科技
+  - code: 688019.SH
+    name: 安集科技
+  - code: 300666.SZ
+    name: 江丰电子
+  - code: 600206.SH
+    name: 有研新材
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 他 2026-10-21 明确看好的方向
+- id: chip_design
+  name: 芯片设计
+  status: active
+  parent_track: semiconductor
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 932040.CSI
+    name: 芯片设计
+  benchmark: 932040.CSI
+  leader:
+    code: 603986.SH
+    name: 兆易创新
+  ladder:
+  - code: 688008.SH
+    name: 澜起科技
+  - code: 300223.SZ
+    name: 北京君正
+  - code: 688766.SH
+    name: 普冉股份
+  - code: 688110.SH
+    name: 东芯股份
+  - code: 688123.SH
+    name: 聚辰股份
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 设计/原厂可做底仓；模组只做映射短差
+- id: packaging
+  name: 先进封装
+  status: active
+  parent_track: semiconductor
+  sleeve: theme
+  sources:
+  - type: eastmoney
+    code: BK1101.DC
+    name: 先进封装
+  - type: sw_l3
+    code: 850817.SI
+    name: 集成电路封测
+  benchmark: BK1101.DC
+  leader:
+    code: 600584.SH
+    name: 长电科技
+  ladder:
+  - code: 002156.SZ
+    name: 通富微电
+  - code: 002185.SZ
+    name: 华天科技
+  - code: 688362.SH
+    name: 甬矽电子
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 存储拉动 2 天后的延伸方向
+- id: pcb
+  name: PCB
+  status: active
+  parent_track: components
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 850822.SI
+    name: 印制电路板
+  - type: csi
+    code: 932666.CSI
+    name: PCB
+  - type: eastmoney
+    code: BK0877.DC
+    name: PCB
+  benchmark: 932666.CSI
+  leader:
+    code: 300476.SZ
+    name: 胜宏科技
+  ladder:
+  - code: 002463.SZ
+    name: 沪电股份
+  - code: 600183.SH
+    name: 生益科技
+  - code: 002916.SZ
+    name: 深南电路
+  - code: 002938.SZ
+    name: 鹏鼎控股
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: AI 服务器/交换机放量；行业级细分
+- id: passive
+  name: 被动元件
+  status: active
+  parent_track: components
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 850823.SI
+    name: 被动元件
+  benchmark: 850823.SI
+  leader:
+    code: 002138.SZ
+    name: 顺络电子
+  ladder:
+  - code: 300408.SZ
+    name: 三环集团
+  - code: 600563.SH
+    name: 法拉电子
+  caps:
+    max_weight: 0.1
+    max_names: 2
+    max_single_stock: 0.1
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 被动元件，跟随电子景气
+- id: cpo
+  name: CPO
+  status: active
+  parent_track: communication_equipment
+  sleeve: theme
+  sources:
+  - type: eastmoney
+    code: BK1128.DC
+    name: CPO概念
+  - type: csi
+    code: 931723.CSI
+    name: 光通信
+  benchmark: 931723.CSI
+  leader:
+    code: 300308.SZ
+    name: 中际旭创
+  ladder:
+  - code: 300502.SZ
+    name: 新易盛
+  - code: 300394.SZ
+    name: 天孚通信
+  - code: 300570.SZ
+    name: 太辰光
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 技术路线题材；海外映射/英伟达博通；不是独立赛道
+- id: optical_module
+  name: 光模块
+  status: active
+  parent_track: communication_equipment
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 931723.CSI
+    name: 光通信
+  benchmark: 931723.CSI
+  leader:
+    code: 300308.SZ
+    name: 中际旭创
+  ladder:
+  - code: 300502.SZ
+    name: 新易盛
+  - code: 300394.SZ
+    name: 天孚通信
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 与 CPO 高度重叠；先赛道后细分
+- id: communication_transmission
+  name: 通信传输设备
+  status: active
+  parent_track: communication_equipment
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 851024.SI
+    name: 通信网络设备及器件
+  benchmark: 851013.SI
+  leader:
+    code: 600487.SH
+    name: 亨通光电
+  ladder:
+  - code: 601869.SH
+    name: 长飞光纤
+  - code: 002281.SZ
+    name: 光迅科技
+  - code: 600522.SH
+    name: 中天科技
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 通信传输/光纤
+- id: compute
+  name: 算力
+  status: active
+  parent_track: computer_equipment
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 931656.CSI
+    name: 全球算力
+  - type: csi
+    code: 931657.CSI
+    name: 精选市场算力
+  - type: eastmoney
+    code: BK1134.DC
+    name: 算力概念
+  benchmark: 931656.CSI
+  leader:
+    code: 000977.SZ
+    name: 浪潮信息
+  ladder:
+  - code: 603019.SH
+    name: 中科曙光
+  - code: 000938.SZ
+    name: 紫光股份
+  - code: 000063.SZ
+    name: 中兴通讯
+  - code: 300442.SZ
+    name: 润泽科技
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 服务器/国算/算力租赁
+- id: ai_app
+  name: AI 应用
+  status: active
+  parent_track: computer_application
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 931071.CSI
+    name: 人工智能
+  - type: eastmoney
+    code: BK1629.DC
+    name: AI应用
+  benchmark: 931071.CSI
+  leader:
+    code: 688111.SH
+    name: 金山办公
+  ladder:
+  - code: 300058.SZ
+    name: 蓝色光标
+  - code: 002230.SZ
+    name: 科大讯飞
+  - code: 600588.SH
+    name: 用友网络
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: AI 应用/软件；题材属性强
+- id: humanoid_robot
+  name: 人形机器人
+  status: active
+  parent_track: automation
+  sleeve: theme
+  sources:
+  - type: csi
+    code: H30590.CSI
+    name: 机器人
+  - type: eastmoney
+    code: BK1184.DC
+    name: 人形机器人
+  benchmark: H30590.CSI
+  leader:
+    code: 688836.SH
+    name: 宇树科技
+  ladder:
+  - code: 003021.SZ
+    name: 兆威机电
+  - code: 688017.SH
+    name: 绿的谐波
+  - code: 002050.SZ
+    name: 三花智控
+  - code: 601689.SH
+    name: 拓普集团
+  - code: 002896.SZ
+    name: 中大力德
+  - code: 300718.SZ
+    name: 长盛轴承
+  - code: 603667.SH
+    name: 五洲新春
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 筹码干净/大哥宇树/梯队；Q3 密集窗口
+- id: robot_actuator
+  name: 机器人执行器
+  status: active
+  parent_track: automation
+  sleeve: theme
+  sources:
+  - type: eastmoney
+    code: BK1145.DC
+    name: 机器人执行器
+  - type: csi
+    code: H30590.CSI
+    name: 机器人
+  benchmark: H30590.CSI
+  leader:
+    code: 002050.SZ
+    name: 三花智控
+  ladder:
+  - code: 601689.SH
+    name: 拓普集团
+  - code: 603667.SH
+    name: 五洲新春
+  - code: 688017.SH
+    name: 绿的谐波
+  - code: 603728.SH
+    name: 鸣志电器
+  - code: 002979.SZ
+    name: 雷赛智能
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 执行器/丝杠/减速器；与 humanoid_robot 重叠，选其一
+- id: liquid_cooling
+  name: 液冷
+  status: active
+  parent_track: computer_equipment
+  sleeve: theme
+  sources:
+  - type: eastmoney
+    code: BK1138.DC
+    name: 液冷服务器
+  benchmark: BK1138.DC
+  leader:
+    code: 002837.SZ
+    name: 英维克
+  ladder:
+  - code: 301018.SZ
+    name: 申菱环境
+  - code: 300870.SZ
+    name: 欧陆通
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: AI 数据中心液冷/电源
+- id: battery
+  name: 电池
+  status: active
+  parent_track: power_equipment
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 931555.CSI
+    name: 新能电池
+  - type: eastmoney
+    code: BK1303.DC
+    name: 锂电池
+  benchmark: 931555.CSI
+  leader:
+    code: 300750.SZ
+    name: 宁德时代
+  ladder:
+  - code: 002594.SZ
+    name: 比亚迪
+  - code: 300014.SZ
+    name: 亿纬锂能
+  - code: 002460.SZ
+    name: 赣锋锂业
+  caps:
+    max_weight: 0.2
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 非科技年的备用主线；当前只观察
+- id: pv
+  name: 光伏
+  status: active
+  parent_track: power_equipment
+  sleeve: theme
+  sources:
+  - type: csi
+    code: 931151.CSI
+    name: 光伏产业
+  - type: sw_l3
+    code: 857352.SI
+    name: 光伏电池组件
+  - type: eastmoney
+    code: BK1031.DC
+    name: 光伏设备
+  benchmark: 931151.CSI
+  leader:
+    code: 601012.SH
+    name: 隆基绿能
+  ladder:
+  - code: 300274.SZ
+    name: 阳光电源
+  - code: 002129.SZ
+    name: TCL中环
+  - code: 688223.SH
+    name: 晶科能源
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 光伏；反内卷题材
+- id: optical_component
+  name: 光学元件
+  status: active
+  parent_track: optical
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 850833.SI
+    name: 光学元件
+  benchmark: 850833.SI
+  leader:
+    code: 000725.SZ
+    name: 京东方A
+  ladder:
+  - code: 002475.SZ
+    name: 立讯精密
+  - code: 300433.SZ
+    name: 蓝思科技
+  caps:
+    max_weight: 0.1
+    max_names: 2
+    max_single_stock: 0.1
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 面板/光学
+- id: space
+  name: 航天
+  status: active
+  parent_track: aerospace
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 857411.SI
+    name: 航天装备
+  benchmark: 850931.SI
+  leader:
+    code: 600893.SH
+    name: 航发动力
+  ladder:
+  - code: 000768.SZ
+    name: 中航西飞
+  - code: 600760.SH
+    name: 中航沈飞
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 航天/卫星
+- id: satellite
+  name: 卫星
+  status: active
+  parent_track: aerospace
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 857411.SI
+    name: 航天装备
+  - type: eastmoney
+    code: BK0969.DC
+    name: 卫星导航
+  benchmark: 850931.SI
+  leader:
+    code: 600118.SH
+    name: 中国卫星
+  ladder:
+  - code: 002151.SZ
+    name: 北斗星通
+  - code: 300627.SZ
+    name: 华测导航
+  caps:
+    max_weight: 0.1
+    max_names: 2
+    max_single_stock: 0.1
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: false
+    history_start: '2025-08-20'
+    stale_days: 1
+  notes: 卫星组网/卫星材料
+- id: innovative_drug
+  name: 创新药
+  status: active
+  parent_track: medicine
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 851512.SI
+    name: 化学制剂
+  benchmark: 850151.SI
+  leader:
+    code: 600276.SH
+    name: 恒瑞医药
+  ladder:
+  - code: 603259.SH
+    name: 药明康德
+  - code: 688180.SH
+    name: 君实生物
+  caps:
+    max_weight: 0.15
+    max_names: 2
+    max_single_stock: 0.15
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 创新药；非科技年的备用
+- id: medical_device
+  name: 医疗器械
+  status: active
+  parent_track: medicine
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 851532.SI
+    name: 医疗设备
+  - type: sw_l3
+    code: 851533.SI
+    name: 医疗耗材
+  benchmark: 850153.SI
+  leader:
+    code: 300760.SZ
+    name: 迈瑞医疗
+  ladder:
+  - code: 300003.SZ
+    name: 乐普医疗
+  - code: 002223.SZ
+    name: 鱼跃医疗
+  caps:
+    max_weight: 0.1
+    max_names: 2
+    max_single_stock: 0.1
+    max_probe: 0.05
+    max_add: 0.1
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 医疗器械
+- id: aviation
+  name: 航空装备
+  status: active
+  parent_track: aviation
+  sleeve: theme
+  sources:
+  - type: sw_l3
+    code: 857421.SI
+    name: 航空装备
+  benchmark: 857421.SI
+  leader:
+    code: 600760.SH
+    name: 中航沈飞
+  ladder:
+  - code: 000768.SZ
+    name: 中航西飞
+  - code: 600893.SH
+    name: 航发动力
+  caps:
+    max_weight: 0.1
+    max_names: 2
+    max_single_stock: 0.1
+    max_probe: 0.03
+    max_add: 0.05
+    cooldown_days: 3
+    allow_new: true
+    allow_add: true
+    allow_base: true
+    allow_t: true
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 航空装备
+satellite_themes:
+- id: resources
+  name: 资源/周期
+  status: satellite
+  parent_track: resources
+  sleeve: satellite
+  sources:
+  - type: sw_l2
+    code: 801055.SI
+    name: 工业金属
+  - type: eastmoney
+    code: BK0478.DC
+    name: 有色金属
+  benchmark: 801055.SI
+  leader:
+    code: 601899.SH
+    name: 紫金矿业
+  ladder:
+  - code: 600547.SH
+    name: 山东黄金
+  - code: 603993.SH
+    name: 洛阳钼业
+  caps:
+    max_weight: 0.1
+    max_names: 1
+    max_single_stock: 0.1
+    max_probe: 0.03
+    max_add: 0.05
+    cooldown_days: 5
+    allow_new: true
+    allow_add: false
+    allow_base: false
+    allow_t: false
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 卫星题材，短持；不计入主线
+- id: agriculture
+  name: 农业
+  status: satellite
+  parent_track: agriculture
+  sleeve: satellite
+  sources:
+  - type: sw_l2
+    code: 801017.SI
+    name: 畜禽养殖
+  benchmark: 801017.SI
+  leader:
+    code: 002714.SZ
+    name: 牧原股份
+  ladder:
+  - code: 300498.SZ
+    name: 温氏股份
+  - code: 000876.SZ
+    name: 新希望
+  caps:
+    max_weight: 0.08
+    max_names: 1
+    max_single_stock: 0.08
+    max_probe: 0.03
+    max_add: 0.05
+    cooldown_days: 5
+    allow_new: true
+    allow_add: false
+    allow_base: false
+    allow_t: false
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 卫星题材，短持；不计入主线
+- id: finance
+  name: 金融
+  status: satellite
+  parent_track: finance
+  sleeve: satellite
+  sources:
+  - type: sw_l2
+    code: 801193.SI
+    name: 证券
+  benchmark: 801193.SI
+  leader:
+    code: 600030.SH
+    name: 中信证券
+  ladder:
+  - code: 601318.SH
+    name: 中国平安
+  - code: 600036.SH
+    name: 招商银行
+  caps:
+    max_weight: 0.1
+    max_names: 1
+    max_single_stock: 0.1
+    max_probe: 0.03
+    max_add: 0.05
+    cooldown_days: 5
+    allow_new: true
+    allow_add: false
+    allow_base: false
+    allow_t: false
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 卫星题材，短持；不计入主线
+- id: construction
+  name: 基建
+  status: satellite
+  parent_track: construction
+  sleeve: satellite
+  sources:
+  - type: sw_l2
+    code: 801723.SI
+    name: 基础建设
+  benchmark: 801723.SI
+  leader:
+    code: 601668.SH
+    name: 中国建筑
+  ladder:
+  - code: 601390.SH
+    name: 中国中铁
+  - code: 601186.SH
+    name: 中国铁建
+  caps:
+    max_weight: 0.08
+    max_names: 1
+    max_single_stock: 0.08
+    max_probe: 0.03
+    max_add: 0.05
+    cooldown_days: 5
+    allow_new: true
+    allow_add: false
+    allow_base: false
+    allow_t: false
+  data_quality:
+    membership_pit: true
+    history_start: '2021-01-01'
+    stale_days: 1
+  notes: 卫星题材，短持；不计入主线

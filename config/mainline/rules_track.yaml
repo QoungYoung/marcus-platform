@@ -1,0 +1,77 @@
+version: 1
+as_of: "2026-10-26"
+layer: L1
+description: L1 赛道规则。caps 只做项目级上限，供现有仓位函数读取；不定义总仓位。
+rules:
+  - id: TR1
+    name: 只做主线内赛道
+    source: "2025-02-20 只做主线内部切换轮动"
+    applies_when: "layer == L1"
+    check: "track.parent_mainline == current_mainline.id"
+    severity: hard
+    on_fail: exclude
+    known_cases: ["资源/农业/金融/基建是卫星赛道"]
+  - id: TR2
+    name: 赛道月频 top3
+    source: "2026-10-26 月度细分 top3 8/8"
+    applies_when: "layer == L1"
+    check: "track.rank_monthly <= 3"
+    severity: hard
+    on_fail: watch
+    known_cases: ["2026-01~08 月度科技细分 top3 8/8"]
+  - id: TR3
+    name: 相对强度
+    source: "2025-12-06 龙头要强于板块，板块要强于大盘"
+    applies_when: "layer == L1"
+    check: "track.monthly_excess > 0 and track.leader_rs > 0"
+    severity: hard
+    on_fail: watch
+    known_cases: ["2026-10-23 半导体/通信设备强于上证"]
+  - id: TR4
+    name: 宽度与成交额
+    source: "2025-06-17 有活跃量能；没量的性价比不高"
+    applies_when: "layer == L1"
+    check: "track.breadth_ma20 >= 0.5 and track.amount_ratio >= 1.0"
+    severity: soft
+    on_fail: downgrade
+    known_cases: ["2026-10-23 机器人 291/20；PCB 161/42"]
+  - id: TR5
+    name: 大哥与梯队
+    source: "2025-12-06 核心/风向标/龙头；2026-10-23 机器人有大哥有梯队"
+    applies_when: "layer == L1"
+    check: "track.leader exists and track.ladder_count >= 3 and track.ladder_breadth >= 0.5"
+    severity: hard
+    on_fail: watch
+    known_cases: ["机器人：宇树 + 兆威/绿的/三花/拓普"]
+  - id: TR6
+    name: 拥挤扣分
+    source: "2026-07-28 避开公募踩踏；2026-10-23 存储被公募拖累"
+    applies_when: "layer == L1"
+    check: "track.fund_float_pct <= 2.5 or soft_penalty"
+    severity: soft
+    on_fail: downgrade
+    known_cases: ["存储：兆易 12 只/2.8%，澜起 14 只/4.79%"]
+  - id: TR7
+    name: 两周迟滞
+    source: "docs/ai-agent-lessons-from-b-rebound.md §2.1 位置前置"
+    applies_when: "layer == L1"
+    check: "new_focus_weeks >= 2 and exit_weeks >= 2"
+    severity: hard
+    on_fail: watch
+    known_cases: ["避免单日/单周 flip-flop"]
+  - id: TR8
+    name: 数据缺失
+    source: "docs/ai-agent-lessons-from-b-rebound.md §2.6"
+    applies_when: "layer == L1"
+    check: "sw_members > 0 and sw_daily_rows >= 60"
+    severity: hard
+    on_fail: watch
+    known_cases: ["申万成员用 in_date/out_date；CSI 权重可能有滞后"]
+  - id: TR9
+    name: 项目级 caps
+    source: "2026-10-26 用户：不写总仓位函数，只加项目控制"
+    applies_when: "layer == L1"
+    check: "track.caps.max_weight <= mainline.caps.max_weight and track.caps.max_names <= 3"
+    severity: hard
+    on_fail: reject
+    known_cases: ["半导体 0.35、元件 0.20、通信设备 0.20"]

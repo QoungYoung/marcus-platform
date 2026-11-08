@@ -1,0 +1,29 @@
+version: 1
+as_of: "2026-10-28"
+# 初值沿用 position_class.py 的高低位置阈值，标记为“待判例校准”，不是最终参数。
+thresholds:
+  low:
+    dist_high120_max: -0.30
+    range_pos_120_max: 0.35
+    ret60_max: 0.0
+  high:
+    dist_high120_min: -0.10
+    range_pos_120_min: 0.65
+    ret60_min: 0.0
+    range_pos_120_hard: 0.80
+rules:
+  high:
+    avoid_new_entry: true
+    hold_bias: "卖强留弱，拉升后走"
+    notes: ["不追已涨", "避开公募拥挤", "量价/上影优先"]
+  low:
+    avoid_new_entry: false
+    hold_bias: "留强丢弱，老龙头埋伏"
+    notes: ["避开 ST/业绩暴雷", "找辨识度最高的老龙头", "没量不做"]
+  mid:
+    avoid_new_entry: false
+    hold_bias: "等确认"
+    notes: ["不追高不抄底", "等核心/风向标方向"]
+source_quotes:
+  high_low: "2026-09-04：高位避开公募重仓、卖强留弱、拉升后都走；低位避开暴雷 ST、找辨识度最高的老龙头埋伏、留强丢弱。"
+  old_leader: "2025-12-06：核心、风向标、龙头、杂毛要按板块内辨识度分。"

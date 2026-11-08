@@ -1,0 +1,32 @@
+version: 1
+as_of: "2026-10-26"
+description: >
+  项目级 caps 策略。最终 caps 由 resolver 按“策略 + 成员数/流动性”计算，
+  不逐项硬编码。总仓位/现金仍由现有仓位函数决定。
+track:
+  base_max_weight: 0.20
+  max_weight_range: [0.10, 0.35]
+  max_names: 3
+  liquidity_bonus: 0.05
+  liquidity_cut: 0.05
+  large_members: 100
+  small_members: 30
+theme:
+  base_max_weight: 0.15
+  max_weight_range: [0.08, 0.20]
+  max_names: 2
+  liquidity_bonus: 0.03
+  liquidity_cut: 0.03
+  large_members: 80
+  small_members: 20
+satellite_track:
+  max_weight: 0.10
+  max_names: 1
+satellite_theme:
+  max_weight: 0.08
+  max_names: 1
+single_stock_cap: 0.15
+probe_cap: 0.05
+add_cap: 0.10
+cooldown_days: 3
+satellite_cooldown_days: 5

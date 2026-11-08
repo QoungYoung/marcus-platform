@@ -1,0 +1,416 @@
+tasks:
+- id: wolf_review_score_run
+  name: 每日复盘打分表（B1）
+  description: 按狼大 2025-04-21 复盘表打分（前8项各1分、外围各0.1分、两倍差判多空）→ 预判次日前2小时方向，写 wolf_review_score.json（★
+    2026-10-09 起由 wolf_eod_review_chain 统一调度，本任务置 enabled:false 保留手动触发）
+  enabled: false
+  schedule:
+    type: cron
+    expr: 40 19 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_review_score.py
+    args: []
+  output:
+    log_file: logs/wolf_review_score_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+- id: wolf_theme_resilience
+  name: 方向层「跌得少弹得早」（C2）
+  description: 调整期内按全市场中位基准算各主题的「跌得少/弹得早」（狼大 2026-01-27 调整期第二步）→ 写 wolf_theme_resilience.json，给出方向优先级（★
+    2026-10-09 起由 wolf_eod_review_chain 统一调度，本任务置 enabled:false 保留手动触发）
+  enabled: false
+  schedule:
+    type: cron
+    expr: 50 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_theme_resilience.py
+    args: []
+  output:
+    log_file: logs/wolf_theme_resilience_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+- id: wolf_index_futures
+  name: 股指期货多空 → 次日黄白线预判（A3）
+  description: 拉 fut_holding 多空单**增减**（口径按狼大 2026-01-23）→ 预判次日开盘黄线/白线在上，写 wolf_index_futures.json（实测命中率约51%，仅提示不参与硬门）（★
+    2026-10-09 起由 wolf_eod_review_chain 统一调度，本任务置 enabled:false 保留手动触发）
+  enabled: false
+  schedule:
+    type: cron
+    expr: 45 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wolf_index_futures.py
+    args: []
+  output:
+    log_file: logs/wolf_index_futures_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
+  retry:
+    enabled: true
+- id: weekly_reflect
+  name: 周度反思
+  description: 每周五收盘后 Pi 使用 DeepSeek-v4-pro 最高思考模式深度反思整周策略执行
+  enabled: false
+  type: pi_reflect
+  pi_prompt: weekly
+  schedule:
+    type: cron
+    expr: 30 15 * * fri
+    timezone: Asia/Shanghai
+  output:
+    log_file: logs/weekly_reflect_{date}.log
+    append: false
+  notifications:
+    on_success: true
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on:
+  - daily_review
+- id: arkvol_checkin
+  name: ArkVol 每日签到
+  description: 每日自动签到 arkvol.com，维持/获取每日免费额度
+  enabled: false
+  schedule:
+    type: cron
+    expr: 5 8 * * *
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/arkvol_checkin.py
+    args: []
+  output:
+    log_file: logs/arkvol_checkin_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    channels:
+    - qqbot
+  depends_on: []
+- depends_on: []
+  description: 每周一 8:10 上证指数结构+量能/资金/GJD/历史锚点/主线 -> 狼大两级浪型判定 -> 写入 wave_state.json;交易gate按(level,sub_level)->operation->gate防御
+  enabled: false
+  id: wave_judge
+  name: 波浪判定
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: true
+    pi_analysis: true
+  output:
+    append: false
+    log_file: logs/wave_judge_{date}.log
+  schedule:
+    expr: 10 8 * * mon-fri
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/wave_agent.py
+- id: taxonomy_classify
+  name: 主线taxonomy每周分类 (新概念→开集)
+  description: 停用：已验证 dsh 无法把原子概念聚成行业级子方向, 改走概念级粒度(get_sub_universe per-concept 动态)作为子方向来源;
+    taxonomy 不再作为子方向来源
+  enabled: false
+  schedule:
+    type: cron
+    expr: 10 8 * * sun
+    timezone: Asia/Shanghai
+  script:
+    path: apps/main_line/classify_concept_taxonomy.py
+    args: []
+  output:
+    log_file: logs/taxonomy_classify_{date}.log
+    append: true
+  notifications:
+    on_success: true
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - stock_pool_refresh
+- depends_on: []
+  description: 每周日(股票池入池后) 概念分类——首次用--full全量分类, 后续增量分类新概念并清理不存在的旧概念; [改由 build_concept_taxonomy
+    开集taxonomy替代, 本任务停用]
+  enabled: false
+  id: rotation_universe_classify
+  name: 细分宇宙每周分类
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+  output:
+    append: true
+    log_file: logs/rotation_universe_classify_{date}.log
+  schedule:
+    expr: 5 8 * * sun
+    timezone: Asia/Shanghai
+    type: cron
+  script:
+    args: []
+    path: apps/main_line/classify_rotation_universe.py
+- id: rotation_switch_dryrun
+  name: 主线内切换dry-run
+  description: 盘后(15:25) 主线内切换·狼大逻辑 dry-run 观察计划 → rotation_switch_plan.json(不自动下单)
+  enabled: false
+  schedule:
+    type: cron
+    expr: 25 15 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/rotation_switch_dryrun.py
+    args: []
+  output:
+    append: true
+    log_file: logs/rotation_switch_dryrun_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: rotation_switch_agent_morning
+  name: 主线内切换Agent执行-早盘
+  description: 盘中(09:50) Agent链级决策+个股选买 → 代码护栏后直接下单(模拟盘, 09:45-11:25窗内有效)
+  enabled: false
+  schedule:
+    type: cron
+    expr: 50 9 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/rotation_switch_agent.py
+    args: []
+  output:
+    append: true
+    log_file: logs/rotation_switch_agent_morning_{date}.log
+- id: rotation_switch_agent_afternoon
+  name: 主线内切换Agent执行-午后
+  description: 盘中(14:10) Agent链级决策+个股选买 → 代码护栏后直接下单(模拟盘, 13:00-14:40窗内有效)
+  enabled: false
+  schedule:
+    type: cron
+    expr: 10 14 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/rotation_switch_agent.py
+    args: []
+  output:
+    append: true
+    log_file: logs/rotation_switch_agent_afternoon_{date}.log
+  notifications:
+    channels:
+    - qqbot
+    on_failure: true
+    on_success: false
+    pi_analysis: false
+- id: wave_breb_watch
+  name: B反 尾盘信号（缩量转放量 → 推 QQ）
+  description: '★ 2026-10-22 用户：「加"缩量→放量"分钟级信号」「尾盘能检测到 B反 也可以」。
+
+    每交易日 **14:50**（收盘前 10 分钟 ✓ 还能动手 ✓）检查 170/512480 的分钟线：
+
+    某分钟量 ≥ 前 30 分钟均量 3 倍 且 该分钟下跌 ⇒ 推 QQ ✓（一天一标的只推一次 ✓）。
+
+    实测：588170 在 2026-08-03~08-14 命中 8/10 天 ✓，08-03 当天 14:07 就报（当日低 0.828 / 信号 0.837
+    ✓）
+
+    ⇒ **比日线 down_tag 早 2 个交易日** ✓；6 月窗口与日线同日 ✓。
+
+    ⚠️ 只作**提前提示** ✓ 不是买入指令 ✗ 不参与闸门 ✗ 不改 wave_state ✗。
+
+    '
+  enabled: false
+  schedule:
+    type: cron
+    expr: 50 14 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/wave_breb_watch.py
+    args: []
+  output:
+    log_file: logs/wave_breb_watch_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: false
+    pi_analysis: false
+    channels:
+    - qqbot
+- id: macro_briefing_push
+  name: 宏观事件晨报推送（把 DSH agent 的晨报推 QQ）
+  description: '08:35 读 data/macro_briefing_<当日>.md（由 DSH agent 任务「宏观事件晨报」在 08:20
+    生成 ✓）并推 QQ ✓。
+
+    分工刻意分开：**分析**在 DSH agent（它会调 marcus-panel-tools 的只读数据工具 + 读持仓 ✓）；
+
+    **投递**在平台侧（DSH 没有推送端点 ✗）。无当日晨报 ⇒ 直接退出 0（fail-open ✓ 节假日/agent未跑都走这条 ✓）；
+
+    data/_macro_briefing_pushed.json 去重 ⇒ 同日重复跑不会重复推 ✓。
+
+    '
+  enabled: false
+  schedule:
+    type: cron
+    expr: 35 8 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/push_macro_briefing.py
+    args: []
+  output:
+    log_file: logs/macro_briefing_push_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: false
+- id: core_p05_bellwether_refresh
+  name: 全部子主题风向标刷新（core P0.5 proxy）
+  description: 每日 18:30（chain_map 18:15 之后）重算全部子主题（科技 + 医药/电力/军工/新能源/汽车/资源/金融/消费/农业/基建/传媒）的当日风向标
+    proxy。写 data/core_p05/latest.json 与历史 CSV；不覆盖人工确认表，只更新 proxy。
+  enabled: false
+  schedule:
+    type: cron
+    expr: 30 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/build_core_p05.py
+    args:
+    - --latest-only
+  output:
+    log_file: logs/core_p05_bellwether_refresh_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - chain_map_daily
+  retry:
+    enabled: true
+- id: core_p1_bellwether_state
+  name: 科技子主题风向标状态（bellwether_alive）
+  description: 每日 18:35（风向标刷新 18:30 后）计算科技子主题的 alive/warning/dead/rotated/stale/unknown
+    日频状态，写 data/core_p1/bellwether_state_latest.json 与 bellwether_history.csv。只做状态，不下单。
+  enabled: false
+  schedule:
+    type: cron
+    expr: 40 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/build_bellwether_state.py
+    args: []
+  output:
+    log_file: logs/core_p1_bellwether_state_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_p05_bellwether_refresh
+  retry:
+    enabled: true
+- id: core_p05_confirmed_refresh
+  name: 确认风向标 proxy 兜底（已停用）
+  description: 已停用：该任务基于 proxy 做确定性兜底；正式确认改由 core_p05_agent_confirm 读原始日线+chain_map。保留脚本，不再每日运行。
+  enabled: false
+  schedule:
+    type: cron
+    expr: 40 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/refresh_confirmed_bellwethers.py
+    args: []
+  output:
+    log_file: logs/core_p05_confirmed_refresh_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_p05_bellwether_refresh
+  retry:
+    enabled: true
+- id: core_p05_agent_confirm
+  name: DSH agent 每日确认风向标
+  description: 每日 18:30 由 DSH /chat agent 代人工确认 45 个子主题：读原始日线+chain_map 候选，不读 proxy；默认
+    keep，只有真接力才 switch；switch 必须在 raw_candidates 且创新高、相对旧风向标强。agent 失败保持确认表不变。
+  enabled: false
+  schedule:
+    type: cron
+    expr: 45 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/agent_confirm_bellwethers.py
+    args: []
+  output:
+    log_file: logs/core_p05_agent_confirm_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_p05_bellwether_refresh
+  retry:
+    enabled: true
+- id: core_bellwether_ai
+  name: AI 风向标旁路（已并入 core_bellwether_daily）
+  description: 已并入统一流水线；保留为禁用的手工入口。
+  enabled: false
+  schedule:
+    type: cron
+    expr: 40 18 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/ai_bellwether_daily.py
+    args: []
+  output:
+    log_file: logs/core_bellwether_ai_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on:
+  - core_bellwether_daily
+  retry:
+    enabled: false
