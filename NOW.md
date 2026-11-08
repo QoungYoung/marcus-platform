@@ -28,6 +28,7 @@
 | SSH | `~/.ssh/config` 已配 `ControlMaster/ControlPersist`（2026-11-08），**裸 `ssh marcusrv` 直接可用**，不要再加 `-4 -o IPQoS` |
 | 数据目录 | `data/` 被 gitignore，**每个环境一份，不是同步状态**。不要用本地 `data/` 判断线上 |
 | 搜索 | 本机**没有 rg**，用 `grep` / `find` / `git grep` |
+| DSN 唯一来源 | `core/dsn.py`：`dsn.main()` / `dsn.backtest()`（进程环境 > `.env` > 报错） |
 | 测试 | `.venv/bin/python -m pytest backend/tests -q`（前提：上面的 PG 可连） |
 
 ---
@@ -36,8 +37,10 @@
 
 1. **结论必须落文件。** 任何"先总结 / 先定方案 / 先对齐口径"的产物，必须写进本文件或 `docs/`，不能只留在对话里。对话会被压缩，文件不会。
 2. **持久化只走 PG。** 新代码不许把 `data/*.json` 当状态存储；全仓裸 `json.dump` 计数是棘轮（`scripts/lint_persist.py`），**只能降不能升**。
-3. **代码只走 git。** 禁 `scp`/`rsync` 传代码到线上；线上只允许 `git pull --ff-only`。
-4. **收尾必须跑 `scripts/close_check.py`。** 非 0 退出码就不许说"完成"。
+3. **连接串只从 `core/dsn.py` 取。** 不许在代码里写 `postgresql://...` 字面量；
+   `scripts/lint_dsn.py` 是棘轮（基线 2 处，在 `apps/main_line/db_dsn.py` 的多候选探活里，有意保留）。
+4. **代码只走 git。** 禁 `scp`/`rsync` 传代码到线上；线上只允许 `git pull --ff-only`。
+5. **收尾必须跑 `scripts/close_check.py`。** 非 0 退出码就不许说"完成"。
 
 ---
 
@@ -54,14 +57,16 @@
 
 ## 4. 下一步候选
 
-1. **决定是否部署到线上**：`git -C /opt/marcus-platform pull self`。
-   ⚠️ 注意 `a8650636` 会**首次**把 `config/mainline/` 下 17 个策略 YAML 落到线上
-   （线上现在只有 2 个），可能改变作业行为——建议先在线上 `git show --stat` 看一眼再 pull。
-2. 全仓 **959 处**硬编码 DSN 端口（`localhost:5432` 599 / `127.0.0.1:5433` 256 /
-   `127.0.0.1:18789` 104）收口到单一配置源（`DATABASE_URL` / `BT_DATABASE_URL`）。
-3. 把 `435 处` 裸 `json.dump` 逐步迁到 PG；每迁完一批就
+1. **DSN 收口：已完成（2026-11-08）。** 163 处硬编码 → 只剩 2 处（`apps/main_line/db_dsn.py`
+   的多候选探活清单，有意保留）。唯一来源是 `core/dsn.py`：`dsn.main()` / `dsn.backtest()`，
+   优先级 = 进程环境 > 仓库 `.env` > 明确报错。`backend/app/config.py` 的 `DATABASE_URL`
+   改成必填——缺了直接启动失败，而不是静默连 5432。
+   ⚠️ 教训：这个改动返工了三次（解析器被误改、`__future__` 被压、自举级数算错），
+   批量改连接串必须先问"这个文件是不是自己就是解析器"。
+2. 把 `435 处` 裸 `json.dump` 逐步迁到 PG；每迁完一批就
    `.venv/bin/python scripts/lint_persist.py --update-baseline` 把基线压下去。
-4. 让 `scripts/close_check.py` 进 CI / pre-push hook（现在只能靠自觉调用）。
+3. 让 `scripts/close_check.py` 进 CI / pre-push hook（现在只能靠自觉调用）。
+4. 部署方式固定：本地 `git push srv` → 线上 `git pull --ff-only self`。
 
 ---
 
