@@ -68,10 +68,14 @@
    `from core.wave import current`（PG）；`data/wave_state.json` 自 2026-11-04 起就是
    冻结导出物，**不要再读它**（`close_check` 第 6 项会拦）。
    ⚠️ 回滚杠杆变更：`WOLF_WAVE_STORE=file` 现在只会读回**冻结档**，真回滚请用 `git revert`。
-3. 把 `435 处` 裸 `json.dump` 逐步迁到 PG；每迁完一批就
+3. **主线/分类状态已双写（2026-11-08，灰度 `both`）**：
+   `main_line_state` / `position_class` 两张表已建并回填（生产校验 0 差异）；
+   2 个写入方双写，读侧经 `state_io` 兼容层走 PG。
+   确认线上跑几天无异常后切：`WOLF_STATE_STORE=pg` → 停文件导出 → 删 `data/*.json` 契约。
+4. 把 `435 处` 裸 `json.dump` 逐步迁到 PG；每迁完一批就
    `.venv/bin/python scripts/lint_persist.py --update-baseline` 把基线压下去。
-4. 让 `scripts/close_check.py` 进 CI / pre-push hook（现在只能靠自觉调用）。
-5. 部署方式固定：本地 `git push srv` → 线上 `git pull --ff-only self`。
+5. 让 `scripts/close_check.py` 进 CI / pre-push hook（现在只能靠自觉调用）。
+6. 部署方式固定：本地 `git push srv` → 线上 `git pull --ff-only self`。
 
 ---
 
