@@ -65,9 +65,12 @@
    批量改连接串必须先问"这个文件是不是自己就是解析器"。
 2. **浪型读侧已收口（2026-11-08）**：5 个作业（`shadow_daily` / `event_alert` /
    `entry_timing` / `event_briefing_agent` / `scripts/position_rules`）改为
-   `from core.wave import current`（PG）；`data/wave_state.json` 自 2026-11-04 起就是
-   冻结导出物，**不要再读它**（`close_check` 第 6 项会拦）。
-   ⚠️ 回滚杠杆变更：`WOLF_WAVE_STORE=file` 现在只会读回**冻结档**，真回滚请用 `git revert`。
+   `from core.wave import current`（PG）。
+   **`data/wave_state*.json` 与 `data/wave_state_history/` 已于 2026-11-08 删除**
+   （线上 588 个文件 / 本地 571 个；备份分别在服务器 `/root/wave-state-frozen-20261108.tar.gz`
+   与本机 `~/.dsh/wave-state-frozen-local-20261108.tar.gz`）。回测沙箱 `data/_bt_*/` 未动。
+   ⚠️ `WOLF_WAVE_STORE=file` 已彻底失效（读不到文件，`wave_store` 会打一行告警），
+   真回滚请用 `git revert`。PG 操作纪律：只 `select`，不要拿文件去反写 PG。
 3. **主线/分类状态已双写（2026-11-08，灰度 `both`）**：
    `main_line_state` / `position_class` 两张表已建并回填（生产校验 0 差异）；
    2 个写入方双写，读侧经 `state_io` 兼容层走 PG。

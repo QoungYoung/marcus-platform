@@ -39,11 +39,30 @@ def _data_dir() -> str:
     return os.path.join(root, "data")
 
 
+_FILE_GONE_WARNED = False
+
+
+def _warn_file_gone() -> None:
+    """文件已于 2026-11-08 删除；再走文件路径（file 模式 / PG 失败的兜底）等于没有兜底。
+
+    只在首次触发时打一行，避免每次读档都刷屏。
+    """
+    global _FILE_GONE_WARNED
+    if _FILE_GONE_WARNED:
+        return
+    _FILE_GONE_WARNED = True
+    print("[wave_store] data/wave_state*.json 已于 2026-11-08 删除，PG 是唯一真源；"
+          "WOLF_WAVE_STORE=file 已失效，回滚请用 git revert。", file=sys.stderr)
+
+
 def _file_state(name: str = "wave_state.json") -> Optional[Dict[str, Any]]:
     try:
         with open(os.path.join(_data_dir(), name), encoding="utf-8") as f:
             d = json.load(f)
         return d if isinstance(d, dict) else None
+    except FileNotFoundError:
+        _warn_file_gone()
+        return None
     except Exception:
         return None
 

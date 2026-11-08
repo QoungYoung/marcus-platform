@@ -56,6 +56,10 @@
 
 其中 `wave_state` 已经有 PG 表且在双写——迁移不是「建新表」，而是**摘掉文件分支**，是最小的一步。
 
+> ✅ 2026-11-08 已落地：5 个读点切到 `core.wave`，`data/wave_state*.json` 与
+> `data/wave_state_history/` **已删除**（备份见 NOW.md）。
+> ✅ 2026-11-08 同步完成：`main_line_state` / `position_class` 两张表已建并回填（灰度 `both`）。
+
 ## B 类：共享产物（Top 20）
 
 | 读取方 | 写入处 | 文件名 | 写入方 |
