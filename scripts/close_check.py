@@ -45,7 +45,11 @@ def run(cmd: list[str], cwd: str = ROOT, timeout: int = 30) -> tuple[int, str]:
         return 127, str(e)
 
 
+RAN = [0]
+
+
 def check(name: str, ok: bool, detail: str) -> None:
+    RAN[0] += 1
     mark = "✓" if ok else "✗"
     print(f"  [{mark}] {name}" + (f" — {detail}" if detail else ""))
     if not ok:
@@ -133,6 +137,17 @@ def check_persist() -> None:
     check("持久化无回归", ok, detail)
 
 
+def check_dsn() -> None:
+    """连接串只能从 core/dsn.py 取（scripts/lint_dsn.py 的棘轮）。"""
+    rc, out = run([sys.executable, os.path.join(ROOT, "scripts", "lint_dsn.py")])
+    text = out.strip()
+    ok = rc == 0
+    detail = "" if ok else text[:1200]
+    if ok:
+        detail = text.splitlines()[-1] if text else ""
+    check("DSN 无新增硬编码", ok, detail)
+
+
 
 # 直接读浪型文件的**白名单**：要么是回测沙箱（读 sb/ d/ 下的副本），要么是已加闸口的工具
 _WAVE_READ_ALLOW = {
@@ -204,8 +219,14 @@ def main() -> int:
     check_pushed()
     check_pg()
     check_persist()
+    check_dsn()
+    check_wave_read()
     if not args.skip_ssh:
         check_prod_sync()
+
+    expected = 5 + (0 if args.skip_ssh else 1)
+    if RAN[0] != expected:
+        FAILED.append(f"检查项数量异常：实际 {RAN[0]} 项，预期 {expected} 项（是不是有人删了检查？）")
 
     print()
     if FAILED:
