@@ -31,6 +31,26 @@ def main():
   latest=latest_date('facts'); facts=load(latest,'facts') or {} if latest else {}
  except Exception as e: print('facts skip',str(e)[:80],flush=True)
  tmeta={t.get('theme_id'):t for t in facts.get('themes') or []}
+ # source_history：优先继承最近一个 a_facts；否则用 theme_b4_history 兜底
+ src_hist={}
+ try:
+  _asof=os.path.join(ROOT,'data','asof')
+  _files=sorted([x for x in os.listdir(_asof) if x.endswith('_a_facts.json') and x[:8]<day]) if os.path.isdir(_asof) else []
+  for _f in reversed(_files):
+   _x=json.load(open(os.path.join(_asof,_f),encoding='utf-8'))
+   if _x.get('source_history'):
+    src_hist=_x['source_history']; break
+ except Exception: pass
+ if not src_hist:
+  try:
+   _b4=json.load(open(os.path.join(ROOT,'data','theme_b4_history.json'),encoding='utf-8'))
+   for _name in ('人形机器人','减速器','机器人执行器'):
+    _tid={'人形机器人':'humanoid_robot','减速器':'robot_actuator','机器人执行器':'robot_actuator'}.get(_name)
+    if _tid and _b4.get(_tid):
+     src_hist[_name]=[{'date':z.get('date'),'n':int(z.get('u') or 0)+int(z.get('z') or 0)+1,
+                       'breadth':round(int(z.get('u') or 0)/max(1,int(z.get('u') or 0)+int(z.get('z') or 0)+1),3),
+                       'limit':int(z.get('u') or 0),'avg':0.0} for z in _b4[_tid][-7:]]
+  except Exception: pass
  srcset=set().union(*[by.get(x,set()) for x in SRC_IDS]) if any(by.get(x) for x in SRC_IDS) else set()
  qcache={}
  def q(sym):
@@ -70,7 +90,7 @@ def main():
              'role_hint':{'leader':roles.get('leader'),'wind':roles.get('wind') or [],'mid':roles.get('mid') or []},
              'leader':(rd.get('leader') or {}).get('symbol') or roles.get('leader')})
  os.makedirs(os.path.join(ROOT,'data/asof'),exist_ok=True)
- json.dump({'date':day,'source':'机器人链','source_intraday':{k:out[k] for k in SRC_IDS if k in out},'candidate_meta':cm},
+ json.dump({'date':day,'source':'机器人链','source_history':src_hist,'source_intraday':{k:out[k] for k in SRC_IDS if k in out},'candidate_meta':cm},
            open(os.path.join(ROOT,'data/asof',f'{day}_a_intraday.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
  json.dump({'date':day,'source':'机器人链','candidates':bc,'candidate_meta':cm},
            open(os.path.join(ROOT,'data/asof',f'{day}_b_candidates.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
