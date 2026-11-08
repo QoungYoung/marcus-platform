@@ -31,7 +31,18 @@ def main():
     ap.add_argument("--max-per-day", type=int, default=5)
     a = ap.parse_args()
     mc = load(os.path.join(ROOT, "config", "mainline", "universe_mainline.yaml"))
-    tc = load(os.path.join(ROOT, "config", "mainline", "generated", "universe_theme.yaml"))
+    try:
+        from app.services.theme_universe_store import load_theme_config
+        tc = load_theme_config() or {}
+        if not tc:
+            print("[theme_coarse_screen] ⚠ theme_definition 表为空/未命中，退回读 universe_theme.yaml",
+                  file=sys.stderr)
+    except Exception as e:
+        print(f"[theme_coarse_screen] ⚠ 从 PG 读 theme 配置失败，退回读 universe_theme.yaml: {e}",
+              file=sys.stderr)
+        tc = {}
+    if not tc:
+        tc = load(os.path.join(ROOT, "config", "mainline", "generated", "universe_theme.yaml"))
     # 当前主线 tracks（粗筛只用它排除非主线；不判断主线 active）
     allowed = set()
     for m in mc.get("mainlines") or []:

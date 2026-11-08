@@ -63,7 +63,19 @@ def main():
     args = ap.parse_args()
     base = os.path.join(ROOT, 'data', 'mainline', args.date)
     theme = json.load(open(os.path.join(base, 'theme.json'), encoding='utf-8'))
-    cfg = yaml.safe_load(open(os.path.join(ROOT, 'config', 'mainline', 'generated', 'universe_theme.yaml'), encoding='utf-8'))
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "backend"))
+        from app.services.theme_universe_store import load_theme_config
+        cfg = load_theme_config() or {}
+        if not cfg:
+            print("[theme_b_candidates] ⚠ theme_definition 表为空/未命中，退回读 universe_theme.yaml",
+                  file=sys.stderr)
+    except Exception as e:
+        print(f"[theme_b_candidates] ⚠ 从 PG 读 theme 配置失败，退回读 universe_theme.yaml: {e}",
+              file=sys.stderr)
+        cfg = {}
+    if not cfg:
+        cfg = yaml.safe_load(open(os.path.join(ROOT, 'config', 'mainline', 'generated', 'universe_theme.yaml'), encoding='utf-8'))
     tcfg = {x['id']: x for x in (cfg.get('themes') or []) + (cfg.get('satellite_themes') or [])}
     wanted = [x.strip() for x in args.themes.split(',') if x.strip()]
     themes = []
