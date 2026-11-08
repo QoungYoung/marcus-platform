@@ -128,3 +128,18 @@ data/strategy_summary_*.md
 data/*.parquet
 .deploy/
 jobs/.diag_*.py
+
+# ── 2026-11-08：机器本地状态与生成物（不入库，否则每机一份必然冲突）──
+# dsh-memoir 的记忆镜像：3.2MB 追加日志，每台机器各一份；入库只会制造 merge 冲突，
+# 而且它从来不是"当前生效的规则"（那在 NOW.md）。历史已保留在 git 历史里，不再追踪。
+PROJECT_MEMORY.md
+# jobs 生成的配置快照，每环境一份（生成方见 jobs/rotation_universe_refresh 等）
+config/mainline/generated/
+# 一次性配置备份/清理记录
+config/tasks.yaml.bak_*
+# 根目录的表格/杂项产物
+/*.xlsx
+
+# ★ 例外：持久化棘轮基线必须入库（否则每台机器基线不同，检查形同虚设）
+!/.persist-baseline.json
+
