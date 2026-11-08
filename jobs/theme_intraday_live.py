@@ -92,8 +92,7 @@ def main():
  os.makedirs(os.path.join(ROOT,'data/asof'),exist_ok=True)
  a_payload={'date':day,'source':'机器人链','source_history':src_hist,'source_intraday':{k:out[k] for k in SRC_IDS if k in out},'candidate_meta':cm}
  b_payload={'date':day,'source':'机器人链','candidates':bc,'candidate_meta':cm}
- json.dump(a_payload,open(os.path.join(ROOT,'data/asof',f'{day}_a_intraday.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
- json.dump(b_payload,open(os.path.join(ROOT,'data/asof',f'{day}_b_candidates.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
+ # 不落 data/asof；只入 PG，避免同一天多槽覆盖历史 JSON
  try:
   sys.path.insert(0,os.path.join(ROOT,'jobs'))
   from theme_candidate_store import save as _save

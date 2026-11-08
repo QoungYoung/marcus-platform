@@ -59,20 +59,24 @@ def main():
                 cur.execute("update theme_ab_trigger set status='running' where trade_date=%s and slot=%s and status='pending'",(td,slot))
             c.commit()
             try:
+                sys.path.insert(0,os.path.join(ROOT,'jobs'))
+                from theme_candidate_store import load as _cload
                 apath=next((os.path.join(ROOT,'data/asof',f'{day}_{x}.json') for x in ('a_intraday','a_facts') if os.path.exists(os.path.join(ROOT,'data/asof',f'{day}_{x}.json'))),None)
-                if not apath:
+                a_data=json.load(open(apath,encoding='utf-8')) if apath else None
+                if not a_data:
                     import subprocess
                     subprocess.run([sys.executable,os.path.join(ROOT,'jobs/theme_intraday_live.py'),'--date',day],env=os.environ,check=False,timeout=900)
-                    apath=next((os.path.join(ROOT,'data/asof',f'{day}_{x}.json') for x in ('a_intraday','a_facts') if os.path.exists(os.path.join(ROOT,'data/asof',f'{day}_{x}.json'))),None)
-                if not apath: raise RuntimeError('no A data')
+                    a_data=_cload(day,'a_intraday')
+                if not a_data: raise RuntimeError('no A data')
                 holding=load_holding(); wave=load_wave(day)
-                A,araw=call(prompt('a_source')+f"\n\n数据：{apath}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_a_{day}_{slot}')
+                A,araw=call(prompt('a_source')+f"\n\n数据：{json.dumps(a_data,ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_a_{day}_{slot}')
                 target=''; leader=''; wind=[]; mid=[]; mode='none'; status='ok' if not A.get('need_switch') else 'proposed'
                 braw={}
                 if A.get('need_switch'):
                     bpath=os.path.join(ROOT,'data/asof',f'{day}_b_candidates.json')
-                    if not os.path.exists(bpath): raise RuntimeError('no B data')
-                    B,braw=call(prompt('b_target')+f"\n\n数据：{bpath}\nA候选：{json.dumps(A.get('candidates') or [],ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_b_{day}_{slot}')
+                    b_data=json.load(open(bpath,encoding='utf-8')) if os.path.exists(bpath) else _cload(day,'b_candidates')
+                    if not b_data: raise RuntimeError('no B data')
+                    B,braw=call(prompt('b_target')+f"\n\n候选：{json.dumps(b_data.get('candidates') or [],ensure_ascii=False)}\nA候选：{json.dumps(A.get('candidates') or [],ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_b_{day}_{slot}')
                     target=B.get('target') or ''; leader=(B.get('roles') or {}).get('leader') or ''
                     wind=(B.get('roles') or {}).get('wind') or []; mid=(B.get('roles') or {}).get('mid') or []
                     mode=B.get('mode') or ''
