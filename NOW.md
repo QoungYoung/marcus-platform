@@ -3,7 +3,7 @@
 > **规矩：每次任务收尾就地覆盖本文件，不追加。上限 200 行。**
 > 只写"现在生效的结论"，不写过程。历史流水在 memoir（`memoir_read`），归档在 PROJECT_MEMORY.md（已移出 git）。
 >
-> 最后更新：2026-11-08（依据：实测 + 当日修复）
+> 最后更新：2026-11-08（依据：实测 + 当日修复；工程基建已落地，见 §2 与 git log）
 
 ---
 
@@ -43,20 +43,25 @@
 
 ## 3. 在途工作（未完成，别当已完成）
 
-- **3 个已修改未提交的跟踪文件**（上一次会话留下的）：
-  - `config/mainline/theme_candidate_policy.yaml` —— 新增 `media / data_elements / xinchuang` 三个题材，**同时删掉了原有的 include/exclude 说明注释**（要补回来）
-  - `jobs/theme_b_candidates.py` —— 加了 `try: from app.services.theme_universe_store import load_theme_config` / `except Exception: cfg = {}`，然后**静默退回读 `config/mainline/generated/universe_theme.yaml`**
-  - `jobs/theme_coarse_screen.py` —— 同一套改法
-  - ⚠️ **待决策**：这个"PG 失败就静默读文件"的反模式要留还是改成显式报错（推荐：改成写日志的显式降级，或直接抛）
-- 最近提交线：`theme` 候选落 PG（`81ce3226` 一带）+ `缩转放` 盘中监控推送
+- **无。** 2026-11-08 已把上一次会话遗留的 3 个文件收尾并提交（`46beb6eb`）：
+  `theme_candidate_policy.yaml`（补回注释）+ `theme_b_candidates.py` /
+  `theme_coarse_screen.py`（PG 优先读题材配置，降级改成打 stderr 警告，不再静默）。
+- 当前工作区干净，`HEAD == srv/main`。**线上检出仍落后 4 个提交**，属于"待部署"而非"未提交"。
+- 最近提交线：`theme` 候选落 PG（`81ce3226` 一带）+ `缩转放` 盘中监控推送 +
+  `chore(agent)` 工程基建修复（`2584ee97`）+ 223 个历史文件入库（`a8650636`）。
 
 ---
 
 ## 4. 下一步候选
 
-1. 决定 §3 的降级策略，把那 3 个文件收尾掉。
-2. 全仓 **959 处**硬编码 DSN 端口（`localhost:5432` 599 / `127.0.0.1:5433` 256 / `127.0.0.1:18789` 104）收口到单一配置源。
-3. 线上检出落后于 `srv` 时：`git -C /opt/marcus-platform pull self`。
+1. **决定是否部署到线上**：`git -C /opt/marcus-platform pull self`。
+   ⚠️ 注意 `a8650636` 会**首次**把 `config/mainline/` 下 17 个策略 YAML 落到线上
+   （线上现在只有 2 个），可能改变作业行为——建议先在线上 `git show --stat` 看一眼再 pull。
+2. 全仓 **959 处**硬编码 DSN 端口（`localhost:5432` 599 / `127.0.0.1:5433` 256 /
+   `127.0.0.1:18789` 104）收口到单一配置源（`DATABASE_URL` / `BT_DATABASE_URL`）。
+3. 把 `435 处` 裸 `json.dump` 逐步迁到 PG；每迁完一批就
+   `.venv/bin/python scripts/lint_persist.py --update-baseline` 把基线压下去。
+4. 让 `scripts/close_check.py` 进 CI / pre-push hook（现在只能靠自觉调用）。
 
 ---
 
