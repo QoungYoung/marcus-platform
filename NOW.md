@@ -63,10 +63,15 @@
    改成必填——缺了直接启动失败，而不是静默连 5432。
    ⚠️ 教训：这个改动返工了三次（解析器被误改、`__future__` 被压、自举级数算错），
    批量改连接串必须先问"这个文件是不是自己就是解析器"。
-2. 把 `435 处` 裸 `json.dump` 逐步迁到 PG；每迁完一批就
+2. **浪型读侧已收口（2026-11-08）**：5 个作业（`shadow_daily` / `event_alert` /
+   `entry_timing` / `event_briefing_agent` / `scripts/position_rules`）改为
+   `from core.wave import current`（PG）；`data/wave_state.json` 自 2026-11-04 起就是
+   冻结导出物，**不要再读它**（`close_check` 第 6 项会拦）。
+   ⚠️ 回滚杠杆变更：`WOLF_WAVE_STORE=file` 现在只会读回**冻结档**，真回滚请用 `git revert`。
+3. 把 `435 处` 裸 `json.dump` 逐步迁到 PG；每迁完一批就
    `.venv/bin/python scripts/lint_persist.py --update-baseline` 把基线压下去。
-3. 让 `scripts/close_check.py` 进 CI / pre-push hook（现在只能靠自觉调用）。
-4. 部署方式固定：本地 `git push srv` → 线上 `git pull --ff-only self`。
+4. 让 `scripts/close_check.py` 进 CI / pre-push hook（现在只能靠自觉调用）。
+5. 部署方式固定：本地 `git push srv` → 线上 `git pull --ff-only self`。
 
 ---
 
