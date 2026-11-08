@@ -34,12 +34,12 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# 浪型唯一读入口：PG（core.wave → wave_store）。文件只剩导出用途，不再被读。
-from core.wave import current as _wave  # noqa: E402
 for p in (ROOT, os.path.join(ROOT, "core"), os.path.join(ROOT, "backend")):
     if p not in sys.path:
         sys.path.insert(0, p)
+
+# 浪型唯一读入口：PG（core.wave → wave_store）。文件只剩导出用途，不再被读。
+from core.wave import current as _wave  # noqa: E402
 
 from tushare_relay import relay_query   # noqa: E402
 

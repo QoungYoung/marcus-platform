@@ -14,7 +14,11 @@
 """
 import argparse, datetime as dt, json, os, sys
 
-sys.path.insert(0, "core")
+# 必须把 **仓库根**（而不是 core/ 内部）放进 sys.path，否则 import core.wave 找不到包
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_ROOT, os.path.join(_ROOT, "core")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 # 浪型唯一读入口：PG（core.wave → wave_store）。文件只剩导出用途，不再被读。
 from core.wave import current as _wave  # noqa: E402
