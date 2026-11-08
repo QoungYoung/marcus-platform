@@ -15,6 +15,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import os
@@ -97,7 +104,7 @@ def install_leg_fields(TB, pack: str, symbol: str, dip_tol: float):
 def conds_from_prod(symbol: str, day: str):
     """从生产 `t_conditions` 取该标的该日的 253/254 条件定义（expression 原样）。"""
     import psycopg2
-    url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+    url = _dsn_src.main()
     c = psycopg2.connect(url); cur = c.cursor()
     cur.execute("""SELECT id, trigger_kind, expression, direction, trade_date FROM t_conditions
                    WHERE symbol=%s AND trade_date=%s AND publisher='switch' AND direction='buy'
@@ -143,7 +150,7 @@ def conds_from_legs(symbol: str, legs_path: str):
 def prod_triggers(symbol: str, day: str):
     """生产真实触发（按 kind 归并，给首次时间与次数）。"""
     import psycopg2
-    url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+    url = _dsn_src.main()
     c = psycopg2.connect(url); cur = c.cursor()
     cur.execute("""SELECT t.trigger_kind, min(tr.created_at), count(*)
                    FROM t_triggers tr JOIN t_conditions t ON t.id = tr.condition_id

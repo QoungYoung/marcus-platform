@@ -12,6 +12,13 @@ VN.PY 桥接层 — 将 VN.PY 原版 PaperAccount 接入 Marcus 交易系统。
     bridge.stop()
 """
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import os
 import sys
 import json
@@ -80,7 +87,7 @@ class VNPyBridge:
     ):
         self._db_url = db_url or os.getenv(
             "DATABASE_URL",
-            "postgresql://marcus:marcus123@localhost:5432/marcus_trading",
+            _dsn_src.main(),
         )
         self._initial_capital = initial_capital
         self._available_cash = initial_capital

@@ -142,4 +142,5 @@ config/tasks.yaml.bak_*
 
 # ★ 例外：持久化棘轮基线必须入库（否则每台机器基线不同，检查形同虚设）
 !/.persist-baseline.json
+!/.dsn-baseline.json
 

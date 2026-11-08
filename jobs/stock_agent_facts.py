@@ -10,6 +10,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import time
@@ -511,7 +518,7 @@ def _b_rebound_block(date8: str) -> dict:
     out: dict = {"as_of": date8}
     try:
         import psycopg2
-        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        dsn = _dsn_src.main()
         with psycopg2.connect(dsn, connect_timeout=5) as conn:
             cur = conn.cursor()
             cur.execute("select session_date, level, sub_level, operation from wave_state "

@@ -5,6 +5,13 @@
 70个交易日×0.1s≈1分钟拉全缓存, 取代 360+ 次逐只请求(原~30min); 概念优先级(光模块/CPO/算力/AI应用 先行)+全量概念。
 输出: data/stock_confirm_result.json (平铺 {概念:{theme,n,confirm,ratio,stocks}})
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import json, os, sys, time
 import pandas as pd, numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -274,7 +281,7 @@ def order_members(codes, close, mode=None, lookback=20, vol=None):
             _val = [c for c in codes if c in _cols]
             if _val and isinstance(close, _pd8.DataFrame):
                 _sys8.path.insert(0, _os8.path.dirname(_os8.path.abspath(__file__)))
-                _dsn = _os8.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+                _dsn = _dsn_src.main()
                 _conn = _pg8.connect(_dsn, connect_timeout=4)
                 try:
                     _conn.autocommit = True

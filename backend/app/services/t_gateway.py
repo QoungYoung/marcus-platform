@@ -8,6 +8,13 @@
 - 当日可卖额度原子账本：卖腿扣减(UPDATE...RETURNING)、买腿回补、卖出在途锁
 - 可卖底仓分档 L0-L3；异常升级 6 类清单；STOP_ALL/日亏熔断；孤儿单处置；滑点/价差过滤
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 from .t_leg_kinds import BUY_LEG_KINDS, is_buy_leg, LOWDIP_KINDS, is_lowdip, PREVLOW_M5_KINDS, is_prevlow_m5  # noqa: F401  §9.496 单一来源
 
 _LOWDIP_KINDS = LOWDIP_KINDS     # §9.496 单一来源：加新腿类型只改 t_leg_kinds.py
@@ -1632,7 +1639,7 @@ def _count_today_trades(account_id: str, symbol: str, side: str) -> int:
         import datetime as _dt
         import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+                                          _dsn_src.main()))
         cur = conn.cursor()
         _dir = "买入" if side == "buy" else "卖出"
         cur.execute("SELECT count(*) FROM paper_trades WHERE account_id=%s AND symbol=%s AND direction=%s "

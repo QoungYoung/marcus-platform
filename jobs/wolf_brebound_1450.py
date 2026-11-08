@@ -12,6 +12,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import os
@@ -152,7 +159,7 @@ def wave_from_pg(asof: str) -> dict | None:
     iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
     try:
         import psycopg2
-        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        dsn = _dsn_src.main()
         with psycopg2.connect(dsn, connect_timeout=6) as conn:
             cur = conn.cursor()
             cur.execute("select session_date, level, sub_level, operation, mode, stage, "
@@ -197,7 +204,7 @@ def wave_block(asof: str) -> dict | None:
             from b_rebound_schema import ensure_schema          # 直跑：sys.path[0] = jobs/
         except ImportError:                                     # 被当包导入（pytest 等）
             from jobs.b_rebound_schema import ensure_schema
-        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        dsn = _dsn_src.main()
         with psycopg2.connect(dsn, connect_timeout=6) as conn:
             ensure_schema(conn)        # 本地/新环境缺这两张表时自愈（2026-10-30 14:50 就是缺表 ✗）
             cur = conn.cursor()
@@ -442,7 +449,7 @@ def wave_intraday(day: str) -> dict | None:
         prev = None
         try:
             import psycopg2
-            dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+            dsn = _dsn_src.main()
             with psycopg2.connect(dsn, connect_timeout=5) as conn:
                 cur = conn.cursor()
                 cur.execute("select rung from wave_state where session_date < %s "
@@ -517,7 +524,7 @@ def production_wave(asof: str) -> dict | None:
     b_rebound_wave_state 只负责「在这一档里的哪一段」。"""
     try:
         import psycopg2
-        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        dsn = _dsn_src.main()
         iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
         with psycopg2.connect(dsn, connect_timeout=6) as conn:
             cur = conn.cursor()
@@ -557,7 +564,7 @@ def position_used_actual() -> dict:
     #   仓位% = 持仓市值 ÷ (可用现金 + 冻结 + 持仓市值)；市值优先用最新收盘，取不到退成本价
     try:
         import psycopg2
-        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        dsn = _dsn_src.main()
         with psycopg2.connect(dsn, connect_timeout=5) as conn:
             cur = conn.cursor()
             cur.execute("select available_cash, frozen_cash, initial_capital from paper_account_info "
@@ -756,7 +763,7 @@ def read(day: str, cut: str = CUT) -> dict:
         _wi["as_of_time"] = (cb or {}).get("quote_time", "")[8:12] if intraday else "close"
         try:
             import psycopg2
-            _dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+            _dsn = _dsn_src.main()
             with psycopg2.connect(_dsn, connect_timeout=5) as _c:
                 try:                                   # 新环境先自愈建表（含 b_rebound_wave_intraday）
                     from b_rebound_schema import ensure_schema as _es
@@ -793,7 +800,7 @@ def read(day: str, cut: str = CUT) -> dict:
                     f"（{_lad['reason']}）")
         if True:
             import psycopg2
-            _dsn2 = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+            _dsn2 = _dsn_src.main()
             with psycopg2.connect(_dsn2, connect_timeout=5) as _c2:
                 try:
                     from b_rebound_schema import ensure_schema as _es2

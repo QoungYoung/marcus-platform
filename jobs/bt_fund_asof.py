@@ -21,6 +21,13 @@
   python -u jobs/bt_fund_asof.py fetch --start 20260105 --end 20260120 --tag t2
   python -u jobs/bt_fund_asof.py show  --tag t2 --stocks 603986.SH,600584.SH --asof 20260108
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time, argparse, datetime as dt
 
 
@@ -661,7 +668,7 @@ def stock_concepts(codes=None):
     try:
         import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+                                          _dsn_src.main()))
         cur = conn.cursor()
         if codes:
             cur.execute("select ts_code, concept_name from stock_concept_map where ts_code = any(%s)",
@@ -699,7 +706,7 @@ def segment_widths():
     try:
         import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+                                          _dsn_src.main()))
         cur = conn.cursor()
         for key in sorted({(t, l) for lst in concept_segments().values() for t, _r, l in lst}):
             cons = [c for c, lst in concept_segments().items() if any((x[0], x[2]) == key for x in lst)]

@@ -9,6 +9,13 @@ risk_gate.py — P2 风控规则 v1（基于 docs/p2-risk-wolf-logic.md R-R1~R-R
   R-R4 拥挤回避: 由 rotation_universe 承接(本模块不重复), 预留 crowded 参数
 用法: python apps/main_line/test_risk_gate.py
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import calendar, datetime, os
 
 def load_flags(symbol):
@@ -16,7 +23,7 @@ def load_flags(symbol):
     out = {"flags": set(), "db": True}
     try:
         import psycopg2
-        conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = psycopg2.connect(_dsn_src.main())
         cur = conn.cursor()
         cur.execute("SELECT flag_type, value, source FROM risk_flags WHERE symbol=%s", (symbol,))
         rows = cur.fetchall(); cur.close(); conn.close()

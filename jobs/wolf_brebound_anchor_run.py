@@ -13,6 +13,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import os
@@ -32,7 +39,7 @@ LOOKBACK = 90             # 给 agent 看的近期 K 线根数
 
 
 def dsn() -> str:
-    return os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+    return _dsn_src.main()
 
 
 def load_anchors(ins: str) -> list[dict]:
@@ -186,7 +193,7 @@ def production_rung(asof: str) -> str:
     """生产浪型（裁决源）的 sub_level —— level_key 必须与它一致。"""
     try:
         import psycopg2
-        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading"
+        dsn = _dsn_src.main()
         iso = f"{asof[:4]}-{asof[4:6]}-{asof[6:]}"
         with psycopg2.connect(dsn, connect_timeout=6) as conn:
             cur = conn.cursor()

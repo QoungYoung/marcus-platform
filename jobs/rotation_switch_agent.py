@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 """rotation_switch_agent.py — 主线内切换·Agent(Pi/dsh)链级决策 + 模拟盘直接执行（代码护栏兜底）"""
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time
 import urllib.request
 
@@ -21,7 +28,7 @@ def _silent_alert(where, exc=None):
 
 sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "data")
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 CHAT_URL = os.getenv("WAVE_CHAT_URL", "http://marcus-dsh:3001/chat")
 API = os.getenv("MARCUS_API_URL", "http://backend:8000/api/v1")
 FENCE = chr(96) * 3

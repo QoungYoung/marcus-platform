@@ -13,6 +13,13 @@
 用法：`.venv/bin/python jobs/record_daily_nav.py [--day 20260428] [--account drabt35]`
 """
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import json, os, sqlite3, sys, time
 
 
@@ -49,7 +56,7 @@ def main() -> int:
         b = os.path.basename(str(os.getenv("DATA_DIR") or "").strip())
         day = b if (len(b) == 8 and b.isdigit()) else time.strftime("%Y%m%d")
     acc = os.getenv("T_MONITOR_ACCOUNT", "drabt35") or "drabt35"
-    dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+    dsn = _dsn_src.main()
     cash = mv = 0.0
     n_pos = 0
     try:

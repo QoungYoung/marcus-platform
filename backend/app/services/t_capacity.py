@@ -20,6 +20,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import json
 import os
 import time
@@ -353,7 +360,7 @@ def sold_today_notional(account_id: str, day: str = "") -> float:
         from datetime import datetime as _dt
         d8 = str(day or "").replace("-", "") or _dt.now().strftime("%Y%m%d")
         dsh = "%s-%s-%s" % (d8[:4], d8[4:6], d8[6:8])
-        dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+        dsn = _dsn_src.main()
         conn = psycopg2.connect(dsn, connect_timeout=4)
         try:
             conn.autocommit = True

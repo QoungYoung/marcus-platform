@@ -10,6 +10,13 @@
       data/rotation_quadrant_history_pit.json(13时点历史+稳定性) + 与旧口径对照
 用法: python -u apps/main_line/backtest_rotation_quadrant_pit.py
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import psycopg2
@@ -18,7 +25,7 @@ import backtest_rotation_quadrant as brq          # 复用空间维度/pick_date
 from rotation_universe import SUB_UNIVERSE as SUB, META_GROUPS, _norm
 
 DATA = os.environ.get("DATA_DIR", "data")
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 
 def load(p):
     try: return json.load(open(p, encoding="utf-8"))

@@ -12,6 +12,13 @@ SQLite -> PostgreSQL 迁移脚本（市场主数据）
     python scripts/migrate_market_data_to_pgsql.py              # 执行迁移
     python scripts/migrate_market_data_to_pgsql.py --dry-run    # 仅打印行数，不写入
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import argparse
 import os
 import sqlite3
@@ -22,7 +29,7 @@ from urllib.parse import urlparse
 import psycopg2
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PG_URL = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+DEFAULT_PG_URL = _dsn_src.main()
 
 # (sqlite 文件, sqlite 表名, pg 表名, 列清单)
 SOURCES = [

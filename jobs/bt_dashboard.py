@@ -36,6 +36,13 @@
 
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import glob
 import json
@@ -78,7 +85,7 @@ except Exception:  # pragma: no cover
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
-DEFAULT_PG = "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+DEFAULT_PG = _dsn_src.backtest()
 # 本机已装的 GSAP（离线自托管；只读转发，绝不改动 frontend/）
 GSAP_PATH = os.path.join(REPO, "frontend", "node_modules", "gsap", "dist", "gsap.min.js")
 BUY_FEE = 1.0 + 0.000396   # 买入：佣金 0.000086 + 过户 0.00001 + 其他 0.0003（见 backend/app/core/trading/backtest_paper.py）
@@ -3400,7 +3407,7 @@ def day_progress(root: str, account: str = "", log_path: str = "") -> dict:
             try:
                 import psycopg2 as _pg2
                 _cn = _pg2.connect(os.environ.get("DATABASE_URL") or
-                                   "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading",
+                                   _dsn_src.backtest(),
                                    connect_timeout=6)
                 _cn.set_session(readonly=True, autocommit=True)
                 _c2 = _cn.cursor()
@@ -3423,7 +3430,7 @@ def day_progress(root: str, account: str = "", log_path: str = "") -> dict:
             if _codes:
                 import psycopg2 as _pg3
                 _cn3 = _pg3.connect(os.environ.get("DATABASE_URL") or
-                                    "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading",
+                                    _dsn_src.backtest(),
                                     connect_timeout=6)
                 _cn3.set_session(readonly=True, autocommit=True)
                 _c3 = _cn3.cursor()

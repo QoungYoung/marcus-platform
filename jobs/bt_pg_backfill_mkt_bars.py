@@ -43,6 +43,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import io
 import os
@@ -53,7 +60,7 @@ import time
 JOBS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(JOBS)
 DEFAULT_PG = os.getenv("BT_PG_URL") or os.getenv("DATABASE_URL") \
-    or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+    or _dsn_src.backtest()
 DEFAULT_BARS_DB = os.getenv("BT_BARS_DB") or os.path.join(REPO, "data", "_bt_full", "bars.sqlite")
 
 COLS = ["ts_code", "trade_date", "open", "high", "low", "close", "pre_close", "pct_chg",

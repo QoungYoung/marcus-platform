@@ -41,6 +41,13 @@ S3 放量突破 → S4 站稳），且 S1 是**前置**；而 S1 的量化条件
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import json
 import os
 import sys
@@ -502,7 +509,7 @@ def _pg_conn():
         except Exception:
             pass
     c = psycopg2.connect(os.environ.get("DATABASE_URL")
-                         or "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+                         or _dsn_src.main())
     _PG_CONN[0] = c
     return c
 
@@ -643,7 +650,7 @@ def scan_pullback(day: str, symbols: Optional[Sequence[str]] = None,
         try:
             import psycopg2
             import os as _os2
-            dsn = _os2.environ.get("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+            dsn = _dsn_src.main()
             cn = psycopg2.connect(dsn, connect_timeout=10)
             cn.set_session(readonly=True, autocommit=True)
             cur = cn.cursor()

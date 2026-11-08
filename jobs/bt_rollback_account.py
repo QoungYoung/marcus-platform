@@ -28,6 +28,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import os
@@ -35,7 +42,7 @@ import sqlite3
 import sys
 from typing import Any, Dict, List, Tuple
 
-DSN_DEFAULT = "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+DSN_DEFAULT = _dsn_src.backtest()
 
 
 def ts_code_of(sym: str) -> str:

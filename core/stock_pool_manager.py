@@ -5,6 +5,13 @@
 支持行业板块查询、概念板块查询、全量股票获取
 """
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import sqlite3
 import json
 import sys
@@ -77,7 +84,7 @@ class StockPoolManager:
         import os
         import psycopg2
         from urllib.parse import urlparse
-        url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+        url = _dsn_src.main()
         return psycopg2.connect(url)
 
     def _init_database(self):

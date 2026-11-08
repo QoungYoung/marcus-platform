@@ -3,6 +3,13 @@
 Technical indicator API endpoints.
 Fibonacci retracement & daily K-channel (牛股计算器策略).
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import asyncio
 import json
 import logging
@@ -2370,7 +2377,7 @@ def _legacy_tech_gates() -> bool:
 
 def _db_conn_p3():
     import psycopg2 as _pg
-    return _pg.connect(os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+    return _pg.connect(_dsn_src.main())
 
 
 def _account_held_symbols(account_id: str = "stock") -> set:
@@ -2973,7 +2980,7 @@ async def check_entry_filters(req: EntryCheckRequest):
     # ── risk_flags 风控(选股后即时查产物): earnings_bad/ST/公告AI → block ──
     try:
         import os as _os3, psycopg2 as _pg3
-        _conn = _pg3.connect(_os3.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        _conn = _pg3.connect(_dsn_src.main())
         _cur = _conn.cursor()
         _cur.execute("SELECT flag_type, value, source FROM risk_flags WHERE symbol=%s", (ts_code,))
         _risk_rows = _cur.fetchall(); _cur.close(); _conn.close()

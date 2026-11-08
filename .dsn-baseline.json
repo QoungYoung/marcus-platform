@@ -1,0 +1,7 @@
+{
+ "total": 2,
+ "files": {
+  "apps/main_line/db_dsn.py": 2
+ },
+ "note": "2026-11-08 收口后：仅剩 apps/main_line/db_dsn.py 的 2 个多候选探活字面量（有意保留）"
+}

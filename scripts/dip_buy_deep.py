@@ -9,6 +9,13 @@
 数据：bt PG paper_trades（成交通道 ✓）+ mkt_bars_daily（当日/前日区间 + 成交量 ✓）
 拦截画像：各臂 prod_*.json 的 `[COND-TIMING]` 触发（含 event_type / quote_price ✓）
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import glob
 import json
 import os
@@ -18,7 +25,7 @@ from collections import Counter, defaultdict
 
 import psycopg2
 
-DSN = "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+DSN = _dsn_src.backtest()
 
 
 def _norm(sym):

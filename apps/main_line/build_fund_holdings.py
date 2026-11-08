@@ -4,6 +4,13 @@
         fund_share(选规模topN) + fund_portfolio(每基金全部季度, 取 end_date=20260630)
 用法: python -u apps/main_line/build_fund_holdings.py [top_n] [end_date]
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time
 
 
@@ -27,7 +34,7 @@ try:
 except Exception as e:
     print("ERR psycopg2:", e); sys.exit(1)
 
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 
 
 def _relay():

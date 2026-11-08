@@ -5,6 +5,13 @@
 Step2: lhb_foreign_sell 方向感知(海外链/红利核心 map) + p2_gate_log 命中日志。
 注意: crowding_blacklist 硬拦已于 2026-09-13 真删(D15 证拦反 + 用户指令); risk_flags 仍在 indicator 内实现。
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, json, datetime as _dt
 
 
@@ -74,7 +81,7 @@ def _candidate_dirs(ts_code):
     dirs=[]
     try:
         import psycopg2 as _pg
-        conn=_pg.connect(os.environ.get("DATABASE_URL","postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn=_pg.connect(_dsn_src.main())
         cur=conn.cursor()
         cur.execute("SELECT concept_name FROM stock_concept_map WHERE ts_code=%s",(ts_code,))
         names=[str(r[0]) for r in cur.fetchall()]

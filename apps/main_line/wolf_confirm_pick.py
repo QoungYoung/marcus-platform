@@ -16,6 +16,13 @@ def _safe_float(v, default=None, where=""):
 
 
 # -*- coding: utf-8 -*-
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 """wolf_confirm_pick.py — confirm_pick 狼大化 v2.1 (三层: 等待池+位置闸+ETF兜底+风向标监控)
 拍板(2026-09-09): A=确认链成分候选域 / B=老龙头等权标签 / C=主题容量提示 / D=20日成交额<1亿硬切
 v2.1(完整三层): 等待池=leader topN(含回调触发价=前一日低×(1+WOLF_DIP_PREVLOW_TOL), 语料值 tol=0) → 当日布腿=池∩低吸位置闸(距前一日低<=X%)
@@ -63,7 +70,7 @@ def _dsn() -> str:
         return _d()
     except Exception:
         import os as _o3
-        return _o3.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+        return _dsn_src.main()
 
 
 def _relay():

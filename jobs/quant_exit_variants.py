@@ -10,6 +10,13 @@
 用法：`.venv/bin/python jobs/quant_exit_variants.py [--from 20260302] [--to 20260428]`
 """
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import glob, json, os, sqlite3, statistics as st, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,7 +31,7 @@ def main() -> int:
         if a == "--to" and i + 1 < len(sys.argv): d1 = sys.argv[i + 1]
     import psycopg2
     cn = psycopg2.connect(os.environ.get("DATABASE_URL") or
-                          "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+                          _dsn_src.backtest())
     cn.set_session(readonly=True, autocommit=True)
     c = cn.cursor()
     c.execute("SELECT DISTINCT ts_code FROM stock_concept_map WHERE concept_name = ANY(%s)", (BLOCKS,))

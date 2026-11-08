@@ -14,6 +14,13 @@
     python jobs/wave_advice_agent.py             # 推 QQ ✓
     python jobs/wave_advice_agent.py --no-llm    # 只跑规则版兜底 ✓
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import argparse
 import json
 import os
@@ -361,7 +368,7 @@ def wolf_recent(days=2, limit=8):
         import datetime as _dt
         import psycopg2
         cut = (_dt.date.today() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
-        db = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        db = _dsn_src.main()
         conn = psycopg2.connect(db)
         try:
             cur = conn.cursor()

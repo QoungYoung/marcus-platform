@@ -9,6 +9,13 @@
       earnings_clear = 最新 forecast 已披露且非 bad
 输出: postgres risk_flags(symbol, flag_type, value, ann_date, source, updated_at)
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time, argparse
 
 
@@ -32,7 +39,7 @@ try:
 except Exception as e:
     print("ERR psycopg2:", e); sys.exit(1)
 
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 DATA = os.environ.get("DATA_DIR", "data")
 BAD_TYPES = {"首亏", "续亏"}
 
@@ -66,7 +73,7 @@ def default_watch():
                 out.add(s.split()[0])
     try:
         import psycopg2 as _pg
-        conn = _pg.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = _pg.connect(_dsn_src.main())
         cur = conn.cursor()
         cur.execute("select ts_code from paper_positions")
         for r in cur.fetchall():

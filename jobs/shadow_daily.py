@@ -15,6 +15,13 @@
   python jobs/shadow_daily.py [--data DIR] [--date YYYYMMDD] [--no-remote]
 输出：控制台一页 + `data/shadow_daily_<date>.json`
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import argparse
 import glob
 import json
@@ -55,7 +62,7 @@ def _pg_positions():
     try:
         import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+                                          _dsn_src.main()))
         cur = conn.cursor()
         cur.execute("SELECT COALESCE(SUM(volume * avg_price),0) FROM paper_positions "
                     "WHERE account_id='stock' AND volume>0")
@@ -131,7 +138,7 @@ def c4_etf_vol(data_dir, date8):
     try:
         import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+                                          _dsn_src.main()))
         cur = conn.cursor()
         cur.execute("SELECT DISTINCT symbol FROM paper_positions WHERE account_id='stock' AND volume>0")
         syms += [str(r[0]) for r in cur.fetchall()]

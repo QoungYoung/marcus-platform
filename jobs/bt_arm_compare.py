@@ -30,6 +30,13 @@ T6 复盘（见 `docs/wolf-buy-parameter-ledger.md`「2026-09-22（续3）」）
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import glob
 import importlib.util
@@ -94,7 +101,7 @@ def curve_from_pg(root: str, account: str, until: str = ""):
     mod = _load_dashboard()
     try:
         conn = psycopg2.connect(os.getenv("DATABASE_URL",
-                                          "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"),
+                                          _dsn_src.backtest()),
                                 connect_timeout=4)
         conn.set_session(readonly=True, autocommit=True)
         cur = conn.cursor()
@@ -179,7 +186,7 @@ def curve_of(root: str, account: str, log: str):
     mod = _load_dashboard()
     a = argparse.Namespace(root=root, bars=os.path.join(ROOT, "data/_bt_full/bars.sqlite"),
                            mins=os.path.join(ROOT, "data/_bt_full/mins"), log=log,
-                           pg=os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"),
+                           pg=_dsn_src.main(),
                            account=account, ttl=999, no_auto=True, auto_follow=False)
     try:
         snap = mod.Store(a).snapshot()

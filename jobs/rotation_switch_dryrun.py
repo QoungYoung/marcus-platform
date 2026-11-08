@@ -11,6 +11,13 @@
   顺序：先卖后买、买入分步(3日内≤2次小额) — 本期只观察不出单
 用法: python -u jobs/rotation_switch_dryrun.py
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json
 from datetime import datetime
 import time   # ★ §9.700：补漏导入 ✓
@@ -34,7 +41,7 @@ def _silent_alert(where, exc=None):
 
 sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "data")
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 
 def _relay():
     """加载 core/tushare_relay.py（2026-09-13 起 datahubco 基础接口 + promax 聚合接口，

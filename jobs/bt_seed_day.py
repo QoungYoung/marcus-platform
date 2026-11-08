@@ -24,6 +24,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import glob
 import json
@@ -55,7 +62,7 @@ def _silent_alert(where, exc=None):
 bt_env.add_paths()
 SRC = os.environ.get("DATA_DIR") or bt_env.DATA
 ROOT = os.path.join(SRC, "_bt_full")
-DB_URL = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB_URL = _dsn_src.main()
 
 # 生产 09:20 布腿器 + 主题门会读到的文件（来源 → 处理方式）
 PER_DATE = ["mainline_gate_{c}.json", "heat_v2_{c}.json", "trend_confirm_{c}_long.json",

@@ -13,6 +13,13 @@
 - 数据持久化存储
 """
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import pysnowball as ball
 import json
 import os
@@ -861,7 +868,7 @@ class XueqiuEngine:
     def _pg_conn(self):
         """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
         import psycopg2
-        url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+        url = _dsn_src.main()
         return psycopg2.connect(url)
 
 

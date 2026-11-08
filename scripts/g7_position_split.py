@@ -11,6 +11,13 @@
 口径：交易日 = 买成交日 ✓；位置 = (买价 − 当日最低) / (当日最高 − 当日最低) ✓（`mkt_bars_daily` ✓）；
      日型 = `wolf_day_rules.day_bias`（000001.SH ✓）；结局 = 买→同臂同标的下一次卖（近似 FIFO ✓）。
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import json
 import os
 import statistics
@@ -19,7 +26,7 @@ from collections import defaultdict
 
 import psycopg2
 
-DSN = "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+DSN = _dsn_src.backtest()
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
 from app.services import wolf_day_rules as W  # noqa: E402
 

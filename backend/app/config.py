@@ -16,8 +16,11 @@ class Settings(BaseSettings):
     # API Prefix
     API_V1_PREFIX: str = "/api/v1"
 
-    # Database
-    DATABASE_URL: str = "postgresql://marcus:marcus123@localhost:5432/marcus_trading"
+    # 数据库：唯一来源是环境变量（线上由 docker 注入）或仓库 .env。
+    # 2026-11-08 去掉硬编码默认值 —— 原来那句默认值同时做了三件坏事：
+    #   ① 把口令写进 git；② 把端口钉在 5432（真实主库在隧道 18789）；
+    #   ③ 让"没配环境变量"变成静默连错库，而不是启动失败。
+    DATABASE_URL: str
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # Security

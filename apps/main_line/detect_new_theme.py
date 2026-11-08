@@ -5,6 +5,13 @@
 默认只写 data/nascent_theme_candidates.json + 打印(不下发/不入taxonomy); ENABLE_NEW_THEME=1 时才接 dsh 命名并写入 taxonomy。
 用法: python -u apps/main_line/detect_new_theme.py
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 DATA = os.environ.get("DATA_DIR", "data")
@@ -40,7 +47,7 @@ def _strength(a, days=5):
 def _concept_stocks():
     try:
         import psycopg2
-        conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = psycopg2.connect(_dsn_src.main())
         cur = conn.cursor(); cur.execute("SELECT concept_name, ts_code FROM stock_concept_map")
         out = {}
         for cn, ts in cur.fetchall():

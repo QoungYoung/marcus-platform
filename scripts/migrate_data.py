@@ -12,6 +12,13 @@ This script will:
 2. Create PostgreSQL schema if needed
 3. Migrate all data with integrity verification
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import argparse
 import sqlite3
 import sys
@@ -40,7 +47,7 @@ def parse_args():
     parser.add_argument(
         "--target",
         type=str,
-        default="postgresql://marcus:marcus_password@localhost:5432/marcus_trading",
+        default=_dsn_src.main(),
         help="Target PostgreSQL connection string"
     )
     parser.add_argument(

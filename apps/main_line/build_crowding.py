@@ -5,13 +5,20 @@
 拥挤度真实口径: 每只股票被多少基金重仓(n_funds) + Σstk_float_ratio + Σ持仓市值；聚到概念/子方向。
 用法: python -u apps/main_line/build_crowding.py [end_date]
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, collections
 try:
     import psycopg2
 except Exception as e:
     print("ERR psycopg2:", e); sys.exit(1)
 
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 DATA = os.environ.get("DATA_DIR", "data")
 
 from rotation_universe import get_sub_universe, _norm  # 动态主线子方向(开集taxonomy)

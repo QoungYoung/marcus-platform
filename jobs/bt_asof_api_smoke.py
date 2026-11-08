@@ -24,6 +24,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import os
@@ -227,7 +234,9 @@ def main(argv=None) -> int:
         return check(label, p.returncode != 0 and ("回环" in out), "rc=%d out=%s" % (p.returncode, out.strip()[:90]))
 
     must_refuse(["--state-file", state, "--log", log,
-                 "--dsn", "postgresql://u:p@81.70.44.68:5432/marcus"],
+                 # 故意用**非回环**地址验证 fail-closed；用 TEST-NET-3 文档地址，
+                 # 避免把真实生产 IP 写进仓库（原来是 81.70.44.68:5432）
+                 "--dsn", "postgresql://u:p@203.0.113.9:5432/marcus"],
                 "非回环 DSN 拒绝启动（生产隔离 fail-closed）")
     must_refuse(["--state-file", state, "--log", log, "--host", "0.0.0.0"],
                 "非回环 listen host（0.0.0.0）拒绝启动")
@@ -320,7 +329,7 @@ def main(argv=None) -> int:
               "%s.current_price=%s expect=%s" % (QUOTE_SYM, (by.get(QUOTE_SYM) or {}).get("current_price"), exp_m1))
         check("positions 不含 as-of 之后才买入的标的 %s" % LATE_SYM, LATE_SYM not in by,
               "symbols=%s" % sorted(by)[:12])
-        today = pg_today_symbols("postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading", "stock")
+        today = pg_today_symbols(_dsn_src.backtest(), "stock")
         if today:
             check("对照：本地 PG 现持仓含 %s（证明上面不是「本来就空」）" % LATE_SYM, LATE_SYM in today,
                   "pg_now=%s" % sorted(today)[:8])

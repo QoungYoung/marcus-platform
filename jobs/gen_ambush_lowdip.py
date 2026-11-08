@@ -17,6 +17,13 @@
 **开关**：`WOLF_AMBUSH_LOWDIP`（默认 1 ＝ 开）；`WOLF_AMBUSH_TOP_K`（默认 3）
 """
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import json, os, sqlite3, sys
 
 BLOCKS = ["固态电池", "锂电池", "储能", "电池技术", "新能源", "新能源车", "电池化学品", "锂电专用设备",
@@ -41,7 +48,7 @@ def main() -> int:
         import psycopg2
     except Exception:
         print("  [ambush_lowdip] 无 psycopg2 ✗"); return 0
-    dsn = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+    dsn = _dsn_src.main()
     cn = psycopg2.connect(dsn, connect_timeout=4)
     cn.set_session(readonly=True, autocommit=True)
     cur = cn.cursor()

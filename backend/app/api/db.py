@@ -5,6 +5,13 @@ Database Query API - A股票据库查询接口
 - stock_pool / etf_pool → PostgreSQL（主数据）
 - trades / news / cache → SQLite（旧数据 / 业务日志）
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -32,7 +39,7 @@ def _pg_conn():
     """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
     import os
     import psycopg2
-    url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+    url = _dsn_src.main()
     return psycopg2.connect(url)
 
 def open_db(db_name: str):

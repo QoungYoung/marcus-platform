@@ -26,6 +26,13 @@ DDL 从生产库逐列复制，**零行数据**），SQLAlchemy 连接用 connec
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import datetime as dt
 import json
@@ -37,7 +44,7 @@ import bt_env  # noqa: E402
 
 SCHEMA = "bt_clock_probe"          # 仅用于 DDL 生成时读源库（不再建 schema）
 PROBE_DB = "bt_clock_probe"        # ★ 探针用**独立 database**：SQLAlchemy 会回滚连接上的 SET search_path
-PG = os.getenv("BT_PG_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+PG = _dsn_src.backtest()
 PG_PROBE = PG.rsplit("/", 1)[0] + "/" + PROBE_DB
 TABLES = ("t_triggers", "paper_positions", "paper_trades", "paper_account_info", "t_risk_state")
 

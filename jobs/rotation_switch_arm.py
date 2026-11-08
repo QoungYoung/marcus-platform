@@ -12,6 +12,13 @@
 安全：本脚本只布腿不直接下单；执行由 TMonitor/t_gateway 完成。
 用法: python -u jobs/rotation_switch_arm.py  （SWITCH_ARM_DRY=1 只输出不写库）
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time
 
 
@@ -53,7 +60,7 @@ def _gb_rec(theme, why, src, leg_kind="unknown", chain="", symbol=None, day=""):
 sys.path.insert(0, "/app/app")
 sys.path.insert(0, "/app/apps/main_line")
 DATA = os.environ.get("DATA_DIR", "data")
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 
 def load(name):
     try:

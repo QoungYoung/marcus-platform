@@ -5,6 +5,13 @@
 输出: data/concept_communities.json {theme: {community_id: {"label":概念, "concepts":[...], "n_stocks":int}}}
 用法: python -u apps/main_line/concept_communities.py  [AI/算力/科技 消费/内需]
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, collections, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -16,7 +23,7 @@ try:
 except Exception:
     _norm = lambda s: str(s).replace(" ", "").replace("　", "")
 DATA = os.environ.get("DATA_DIR", "data")
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 JACCARD_TH = float(os.getenv("JACCARD_TH", "0.12"))
 CORR_TH = float(os.getenv("CORR_TH", "0.55"))
 USE_CORR = os.getenv("USE_CORR", "1").strip() in ("1", "true", "yes", "on")

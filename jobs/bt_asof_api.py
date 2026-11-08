@@ -58,6 +58,13 @@ overview,position,auto-gen,rebalance}`、`/trades*`、`/indicator/calc-position`
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import importlib.util
 import json
@@ -95,7 +102,7 @@ PREFIX = "/api/v1"
 SERVICE = "bt-asof-api"
 VERSION = "1"
 SANDBOX_ID_BASE = 900000000          # 沙箱条件 id 起点（远高于 PG id，避免与生产同构响应冲突）
-DEFAULT_DSN = "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+DEFAULT_DSN = _dsn_src.backtest()
 BUY_WORDS = ("买入", "buy", "long", "b", "买")       # 与 core/trade_direction.py 同口径
 SELL_WORDS = ("卖出", "sell", "short", "s", "卖")
 

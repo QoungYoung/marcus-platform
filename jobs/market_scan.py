@@ -7,6 +7,13 @@ Marcus 盘中扫描脚本
 输出格式:Markdown 报告，可直接发送到聊天
 """
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import sys
 import json
 import time
@@ -805,7 +812,7 @@ def _pg_conn():
     """PostgreSQL 连接（psycopg2，来自 DATABASE_URL）。"""
     import os
     import psycopg2
-    url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@localhost:5432/marcus_trading")
+    url = _dsn_src.main()
     return psycopg2.connect(url)
 
 def check_correlation(existing_positions: list, candidate_symbol: str, sector_warnings: list = None) -> dict:
@@ -2790,7 +2797,7 @@ def cleanup_st_holdings_once():
     out = []
     try:
         import psycopg2, os, json as _j, urllib.request
-        DB = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        DB = _dsn_src.main()
         conn = psycopg2.connect(DB); cur = conn.cursor()
         cur.execute("SELECT ts_code FROM stock_pool WHERE is_st = 1 OR name LIKE 'ST%' OR name LIKE '*ST%'")
         bad = {str(r[0]) for r in cur.fetchall()}

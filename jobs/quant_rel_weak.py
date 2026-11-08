@@ -10,6 +10,13 @@
 用法：`.venv/bin/python jobs/quant_rel_weak.py`
 """
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sqlite3, statistics as st, sys
 import psycopg2
 
@@ -20,7 +27,7 @@ THRESH = [1.0, 2.0, 3.0, 5.0, 8.0]
 
 def main() -> int:
     cn = psycopg2.connect(os.environ.get("DATABASE_URL") or
-                          "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+                          _dsn_src.backtest())
     cn.set_session(readonly=True, autocommit=True)
     c = cn.cursor()
     c.execute("SELECT concept_name, ts_code FROM stock_concept_map WHERE concept_name = ANY(%s)", (BLOCKS,))

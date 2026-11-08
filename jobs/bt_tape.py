@@ -20,6 +20,13 @@ high_sell/high_sell_buy_back/low_buy/panic_vibrate，买腿还有"无底仓不�
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import os
@@ -283,7 +290,7 @@ def run_symbol(pack: str, symbol: str, day: str, conds, dip_tol=0.005, cooldown_
 
 def conds_from_prod(symbol: str, day: str):
     import psycopg2
-    url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+    url = _dsn_src.main()
     c = psycopg2.connect(url); cur = c.cursor()
     cur.execute("""SELECT id, trigger_kind, expression, benchmark_turnover_profile FROM t_conditions
                    WHERE symbol=%s AND trade_date=%s AND publisher='switch' AND direction='buy' ORDER BY id""",
@@ -297,7 +304,7 @@ def conds_from_prod(symbol: str, day: str):
 
 def prod_triggers(symbol: str, day: str):
     import psycopg2
-    url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+    url = _dsn_src.main()
     c = psycopg2.connect(url); cur = c.cursor()
     cur.execute("""SELECT t.trigger_kind, min(tr.created_at)::text, count(*)
                    FROM t_triggers tr JOIN t_conditions t ON t.id = tr.condition_id

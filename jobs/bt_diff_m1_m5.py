@@ -30,6 +30,13 @@ bar 的**根数/时间戳形态**有隐含假设。本脚本把同一根 bar 时
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import json
 import os
@@ -60,7 +67,7 @@ bt_env.add_paths()
 
 REPO = bt_env.REPO
 os.environ.setdefault("WOLF_DATED_LIVE_FALLBACK", "0")     # 关掉 _daily_dated 的实时源兜底（不出网）
-os.environ.setdefault("BT_PG_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+os.environ.setdefault("BT_PG_URL", _dsn_src.backtest())
 
 
 def _fmt12(bars):

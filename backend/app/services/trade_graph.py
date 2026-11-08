@@ -16,6 +16,13 @@ LangGraph 交易决策流程编排
   - Pi 只负责分析判断和下单执行，工具集可以更聚焦
 """
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 from app.services.state_paths import state_path as __state_path  # 跨日状态根 ✓（§9.248）
 import os
 import json
@@ -1028,7 +1035,7 @@ def _read_risk_context() -> str:
                    "命中 block（业绩雷/ST/立案/重组终止/监管）→ 禁止买入；review（财报窗口未落地/拥挤无空间）→ 等确认或人工；reduce（两融高位查杠杆）→ 系统性减仓。" + NL)
         try:
             import psycopg2 as _pg
-            conn = _pg.connect(_os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+            conn = _pg.connect(_dsn_src.main())
             cur = conn.cursor()
             cur.execute("SELECT symbol FROM paper_positions WHERE account_id='stock'")
             syms = sorted({r[0] for r in cur.fetchall() if r[0]})

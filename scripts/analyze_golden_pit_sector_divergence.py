@@ -1,10 +1,17 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """黄金坑窗口内板块分化盘点 — 科创50/创业板指入坑后，细分板块收益对比。
 
 入坑检测: greed_value < pit_greed 阈值（与 backtest_golden_pit_stocks.py 一致）
 数据源: golden_pit_snapshots + 中信一级/二级/申万一级行业指数日线
 输出: docs/golden-pit-sector-divergence-report.md + data/backtest/pit_sector_divergence.json
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import json
 import io
 import statistics
@@ -13,7 +20,7 @@ from collections import defaultdict
 import psycopg2
 import pandas as pd
 
-DB = 'postgresql://marcus:marcus123@127.0.0.1:18789/marcus_trading'
+DB = _dsn_src.main()
 IDX_DIR = r'F:\pythonProject\AITrade\marcus-platform\data\backtest\指数数据'
 OUT_JSON = r'F:\pythonProject\AITrade\marcus-platform\data\backtest\pit_sector_divergence.json'
 OUT_MD = r'F:\pythonProject\AITrade\marcus-platform\docs\golden-pit-sector-divergence-report.md'

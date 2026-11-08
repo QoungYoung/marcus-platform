@@ -5,6 +5,13 @@
 （2026-09-14 事故即源于此：文件被覆盖/停更都无从发现）。落库后：可查询、可幂等 upsert、可看"上次重建是何时"。
 **JSON 仍保留双写**：离线重放不依赖 DB，两者互为兜底（DB 也会被写坏）。
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import json, os
 from datetime import datetime
 
@@ -25,7 +32,7 @@ def _silent_alert(where, exc=None):
             pass
 
 
-DSN = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DSN = _dsn_src.main()
 PIVOTS_FILE = os.getenv("WAVE_PIVOTS_FILE", os.path.join(os.getenv("DATA_DIR", "/app/data"), "wave_pivots.json"))
 
 

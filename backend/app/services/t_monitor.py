@@ -9,6 +9,13 @@
 - 命中 → 写 t_triggers(pending, snapshot{suggest_bid/ask, slippage_budget, confidence})
 - 14:45 后禁新开仓；Worker 永不直接下单
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 from .t_leg_kinds import BUY_LEG_KINDS, is_buy_leg, LOWDIP_KINDS, is_lowdip, PREVLOW_M5_KINDS, is_prevlow_m5  # noqa: F401  §9.496 单一来源
 import os
 
@@ -661,7 +668,7 @@ class TMonitor:
         try:
             import psycopg2 as _pg
             conn = _pg.connect(os.getenv("DATABASE_URL",
-                                         "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+                                         _dsn_src.main()))
             cur = conn.cursor()
             cur.execute("SELECT symbol, volume, avg_price FROM paper_positions "
                         "WHERE account_id = %s AND volume > 0", (acct,))

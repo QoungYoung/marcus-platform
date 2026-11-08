@@ -10,11 +10,18 @@
 输出：`.dsh-tmp/wolfbt/test_baseline.txt`（每行一个 nodeid ✓，已排序 ✓）
 """
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, re, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.path.join(ROOT, ".dsh-tmp", "wolfbt", "test_baseline.txt")
-DSN = os.getenv("DATABASE_URL") or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+DSN = _dsn_src.main()
 
 
 # 相关子集（覆盖本次改动会影响到的模块 ✓）——全量 `backend/tests` 在并发跑臂时要 20+ 分钟 ✗

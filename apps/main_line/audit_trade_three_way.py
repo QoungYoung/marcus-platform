@@ -8,10 +8,17 @@
   3) 对每笔成交按 symbol 匹配 data/alignment_audit.json 的 Wolf/规则行(±5交易日)
 输出: data/audit_trade_three_way.json + stdout（当前日志为空则输出框架就绪提示）
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, collections
 from datetime import date, timedelta
 DATA=os.environ.get('DATA_DIR','data')
-DB=os.getenv('DATABASE_URL','postgresql://marcus:marcus123@postgres:5432/marcus_trading')
+DB=_dsn_src.main()
 def load(p):
     try: return json.load(open(os.path.join(DATA,p),encoding='utf-8'))
     except Exception: return {}

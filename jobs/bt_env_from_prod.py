@@ -13,6 +13,13 @@
   ✓ 其余全部（开关、模式、数值、路径模板）
 末尾追加**本地覆盖块**（数据库→本地 5433、LLM 出口→本地隔离 dsh、模型名对齐生产容器）。
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os
 import re
 import sys
@@ -26,7 +33,7 @@ ADDR = re.compile(r'(_URL|_HOST|_PORT|DSN|URI|DATABASE|POSTGRES|REDIS|PROXY|ENDP
 PROC = re.compile(r'^(PATH|HOME|HOSTNAME|PWD|OLDPWD|TERM|LANG|LC_|SHLVL|_|PYTHON|NODE|GUNICORN|SUPERVISOR|TZ|HOST_|container|MARCUS_WORKSPACE|DATA_DIR|PI_SERVER_URL)', re.I)
 
 LOCAL_OVERRIDES = [
-    ("DATABASE_URL", "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"),
+    ("DATABASE_URL", _dsn_src.backtest()),
     ("BT_AGENT_CHAT_URL", "http://127.0.0.1:13101/chat"),   # 本地硬隔离 dsh
     ("MARCUS_API_URL", "http://127.0.0.1:13200/api/v1"),    # 本地 as-of API（dsh 工具通道）
     ("NO_PROXY", "127.0.0.1,localhost"), ("no_proxy", "127.0.0.1,localhost"),

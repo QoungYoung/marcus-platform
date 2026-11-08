@@ -8,13 +8,20 @@
     不再是"插一行不生效的数据"。
 如需重跑：显式加 --force，并先确认这 15,400 股确实要计入 stock 账户持仓与现金。
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import sys
 
 if "--force" not in sys.argv:
     sys.exit("已停用（见文件头说明）：确需重跑请加 --force")
 
 import psycopg2, datetime
-DB = "postgresql://marcus:marcus123@postgres:5432/marcus_trading"
+DB = _dsn_src.main()
 conn = psycopg2.connect(DB); cur = conn.cursor(); conn.autocommit = False
 SYM = "SH512480"; ACCT = "stock"; VOL = 15400; PX = 0.972; DT = "2026-09-04"
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

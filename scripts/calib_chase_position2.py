@@ -11,6 +11,13 @@ v2 修正 ✓：
 用法：python3 scripts/calib_chase_position2.py [--accounts all|<like 列表>] [--min-n 20]
 """
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import argparse, collections, os, re, sqlite3, statistics
 
 def load_bars(db):
@@ -34,7 +41,7 @@ def idx_at(s, d8):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/_bt_full/bars.sqlite")
-    ap.add_argument("--dsn", default="postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+    ap.add_argument("--dsn", default=_dsn_src.backtest())
     ap.add_argument("--accounts", default="all")
     ap.add_argument("--min-n", type=int, default=20)
     a = ap.parse_args()

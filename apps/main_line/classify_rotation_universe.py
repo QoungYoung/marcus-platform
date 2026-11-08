@@ -6,6 +6,13 @@
 输出: data/rotation_universe_classified.json {date, additions, retired}
 用法: python -u apps/main_line/classify_rotation_universe.py [top_n] [--full]
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time, re, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rotation_universe import SUB_UNIVERSE, META_GROUPS, _norm, DATA
@@ -41,7 +48,7 @@ def main():
     conn = None
     try:
         import psycopg2
-        conn = psycopg2.connect(os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading"))
+        conn = psycopg2.connect(_dsn_src.main())
         cur = conn.cursor(); cur.execute("select distinct concept_name from stock_concept_map")
         db_names = [r[0] for r in cur.fetchall()]; cur.close()
     except Exception as e:

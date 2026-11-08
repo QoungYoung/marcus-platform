@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """index_daily_store.py — 指数日线 PG 唯一数据源。"""
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
@@ -13,7 +20,7 @@ _ENGINE = None
 def _engine():
     global _ENGINE
     if _ENGINE is None:
-        url = os.environ.get("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+        url = _dsn_src.main()
         _ENGINE = create_engine(url, pool_pre_ping=True, pool_size=2, max_overflow=2)
     return _ENGINE
 

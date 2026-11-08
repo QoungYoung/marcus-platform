@@ -19,6 +19,13 @@
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import importlib
 import json
@@ -142,7 +149,7 @@ class GzShim:
 def held_from_db(cut: str, account: str = "stock"):
     """从生产 `paper_trades`（≤ cut）重建持仓 —— 校验窗口用它，保证与生产当时的持仓一致。"""
     import psycopg2
-    url = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+    url = _dsn_src.main()
     c = psycopg2.connect(url); cur = c.cursor()
     # 注意：原实现用 `LIKE '买%'`，psycopg2 会把那个 `%` 当占位符（实测 IndexError）→ 改用 `= '买入'`
     cur.execute("""SELECT symbol,

@@ -19,6 +19,13 @@ L2/L3 被隔离（`_fetch_index_quotes` → `{}`、`t_db.upsert_regime_state` �
 """
 from __future__ import annotations
 
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
+
 import argparse
 import os
 import sys
@@ -32,7 +39,7 @@ def main() -> int:
     ap.add_argument("--days", default="20260310,20260520,20260701")
     ap.add_argument("--hole", default="20260908", help="真实仍缺行的一天（用于演示 before 语义）")
     ap.add_argument("--db-url", default=os.getenv("BT_PG_URL") or os.getenv("DATABASE_URL")
-                    or "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+                    or _dsn_src.backtest())
     ap.add_argument("--data-dir", default=os.path.join(REPO, "data", "_bt_year", "20260310"))
     a = ap.parse_args()
     os.environ["DATABASE_URL"] = a.db_url

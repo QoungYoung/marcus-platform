@@ -12,6 +12,13 @@
  ④ B 闸拦截：从各臂 `prod_*.json` 的 `triggers[].reason` 里数 `[COND-TIMING]`（B/C 闸 ✓）
 输出：按日型分组的表 + 结论建议 ✓
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import glob
 import json
 import os
@@ -21,7 +28,7 @@ from collections import defaultdict
 
 import psycopg2
 
-DSN = "postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading"
+DSN = _dsn_src.backtest()
 sys_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend")
 import sys
 sys.path.insert(0, sys_path); sys.path.insert(0, os.path.join(sys_path, "app", "services"))

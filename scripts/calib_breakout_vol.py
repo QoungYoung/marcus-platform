@@ -8,12 +8,19 @@
 用法：python3 scripts/calib_breakout_vol.py [--db data/_bt_full/bars_adj.sqlite]
 """
 from __future__ import annotations
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__)))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import argparse, collections, os, re, sqlite3, statistics
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/_bt_full/bars_adj.sqlite")
-    ap.add_argument("--dsn", default="postgresql://marcus:marcus123@127.0.0.1:5433/marcus_trading")
+    ap.add_argument("--dsn", default=_dsn_src.backtest())
     a = ap.parse_args()
     import psycopg2
     cn = psycopg2.connect(a.dsn); cur = cn.cursor()

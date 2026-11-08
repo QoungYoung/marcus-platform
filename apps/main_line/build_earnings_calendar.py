@@ -8,6 +8,13 @@
 输出: PG earnings_calendar（PK ref_date,symbol,end_date；不再写本地 JSON）
 用法: python -u apps/main_line/build_earnings_calendar.py [--stocks X,Y] [--as-of 20260422]
 """
+
+# ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
+import os as _os_dsn, sys as _sys_dsn
+_ROOT_DSN = _os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.dirname(_os_dsn.path.abspath(__file__))))
+if _ROOT_DSN not in _sys_dsn.path:
+    _sys_dsn.path.insert(0, _ROOT_DSN)
+from core import dsn as _dsn_src  # noqa: E402
 import os, sys, json, time, argparse
 from datetime import date, datetime
 
@@ -33,7 +40,7 @@ try:
     import psycopg2
 except Exception:
     psycopg2 = None
-DB = os.getenv("DATABASE_URL", "postgresql://marcus:marcus123@postgres:5432/marcus_trading")
+DB = _dsn_src.main()
 DATA = os.environ.get("DATA_DIR", "data")
 # 2026-09-13: 取数走 core/tushare_relay.py（datahubco+promax），旧 TUSHARE_API_URL 已废弃
 
