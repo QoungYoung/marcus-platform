@@ -27,8 +27,20 @@ def _dsn() -> str:
     2026-11-04 实测：容器里 `wave_pg` 被某条更早的 import 链先加载，那一刻
     DATABASE_URL 还没进环境 ⇒ 模块级 DSN='' ⇒ 之后所有 `_conn()` 都返回 None，
     上层 `wave_store.get_wave()` 恒为 None（门禁拿不到浪型）。改为惰性读取后修复。
+
+    ★ 2026-11-08 补：环境变量没有时回落到 `core.dsn`（它会读仓库 `.env`）。
+    此前本机跑作业时 DSN 恒为空 ⇒ 读不到 PG ⇒ `wave_store` 静默回落读**过期文件**，
+    导致「PG 唯一真源」在本地根本无法验证（本地看起来正常，其实读的是 11-04 的冻结档）。
+    容器里环境变量本来就有，行为不变。
     """
-    return (os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN") or DSN or "").strip()
+    v = (os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN") or DSN or "").strip()
+    if v:
+        return v
+    try:
+        from core import dsn as _coredsn
+        return _coredsn.main()
+    except Exception:
+        return ""
 
 DDL = """
 CREATE TABLE IF NOT EXISTS wave_state (

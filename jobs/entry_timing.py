@@ -34,6 +34,9 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 浪型唯一读入口：PG（core.wave → wave_store）。文件只剩导出用途，不再被读。
+from core.wave import current as _wave  # noqa: E402
 for p in (ROOT, os.path.join(ROOT, "core"), os.path.join(ROOT, "backend")):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -131,12 +134,11 @@ def evaluate(h, t):
 
 def wave_cap():
     """浪型档位 → 仓位上限%（读 wave_state.json ✓ 失败给 defense 30 ✓）"""
-    try:
-        st = json.load(open(os.path.join(DATA, "wave_state.json"), encoding="utf-8"))
-        op = str((st or {}).get("operation") or "").strip()
-        return {"build": 75, "t_only": 50, "side": 40, "defense": 30, "exit": 0}.get(op, 30), op
-    except Exception:
+    st = _wave()
+    op = str((st or {}).get("operation") or "").strip()
+    if not op:
         return 30, "缺"
+    return {"build": 75, "t_only": 50, "side": 40, "defense": 30, "exit": 0}.get(op, 30), op
 
 
 def etf_quote(code):

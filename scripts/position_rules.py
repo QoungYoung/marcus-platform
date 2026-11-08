@@ -36,14 +36,12 @@ def load_cfg() -> Dict[str, Any]:
 
 
 def _wave_operation() -> str:
+    """当前浪型操作口径。唯一来源是 PG（core.wave → wave_store）；读不到退 "side"（fail-open）。"""
     try:
-        from app.services.position_tier import read_wave_state
-        return str((read_wave_state() or {}).get("operation") or "side")
+        from core.wave import operation
+        return operation()
     except Exception:
-        try:
-            return str((json.load(open(os.path.join(ROOT, "data", "wave_state.json"), encoding="utf-8")) or {}).get("operation") or "side")
-        except Exception:
-            return "side"
+        return "side"
 
 
 def wave_gate(mainline_active: bool | None = None) -> Dict[str, Any]:

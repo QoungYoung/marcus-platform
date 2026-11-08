@@ -10,6 +10,12 @@
   ② data/wave_state_<YYYY-MM-DD>.json        ← 带日期回填件（daily_decision 回测下优先读它）
   ③ data/wave_state_history/<YYYYMMDD>.json  ← 回测取档（wave_gate.py:101 按模拟日读）
 
+⚠️ **2026-11-08 起本脚本默认拒绝运行**：浪型已「停写文件 / PG 唯一真源」，
+   生产上的 `data/wave_state*.json` 是 **2026-11-04 冻结的导出物**。
+   再同步只会把过期档搬到本地，让你误以为看到了当前浪型 ✗。
+   要看当前档请用 `from core.wave import current`（读 PG）。
+   确实要做文件级对照，显式设 `WOLF_WAVE_FILE_EXPORT=1`。
+
 用法::
     python jobs/sync_wave_state_from_prod.py                    # dry-run：只看差异，不写盘
     python jobs/sync_wave_state_from_prod.py --apply            # 备份 + 写入
@@ -48,7 +54,18 @@ def _local_summary():
     return out
 
 
+def _guard() -> None:
+    """文件已停写（2026-11-04），同步工具会把过期档搬回本地 ⇒ 默认拒绝。"""
+    import os, sys
+    if os.getenv("WOLF_WAVE_FILE_EXPORT", "0").strip() not in ("1", "true", "yes"):
+        print("[sync_wave_state] 已停用：浪型唯一真源是 PG，文件是 2026-11-04 的冻结导出物。"
+              "\n  要看当前档：python -c \"from core.wave import current; print(current())\""
+              "\n  确需同步文件请设 WOLF_WAVE_FILE_EXPORT=1")
+        sys.exit(0)
+
+
 def main():
+    _guard()
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="真写盘（默认 dry-run ✓）")
     ap.add_argument("--host", default="marcusrv", help="ssh 目标（默认 marcusrv ✓）")

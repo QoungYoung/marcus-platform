@@ -46,6 +46,12 @@ def _silent_alert(where, exc=None):
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+# 浪型唯一读入口：PG（core.wave → wave_store）。文件只剩导出用途，不再被读。
+from core.wave import current as _wave  # noqa: E402
 CORPUS_TOTAL_CAP = {"build": 75, "t_only": 50, "side": 50, "defense": 30, "exit": 0}   # 2026-01-17 他的话
 
 
@@ -99,7 +105,7 @@ def entry_filter_item(data_dir, date8):
 
 def c3_position_cap(data_dir, date8):
     """C3：当前总仓位 vs 他 2026-01-17 的分档上限（75/50/30/0）。"""
-    wave = _j(os.path.join(data_dir, "wave_state.json"), {}) or {}
+    wave = _wave() or {}
     op = str(wave.get("operation") or "side").lower()
     cap = CORPUS_TOTAL_CAP.get(op, 50)
     pos_val, net = _pg_positions()

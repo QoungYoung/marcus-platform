@@ -21,6 +21,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'core'))
 sys.path.insert(0, os.path.join(ROOT, 'apps', 'main_line'))
+
+# 浪型唯一读入口：PG（core.wave → wave_store）。文件只剩导出用途，不再被读。
+from core.wave import current as _wave  # noqa: E402
 DATA = os.environ.get('DATA_DIR', os.path.join(ROOT, 'data'))
 STATE = os.path.join(DATA, '_event_briefing_pushed.json')
 ALERT_OFFSETS = (5, 3, 1)
@@ -140,11 +143,9 @@ def sector_panel():
 
 def build_state():
     st = {}
-    try:
-        ws = json.load(open(os.path.join(DATA, 'wave_state.json'), encoding='utf-8'))
-        st['wave_state'] = {k: ws.get(k) for k in ('date', 'level', 'sub_level', 'operation', 'mode')}
-    except Exception:
-        st['wave_state'] = None
+    _ws = _wave()
+    st['wave_state'] = ({k: _ws.get(k) for k in ('date', 'level', 'sub_level', 'operation', 'mode')}
+                        if _ws else None)
     # （不再调用 /indicator/calc-position ✗：仅支持 POST、GET 必 405 ⇒ 2026-10-19 已连续两次触发无意义错误 ✓）
     # ★ 2026-10-19 修正：个股浮盈/浮亏**唯一权威来源**是用这个接口 ✓
     #   （此前 agent 把「定投/DCA」快照的浮亏 12.5% 张冠李戴到 SH600299 ✗ —— 用户当场纠正 ✓；

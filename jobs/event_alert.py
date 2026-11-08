@@ -15,6 +15,9 @@
 import argparse, datetime as dt, json, os, sys
 
 sys.path.insert(0, "core")
+
+# 浪型唯一读入口：PG（core.wave → wave_store）。文件只剩导出用途，不再被读。
+from core.wave import current as _wave  # noqa: E402
 DATA = os.environ.get("DATA_DIR", "data")
 
 
@@ -62,11 +65,9 @@ def main():
         d = json.load(open(p, encoding="utf-8"))
         facts["panel_factors"] = [{"name": f["name"], "reading": f["reading"][:160]} for f in d.get("factors", [])]
         facts["panel_gaps"] = [g["item"] for g in d.get("gaps", [])]
-    try:
-        ws = json.load(open(os.path.join(DATA, "wave_state.json"), encoding="utf-8"))
-        facts["wave_state"] = {k: ws.get(k) for k in ("date", "level", "sub_level", "operation", "mode")}
-    except Exception:
-        pass
+    _ws = _wave()
+    if _ws:
+        facts["wave_state"] = {k: _ws.get(k) for k in ("date", "level", "sub_level", "operation", "mode")}
     # 事件关联知识库 ✓（config/macro_event_impact.yaml：是什么/看什么/传导路径/关联板块 ✓）
     #   注意：那是**定性说明**（⛔ 未经我们数据验证的经验描述）⇒ 引用时必须带这句限定 ✓，不许当统计用 ✗
     try:

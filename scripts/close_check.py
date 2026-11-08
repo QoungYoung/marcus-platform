@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 
@@ -130,6 +131,49 @@ def check_persist() -> None:
         # 只保留最后一行摘要
         detail = text.splitlines()[-1] if text else ""
     check("持久化无回归", ok, detail)
+
+
+
+# 直接读浪型文件的**白名单**：要么是回测沙箱（读 sb/ d/ 下的副本），要么是已加闸口的工具
+_WAVE_READ_ALLOW = {
+    "backend/app/services/wave_store.py",          # 抽象本身（保留 WOLF_WAVE_STORE=file 回滚位）
+    "jobs/bt_day_legs.py",                         # 回测沙箱 <day>/wave_state.json
+    "backend/app/services/build_position_filter.py",  # 回测目录 d/wave_state.json
+    "jobs/wave_state_pg_backfill.py",              # 迁移工具
+    "jobs/wave_state_pg_resync.py",                # 迁移工具（已加闸口）
+    "jobs/regen_wave_state_ladder.py",             # 生成器（导出受 WOLF_WAVE_FILE_EXPORT 控制）
+    "jobs/sync_wave_state_from_prod.py",           # 同步工具（已加闸口）
+}
+_WAVE_READ_RE = re.compile(r"(?:open|json\.load|_j)\s*\([^)\n]*wave_state")
+
+
+def check_wave_read() -> None:
+    """浪型只能从 PG 读（core.wave → wave_store）；再直接读文件会拿到 2026-11-04 的冻结档。"""
+    hits = []
+    for d in ("jobs", "scripts", "apps", "core", "backend/app"):
+        base = os.path.join(ROOT, d)
+        for dp, dn, fn in os.walk(base):
+            dn[:] = [x for x in dn if x not in {"__pycache__", "node_modules", ".venv", "tests", "fixtures"}]
+            for f in fn:
+                if not f.endswith(".py"):
+                    continue
+                rel = os.path.relpath(os.path.join(dp, f), ROOT)
+                if rel in _WAVE_READ_ALLOW:
+                    continue
+                try:
+                    body = open(os.path.join(dp, f), encoding="utf-8-sig", errors="ignore").read()
+                except OSError:
+                    continue
+                for i, line in enumerate(body.splitlines(), 1):
+                    if _WAVE_READ_RE.search(line) and not line.strip().startswith("#"):
+                        hits.append(f"{rel}:{i}")
+    if hits:
+        check("浪型只从 PG 读", False,
+              "发现直接读浪型文件（会拿到 2026-11-04 的冻结档）：\n        "
+              + "\n        ".join(hits[:8])
+              + "\n        → 改用 `from core.wave import current`")
+    else:
+        check("浪型只从 PG 读", True, "无新增直读；白名单 7 个（沙箱/迁移工具）")
 
 
 def check_prod_sync() -> None:
