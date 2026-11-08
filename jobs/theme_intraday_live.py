@@ -90,9 +90,16 @@ def main():
              'role_hint':{'leader':roles.get('leader'),'wind':roles.get('wind') or [],'mid':roles.get('mid') or []},
              'leader':(rd.get('leader') or {}).get('symbol') or roles.get('leader')})
  os.makedirs(os.path.join(ROOT,'data/asof'),exist_ok=True)
- json.dump({'date':day,'source':'机器人链','source_history':src_hist,'source_intraday':{k:out[k] for k in SRC_IDS if k in out},'candidate_meta':cm},
-           open(os.path.join(ROOT,'data/asof',f'{day}_a_intraday.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
- json.dump({'date':day,'source':'机器人链','candidates':bc,'candidate_meta':cm},
-           open(os.path.join(ROOT,'data/asof',f'{day}_b_candidates.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
+ a_payload={'date':day,'source':'机器人链','source_history':src_hist,'source_intraday':{k:out[k] for k in SRC_IDS if k in out},'candidate_meta':cm}
+ b_payload={'date':day,'source':'机器人链','candidates':bc,'candidate_meta':cm}
+ json.dump(a_payload,open(os.path.join(ROOT,'data/asof',f'{day}_a_intraday.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
+ json.dump(b_payload,open(os.path.join(ROOT,'data/asof',f'{day}_b_candidates.json'),'w',encoding='utf-8'),ensure_ascii=False,indent=1)
+ try:
+  sys.path.insert(0,os.path.join(ROOT,'jobs'))
+  from theme_candidate_store import save as _save
+  _save(day,'a_intraday',a_payload); _save(day,'b_candidates',b_payload)
+  print('PG saved',day,flush=True)
+ except Exception as e:
+  print('PG save skip:',str(e)[:100],flush=True)
  print('written',day,'candidates',len(bc),'facts',latest)
 if __name__=='__main__': main()
