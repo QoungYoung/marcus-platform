@@ -1,3 +1,17 @@
+# 2026-11-08：main_line_state / position_class 改读 PG（state_pg）；找不到模块则完全不干预
+try:
+    import state_io as _state_io
+except Exception:
+    try:
+        import os as _os_si, sys as _sys_si
+        _r_si = _os_si.path.dirname(_os_si.path.dirname(_os_si.path.abspath(__file__)))
+        _p_si = _os_si.path.join(_r_si, "apps", "main_line")
+        if _p_si not in _sys_si.path:
+            _sys_si.path.insert(0, _p_si)
+        import state_io as _state_io
+    except Exception:
+        _state_io = None
+
 # -*- coding: utf-8 -*-
 """material_entry.py — ① 材料"大级别买点再开"执行链路 (P2 轮动遗留)
 狼大2026-09-02: "科技剩半导体材料和存储有点剩余空间…再次破新低后就是大级别买点了…等大级别买点就买材料(下半年既定计划)"
@@ -29,6 +43,9 @@ DATA = os.environ.get("DATA_DIR", "data")
 MATERIAL_KWS = ["半导体材料", "光刻胶", "光刻机(胶)", "碳基材料"]
 
 def load(p):
+    _pg_si = _state_io.maybe_load(p) if _state_io else None
+    if _pg_si is not None:
+        return _pg_si
     try: return json.load(open(p, encoding="utf-8"))
     except Exception: return {}
 

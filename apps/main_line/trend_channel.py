@@ -40,6 +40,13 @@ S3 放量突破 → S4 站稳），且 S1 是**前置**；而 S1 的量化条件
   WOLF_TREND_CHASE_MAX=0.03 触发时允许高于突破位的上限（3%，自设）
 """
 from __future__ import annotations
+# 2026-11-08：main_line_state 改读 PG（state_pg），读不到再回落文件
+try:
+    from state_pg import load_main_line_state as _state_ml
+except Exception:
+    def _state_ml():
+        return None
+
 
 # ── DSN 收口（scripts/migrate_hardcoded_dsn.py 自动插入，见 core/dsn.py）──
 import os as _os_dsn, sys as _sys_dsn
@@ -895,7 +902,7 @@ def theme_concepts(themes: Optional[Sequence[str]] = None) -> List[str]:
         if not th:
             data = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.dirname(here)), "data"))
             try:
-                st = json.load(open(os.path.join(data, "main_line_state.json"), encoding="utf-8"))
+                st = (_state_ml() or json.load(open(os.path.join(data, "main_line_state.json"), encoding="utf-8")))
                 _ml = str(st.get("main_line") or "AI/算力/科技")
                 # ⚠️ 必须取 **TOP2**（与 pipeline 的资格集合 mainline_today = TOP1∪TOP2 对齐）：
                 #    只取 TOP1 会漏掉当日次主线 —— 2026-01 的 TOP1=AI/算力/科技 会把半导体概念整条排除，

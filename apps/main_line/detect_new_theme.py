@@ -1,3 +1,17 @@
+# 2026-11-08：main_line_state / position_class 改读 PG（state_pg）；找不到模块则完全不干预
+try:
+    import state_io as _state_io
+except Exception:
+    try:
+        import os as _os_si, sys as _sys_si
+        _r_si = _os_si.path.dirname(_os_si.path.dirname(_os_si.path.abspath(__file__)))
+        _p_si = _os_si.path.join(_r_si, "apps", "main_line")
+        if _p_si not in _sys_si.path:
+            _sys_si.path.insert(0, _p_si)
+        import state_io as _state_io
+    except Exception:
+        _state_io = None
+
 # -*- coding: utf-8 -*-
 """detect_new_theme.py — 新主线涌现检测(默认 observe/dry-run)
 读 concept_hist(资金/强度) + position_class_result(活跃概念) + concept_taxonomy(归属度),
@@ -21,6 +35,9 @@ MIN_STOCKS = int(os.getenv("MIN_STOCKS", "8"))
 ENABLE = os.getenv("ENABLE_NEW_THEME", "0").strip() in ("1", "true", "yes", "on")
 
 def load(p):
+    _pg_si = _state_io.maybe_load(p) if _state_io else None
+    if _pg_si is not None:
+        return _pg_si
     try: return json.load(open(os.path.join(DATA, p), encoding="utf-8"))
     except Exception: return {}
 

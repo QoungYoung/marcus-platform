@@ -106,6 +106,14 @@ def path_for(d8: str) -> str:
 
 # ───────────────────────── 读当天产物（缺失返回 None 并记录）─────────────────────────
 def _read_json(name: str, d8: str) -> Optional[Any]:
+    if name in ("main_line_state.json",):
+        try:
+            from state_pg import load_main_line_state as _ml_pg
+            v = _ml_pg()
+            if v is not None:
+                return v
+        except Exception:
+            pass
     for cand in (name.format(d=d8, dash="%s-%s-%s" % (d8[:4], d8[4:6], d8[6:8])), name):
         p = os.path.join(data_dir(), cand)
         try:

@@ -1,3 +1,10 @@
+# 2026-11-08：main_line_state 改读 PG（state_pg），读不到再回落文件
+try:
+    from state_pg import load_main_line_state as _state_ml
+except Exception:
+    def _state_ml():
+        return None
+
 # -*- coding: utf-8 -*-
 """stock_confirm_judge.py — 个股级确认链(三层联动之三): fusion TOP3 主题全量概念成分 confirm_chain → 确认比例
 2026-09-07 数据层重构: 逐只 ts_code daily → 逐交易日(trade_cal) 全市场批量(daily trade_date, 5548行/次 0.1s)
@@ -482,7 +489,7 @@ def main():
     CONFIRM_TOP_N = int(os.getenv("CONFIRM_TOP_N", "3"))
     try:
         import fusion_mainline as fm
-        st = json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8"))
+        st = (_state_ml() or json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8")))
         # 2026-09-13: 主题来源＝方向层池判定（mainline_top_themes）；fusion 已随研报线删除，不再作兜底
         themes = None
         try:

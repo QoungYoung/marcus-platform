@@ -15,6 +15,13 @@
   python apps/main_line/breakout_context.py --facts sh512480 2026-04-30
 """
 from __future__ import annotations
+# 2026-11-08：状态文件改读 PG（state_pg），读不到再回落文件
+try:
+    from state_pg import load_main_line_state as _state_ml
+except Exception:
+    def _state_ml():
+        return None
+
 import argparse, json, os, urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -226,9 +233,8 @@ def theme_of_symbol(ts_code: str, day: Optional[str] = None) -> Optional[str]:
         pass
     try:
         p = os.path.join(DATA, "main_line_state.json")
-        if os.path.exists(p):
-            ms = json.load(open(p, encoding="utf-8")) or {}
-            return ms.get("main_line") or None
+        ms = _state_ml() or (json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {}) or {}
+        return ms.get("main_line") or None
     except Exception:
         pass
     return None

@@ -1,3 +1,10 @@
+# 2026-11-08：main_line_state 改读 PG（state_pg），读不到再回落文件
+try:
+    from state_pg import load_main_line_state as _state_ml
+except Exception:
+    def _state_ml():
+        return None
+
 # -*- coding: utf-8 -*-
 """
 rotation_universe.py — P2 主线内"细分宇宙+拥挤度"（2026-09-02）
@@ -82,7 +89,7 @@ _load_classified_ext()
 def _themes_from_state():
     """读 main_line_state.json → [main_line]+candidates 主题列表; 失败返回 None。"""
     try:
-        st = json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8"))
+        st = (_state_ml() or json.load(open(os.path.join(DATA, "main_line_state.json"), encoding="utf-8")))
         return [st.get("main_line")] + list(st.get("candidates") or [])
     except Exception:
         return None

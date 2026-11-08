@@ -1,3 +1,10 @@
+# 2026-11-08：状态文件改读 PG（state_pg），读不到再回落文件
+try:
+    from state_pg import load_main_line_state as _state_ml
+except Exception:
+    def _state_ml():
+        return None
+
 # -*- coding: utf-8 -*-
 """
 low_logic_agent.py — 低位看逻辑(AI判定)。对 position_class 判为 LOW 的概念，用 dsh agent 判"题材逻辑/景气/催化"，输出 logic_score(0-1)+判定。
@@ -15,6 +22,8 @@ RES=os.path.join(DATA,"position_class_result.json"); OUT=os.path.join(DATA,"low_
 ML=os.path.join(DATA,"main_line_state.json"); THEME=os.path.join(DATA,"wolf_theme_features_v5.csv"); HOT=os.path.join(DATA,"latest_hot_sectors.json")
 
 def ld(p, dflt=None):
+    _pg_si = _state_ml() if "main_line_state" in str(p) else None
+    if _pg_si is not None: return _pg_si
     try: return json.load(open(p,encoding="utf-8"))
     except Exception: return dflt
 def call_agent(prompt, session="lowlogic_"):

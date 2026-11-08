@@ -1,3 +1,10 @@
+# 2026-11-08：状态文件改读 PG（state_pg），读不到再回落文件
+try:
+    from state_pg import load_main_line_state as _state_ml
+except Exception:
+    def _state_ml():
+        return None
+
 # -*- coding: utf-8 -*-
 # 狼大波数级浪型判定 agent：喂上证指数结构+点位+量能 -> dsh /chat 按狼大多级别Elliott出 (大级别level, 子浪sub_level, 操作operation)
 # 两级结构：level=大级别 (d1反转/d2调整大2/d3主升大3/d4大4回调/d5末段衰竭/down下跌浪)
@@ -254,6 +261,8 @@ def get_anchor_context(date, close, cs=None):
 def read_main_line():
     """读取主线判定 main_line_state.json -> dict，供 agent 判断主线逻辑。"""
     try:
+        _pg = _state_ml()
+        if _pg: return _pg
         path = os.getenv("MAIN_LINE_STATE_FILE", os.path.join(os.environ.get("DATA_DIR","data"), "main_line_state.json"))
         if not os.path.exists(path): return {}
         return json.load(open(path, encoding="utf-8"))

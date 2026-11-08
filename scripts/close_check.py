@@ -191,6 +191,59 @@ def check_wave_read() -> None:
         check("浪型只从 PG 读", True, "无新增直读；白名单 7 个（沙箱/迁移工具）")
 
 
+
+# 这两个状态文件已收口到 PG（apps/main_line/state_pg.py）。
+# 允许名单：① 存储层自身；② 通过别人的 helper 间接读的（arm.load / bct.load）。
+_STATE_FILES = ("main_line_state.json", "position_class_result.json")
+_STATE_READ_ALLOW = {
+    "apps/main_line/state_pg.py",
+    "apps/main_line/state_io.py",
+    "jobs/bt_day_legs.py",               # 经 rotation_switch_arm.load（已加兼容层）
+    "apps/main_line/classify_concept_taxonomy.py",  # 经 build_concept_taxonomy.load（已加）
+    "jobs/bt_low_logic_asof.py",         # 回测沙箱 <day>/position_class_result.json（as-of 复现）
+}
+
+
+def check_state_reads() -> None:
+    """main_line_state / position_class 必须经 state_io/state_pg 读，不许裸读文件。
+
+    行级判定（只看"文件名和读调用同时出现在一行"），避免把注释、归档清单、
+    文档字符串误判成读操作。
+    """
+    pat = re.compile(r"(?:open|json\.load|_load_json|_load|load|_read_json)\s*\([^)\n]*"
+                     r"(?:main_line_state\.json|position_class_result\.json)")
+    bad = []
+    for d in ("jobs", "scripts", "apps", "backend", "core"):
+        base = os.path.join(ROOT, d)
+        for dp, dn, fn in os.walk(base):
+            dn[:] = [x for x in dn if x not in {"__pycache__", "node_modules", ".venv", "tests", "fixtures"}]
+            for f in fn:
+                if not f.endswith(".py"):
+                    continue
+                rel = os.path.relpath(os.path.join(dp, f), ROOT)
+                if rel in _STATE_READ_ALLOW:
+                    continue
+                try:
+                    body = open(os.path.join(dp, f), encoding="utf-8-sig", errors="ignore").read()
+                except OSError:
+                    continue
+                hits = [i for i, l in enumerate(body.splitlines(), 1)
+                        if not l.strip().startswith("#") and pat.search(l)]
+                if not hits:
+                    continue
+                if "state_io" in body or "state_pg" in body:
+                    continue
+                bad.append(f"{rel}:{hits[0]}")
+    if bad:
+        check("主线/分类状态经 state_pg 读", False,
+              "以下位置直接读状态文件、没走兼容层：\n        "
+              + "\n        ".join(bad[:8])
+              + "\n        → 在它的 load 助手里加 `state_io.maybe_load(...)`")
+    else:
+        check("主线/分类状态经 state_pg 读", True,
+              f"{len(_STATE_FILES)} 个状态文件均已收口")
+
+
 def check_prod_sync() -> None:
     rc, head = run(["git", "rev-parse", "HEAD"], timeout=10)
     local = head.strip()
@@ -221,10 +274,11 @@ def main() -> int:
     check_persist()
     check_dsn()
     check_wave_read()
+    check_state_reads()
     if not args.skip_ssh:
         check_prod_sync()
 
-    expected = 5 + (0 if args.skip_ssh else 1)
+    expected = 6 + (0 if args.skip_ssh else 1)
     if RAN[0] != expected:
         FAILED.append(f"检查项数量异常：实际 {RAN[0]} 项，预期 {expected} 项（是不是有人删了检查？）")
 

@@ -1,3 +1,17 @@
+# 2026-11-08：main_line_state / position_class 改读 PG（state_pg）；找不到模块则完全不干预
+try:
+    import state_io as _state_io
+except Exception:
+    try:
+        import os as _os_si, sys as _sys_si
+        _r_si = _os_si.path.dirname(_os_si.path.dirname(_os_si.path.abspath(__file__)))
+        _p_si = _os_si.path.join(_r_si, "apps", "main_line")
+        if _p_si not in _sys_si.path:
+            _sys_si.path.insert(0, _p_si)
+        import state_io as _state_io
+    except Exception:
+        _state_io = None
+
 # -*- coding: utf-8 -*-
 """
 position_class.py — 东财概念级高低位分类器（狼大: 低位看逻辑、高位看量价）。
@@ -88,6 +102,9 @@ CONFIG={"low_vh":-30,"low_box":35,"low_vma60":0,      # LOW: 距高<=-30 且 箱
         "top_inflow_n":40,"vol_confirm_pct":0.15}
 
 def _load_json(p):
+    _pg_si = _state_io.maybe_load(p) if _state_io else None
+    if _pg_si is not None:
+        return _pg_si
     try: return json.load(open(p,encoding="utf-8"))
     except Exception: return {}
 
@@ -357,7 +374,14 @@ def main():
     for code,a in hist.items():
         try: out[code]=classify_one(code,a,wave,vol_map,cat,hot,logic,rel_map,hist)
         except Exception as e: out[code]={"name":a.get("name"),"err":str(e)[:60]}
-    json.dump(out, open(os.path.join(DATA,"position_class_result.json"),"w",encoding="utf-8"), ensure_ascii=False, indent=1)
+    # 2026-11-08：走 state_pg（默认双写 PG + 文件）；不可用时退回直写文件。
+    try:
+        from state_pg import save_position_class as _save_pc
+        if not _save_pc(out):
+            raise RuntimeError("save_position_class 返回 False")
+    except Exception as _e_save:
+        print("[position_class] state_pg 不可用，退回直写文件: %s" % str(_e_save)[:120], file=sys.stderr)
+        json.dump(out, open(os.path.join(DATA,"position_class_result.json"),"w",encoding="utf-8"), ensure_ascii=False, indent=1)
     # 轮动/风控过滤接口 (5.2): 输出 高位应减/只做T 与 低位应埋伏 的 top 概念
     def by(dir_, pos):
         r=[v for v in out.values() if v.get("position")==pos and v.get("fund_flow",{}).get("dir")==dir_ and "features" in v]

@@ -1,3 +1,17 @@
+# 2026-11-08：main_line_state / position_class 改读 PG（state_pg）；找不到模块则完全不干预
+try:
+    import state_io as _state_io
+except Exception:
+    try:
+        import os as _os_si, sys as _sys_si
+        _r_si = _os_si.path.dirname(_os_si.path.dirname(_os_si.path.abspath(__file__)))
+        _p_si = _os_si.path.join(_r_si, "apps", "main_line")
+        if _p_si not in _sys_si.path:
+            _sys_si.path.insert(0, _p_si)
+        import state_io as _state_io
+    except Exception:
+        _state_io = None
+
 # -*- coding: utf-8 -*-
 """build_concept_taxonomy.py — 主线开集 taxonomy: concept→theme→sub-direction (dsh)
 种子锚点: fusion_mainline.THEME_CONCEPTS (既有9主题+概念); 在此基础上把 position_class_result 的活跃概念
@@ -18,6 +32,9 @@ MAX_SUBS_PER_THEME = 9   # 用户指定: 按写死科技类子方向数(国算/�
 
 def _norm(s): return str(s).replace(" ", "").replace("　", "")
 def load(p):
+    _pg_si = _state_io.maybe_load(p) if _state_io else None
+    if _pg_si is not None:
+        return _pg_si
     try: return json.load(open(os.path.join(DATA, p), encoding="utf-8"))
     except Exception: return {}
 

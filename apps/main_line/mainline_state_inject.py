@@ -137,8 +137,17 @@ def _inject_select(ms, date8):
         ms.pop('catalyst', None)
         ms.pop('catalyst_source', None)
         ms.pop('fusion', None)
-    json.dump(ms, open(os.path.join(DATA, 'main_line_state.json'), 'w', encoding='utf-8'),
-              ensure_ascii=False, indent=1)
+    # 2026-11-08：改为走 state_pg（默认双写 PG + 文件）。state_pg 不可用时退回直写文件，
+    # 保证注入链不会因为存储层改动而断。
+    try:
+        from state_pg import save_main_line_state as _save_ml
+        if not _save_ml(ms):
+            raise RuntimeError("save_main_line_state 返回 False")
+    except Exception as _e_save:
+        print('[mainline_state_inject] state_pg 不可用，退回直写文件: %s' % str(_e_save)[:120],
+              file=sys.stderr)
+        json.dump(ms, open(os.path.join(DATA, 'main_line_state.json'), 'w', encoding='utf-8'),
+                  ensure_ascii=False, indent=1)
     print('INJECTED main_line_state.json mainline_select date', summary['date'],
           '| mainline', summary['mainline'], '| pool', summary['pool'], flush=True)
     return 0

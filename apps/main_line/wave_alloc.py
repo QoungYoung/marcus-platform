@@ -1,3 +1,17 @@
+# 2026-11-08：main_line_state / position_class 改读 PG（state_pg）；找不到模块则完全不干预
+try:
+    import state_io as _state_io
+except Exception:
+    try:
+        import os as _os_si, sys as _sys_si
+        _r_si = _os_si.path.dirname(_os_si.path.dirname(_os_si.path.abspath(__file__)))
+        _p_si = _os_si.path.join(_r_si, "apps", "main_line")
+        if _p_si not in _sys_si.path:
+            _sys_si.path.insert(0, _p_si)
+        import state_io as _state_io
+    except Exception:
+        _state_io = None
+
 # -*- coding: utf-8 -*-
 """wave_alloc.py — wave 调档·主线候选权重分配(2026-09-07 回测验证落地)
 
@@ -44,6 +58,9 @@ DEFAULT_OP = "t_only"
 
 
 def _load(name):
+    _pg_si = _state_io.maybe_load(name) if _state_io else None
+    if _pg_si is not None:
+        return _pg_si
     try:
         return json.load(open(os.path.join(DATA, name), encoding="utf-8"))
     except Exception:
