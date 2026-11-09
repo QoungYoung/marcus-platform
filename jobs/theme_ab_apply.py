@@ -17,6 +17,11 @@ def main():
     if not row:
         print('no signal'); return 0
     target,leader,wind,mid,mode=row
+    if mode=='C_exit' and leader:
+        import subprocess
+        subprocess.run([sys.executable,os.path.join(ROOT,'jobs/theme_ab_exit.py'),'--symbol',leader,'--date',a.date],check=False)
+        cur.execute("update theme_ab_signals set status='approved' where trade_date=%s and status='proposed'",(a.date,));c.commit();c.close()
+        print('exit applied',leader);return 0
     if not (leader and re.match(r'^\d{6}\.(SH|SZ|BJ)$',leader)):
         cur.execute("update theme_ab_signals set status='rejected' where trade_date=%s and status in ('proposed','approved')",(a.date,)); c.commit()
         print('reject: leader not code'); return 0

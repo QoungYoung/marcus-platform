@@ -83,6 +83,25 @@ def main():
                     _ok,_why=validate_b(B)
                     if not _ok:
                         status='rejected'; A['b_validation']=_why
+                else:
+                    # A 不切 → C 管理当前题材持仓/源：hold/buy/add/exit
+                    try:
+                        C,_craw=call(prompt('c_manage')+f"\n\nA：{json.dumps(A,ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n数据：{json.dumps(a_data,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_c_{day}_{slot}')
+                    except Exception as _ce:
+                        C={'action':'hold','verdict':'C call failed: '+str(_ce)[:120]}
+                    _act=str(C.get('action') or 'hold').lower()
+                    A['c_action']=_act; A['c_verdict']=C.get('verdict','')
+                    if _act in ('buy','add','exit'):
+                        _sym=C.get('leader') or ''
+                        if _act!='exit':
+                            _ok,_why=validate_b({'target':C.get('theme') or A.get('source') or '','roles':{'leader':_sym},'leader_segment':C.get('leader_segment') or ''})
+                            if not _ok:
+                                status='rejected'; A['c_validation']=_why; _sym=''
+                        if _sym:
+                            target=C.get('theme') or A.get('source') or ''; leader=_sym
+                            mode='C_exit' if _act=='exit' else 'C'
+                            status='proposed'
+                            wind=C.get('wind') or []; mid=C.get('mid') or []
                 with c.cursor() as cur:
                     cur.execute("""insert into theme_ab_signals(trade_date,slot,source,target,leader,wind,mid,mode,status,reason,a_raw,b_raw)
                     values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
