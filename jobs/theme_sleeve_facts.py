@@ -264,8 +264,58 @@ def main():
             return (z["limit_times"], -int(ft) if str(ft).isdigit() else -999999,
                     z.get("fd_amount") or 0, z["pct"] or -99, z["amount"] or 0)
         cand.sort(key=_key, reverse=True)
-        leader = cand[0] if cand else None
-        rest = cand[1:]
+        # 狼大口径：先按板块内总市值前5 + 非配套段选核心候选，再用老龙头/人气确认
+        try:
+            _mv={}; _ind={}
+            with __import__('psycopg2').connect(os.environ['DATABASE_URL'],connect_timeout=3) as _c:
+                with _c.cursor() as _cur:
+                    _cur.execute("select ts_code,total_mv from mkt_bars_daily where trade_date=(select max(trade_date) from mkt_bars_daily where trade_date<=%s) and ts_code=any(%s)",(a.date,[z['symbol'] for z in cand]))
+                    _mv={str(r[0]):float(r[1] or 0) for r in _cur.fetchall()}
+                    _cur.execute("select ts_code,industry from stock_pool where ts_code=any(%s)",([z['symbol'] for z in cand],))
+                    _ind={str(r[0]):str(r[1] or '') for r in _cur.fetchall()}
+            for z in cand:
+                z['total_mv']=_mv.get(z['symbol'],0); z['industry']=_ind.get(z['symbol'],'')
+            _ranked=sorted(cand,key=lambda z:-(z.get('total_mv') or 0))
+            for i,z in enumerate(_ranked): z['mv_rank']=i+1
+            from app.services.wolf_leader_rules import SUPPORT_INDUSTRY, SUPPORT_NAME
+            def _support(z):
+                if z.get('industry') in SUPPORT_INDUSTRY: return True
+                return any(k in str(z.get('industry') or '') for k in SUPPORT_NAME)
+            # 历史老龙头/上一波 leader：即使当日市值不在前5，也保留进核心候选
+            _prior=[]
+            try:
+                _rp=os.path.join(ROOT,'data','asof',f'{a.date}_roles.json')
+                if os.path.exists(_rp):
+                    _pr=json.load(open(_rp,encoding='utf-8'))
+                    _prior=[((_pr.get('roles') or {}).get('leader'))]
+            except Exception: pass
+            core=[z for z in cand if z.get('mv_rank',999)<=5 and not _support(z)]
+            for _ps in _prior:
+                if _ps and not any(z['symbol']==_ps for z in core):
+                    _z=next((z for z in cand if z['symbol']==_ps),None)
+                    if _z and not _support(_z): core.append(_z)
+            # 营收拐点/增速：只查核心候选，避免全市场请求
+            for z in core:
+                try:
+                    _fin=relay_query('fina_indicator',ts_code=z['symbol'],limit=8)
+                    if _fin is not None and len(_fin):
+                        _fin=_fin.sort_values('end_date')
+                        _ys=[float(x) for x in _fin.get('tr_yoy',[]) if x==x]
+                        if len(_ys)>=2:
+                            z['revenue_yoy_latest']=round(_ys[-1],2); z['revenue_yoy_prev']=round(_ys[-2],2)
+                            z['revenue_inflection']=bool(_ys[-1] > _ys[-2] and _ys[-1] > 0)
+                        elif _ys:
+                            z['revenue_yoy_latest']=round(_ys[-1],2); z['revenue_inflection']=bool(_ys[-1]>0)
+                except Exception:
+                    pass
+            core.sort(key=lambda z:(bool(z.get('revenue_inflection')), z.get('popular_120') or 0, z.get('pct') or -99, z.get('amount') or 0),reverse=True)
+            _pl=next((z for z in core if _prior and z['symbol']==_prior[0]),None)
+            leader=_pl or (core[0] if core else None)
+            _core=[{k:z.get(k) for k in ('symbol','total_mv','mv_rank','industry','pct','popular_120','revenue_yoy_latest','revenue_inflection')} for z in core]
+        except Exception as e:
+            print('[theme] core leader fail:',str(e)[:100],flush=True)
+            core=[]; leader=None; _core=[]
+        rest=[z for z in cand if not leader or z['symbol']!=leader['symbol']]
         wind = [z for z in rest if z["symbol"].startswith(("300", "301", "688")) and (z["pct"] or 0) > 0][:2]
         wind_syms = {z["symbol"] for z in wind}
         mid = [z for z in rest if z["symbol"] not in wind_syms and not z["symbol"].startswith(("300", "301", "688")) and (z["pct"] or 0) > 0][:3]
@@ -301,7 +351,7 @@ def main():
         rec = {"theme_id": tid, "name": t.get("name") or x.get("name"), "parent_track": t.get("parent_track"),
                "verdict": x.get("verdict"), "ret1": fx.get("ret1"), "ret5": fx.get("ret5"),
                "excess5": fx.get("excess5"), "breadth": fx.get("breadth"), "amount_ratio": fx.get("amount_ratio"),
-               "members": len(mem), "leader": (t.get("leader") or {}),
+               "members": len(mem), "leader": ({"code": leader["symbol"], "name": leader.get("name")} if leader else {}), "leader_source": "wolf_core",
                "roles": {"leader": (leader or {}).get("symbol"), "wind": [z["symbol"] for z in wind],
                          "mid": [z["symbol"] for z in mid]},
                "b4": {"date": b4_date, "stale": b4_stale, "u": len(u), "z": len(zz), "d": len(dd),
@@ -311,6 +361,7 @@ def main():
                                   for x in ([leader] + wind + mid if leader else [])
                                   if x},
                "popular_top3": [x["symbol"] for x in sorted(cand, key=lambda z: -(z.get("popular_120") or 0))[:3]],
+               "core_candidates": _core,
                "role_detail": {
                    "leader": ({k: leader.get(k) for k in ("symbol", "first_time", "open_times", "fd_amount", "limit_times", "pct")} if leader else None),
                    "wind": [{k: x.get(k) for k in ("symbol", "first_time", "open_times", "fd_amount", "limit_times", "pct")} for x in wind],

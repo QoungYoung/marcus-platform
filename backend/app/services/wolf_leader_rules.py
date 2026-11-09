@@ -23,8 +23,8 @@ def _row(symbol: str):
         import psycopg2
         with psycopg2.connect(os.environ["DATABASE_URL"], connect_timeout=3) as c:
             with c.cursor() as cur:
-                cur.execute("select name,industry from stock_basic where ts_code=%s or ts_code=%s limit 1",
-                            (symbol, symbol.replace(".SH", "").replace(".SZ", "")))
+                cur.execute("select name,industry from stock_pool where ts_code=%s or ts_code=%s or symbol=%s limit 1",
+                            (symbol, symbol.replace(".SH", "").replace(".SZ", ""), symbol.split('.')[0]))
                 return cur.fetchone()
     except Exception:
         return None

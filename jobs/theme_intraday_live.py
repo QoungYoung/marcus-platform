@@ -111,6 +111,23 @@ def main():
   n=len(rows); up=sum(1 for r in rows if r['pct']>0); lu=sum(1 for r in rows if r['limit'])
   out[tid]={'n':n,'breadth':round(up/n,3) if n else 0,'limit_up':lu,'ret1':round(sum(r['pct'] for r in rows)/n,2) if n else 0,'members':rows}
   print(tid,n,out[tid]['breadth'],lu,out[tid]['ret1'],flush=True)
+ # 源角色 + 成员元数据（供 C 按核心段/老龙头二次选 leader）
+ src_roles={}; stock_meta={}
+ try:
+  src_syms=set().union(*[by.get(x,set()) for x in SRC_IDS]) if any(by.get(x) for x in SRC_IDS) else set()
+  if src_syms:
+   with psycopg2.connect(os.environ['DATABASE_URL'],connect_timeout=3) as _c:
+    with _c.cursor() as _cur:
+     _cur.execute("select ts_code,name,industry,market_cap from stock_pool where ts_code=any(%s)",(list(src_syms),))
+     for code,name,ind,mc in _cur.fetchall(): stock_meta[str(code)]={'name':name,'industry':ind,'market_cap':float(mc or 0)}
+     _cur.execute("select ts_code,total_mv from mkt_bars_daily where trade_date=(select max(trade_date) from mkt_bars_daily where trade_date<=%s) and ts_code=any(%s)",(day,list(src_syms)))
+     for code,mv in _cur.fetchall():
+      stock_meta.setdefault(str(code),{})['total_mv']=float(mv or 0)
+  for _tid in SRC_IDS:
+   _t=tmeta.get(_tid) or {}
+   src_roles[_tid]={'roles':_t.get('roles') or {},'role_detail':_t.get('role_detail') or {}}
+ except Exception as e:
+  print('source meta skip',str(e)[:80],flush=True)
  # A candidate_meta / B candidates
  cm={}; bc=[]
  for tid in ALLOWED_IDS:
@@ -129,7 +146,7 @@ def main():
              'role_hint':{'leader':roles.get('leader'),'wind':roles.get('wind') or [],'mid':roles.get('mid') or []},
              'leader':(rd.get('leader') or {}).get('symbol') or roles.get('leader')})
  os.makedirs(os.path.join(ROOT,'data/asof'),exist_ok=True)
- a_payload={'date':day,'source':'机器人链','source_history':src_hist,'source_intraday':{k:out[k] for k in SRC_IDS if k in out},'candidate_meta':cm}
+ a_payload={'date':day,'source':'机器人链','source_history':src_hist,'source_intraday':{k:out[k] for k in SRC_IDS if k in out},'source_roles':src_roles,'stock_meta':stock_meta,'candidate_meta':cm}
  b_payload={'date':day,'source':'机器人链','candidates':bc,'candidate_meta':cm}
  # 不落 data/asof；只入 PG，避免同一天多槽覆盖历史 JSON
  try:

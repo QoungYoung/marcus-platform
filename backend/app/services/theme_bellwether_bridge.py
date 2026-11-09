@@ -54,7 +54,8 @@ def attach(rec: Dict[str, Any], members: Set[str], date8: str) -> Dict[str, Any]
     # 现有风向标仍在成分内、未 dead：用它作为 leader 证据
     code = it.get("bellwether_code")
     if code in members and it.get("state") not in ("dead", "rotated"):
-        rec.setdefault("roles", {})["leader"] = code
-        rec["leader"] = code
-        rec["leader_source"] = "bellwether"
+        if rec.get("leader_source") != "wolf_core":
+            rec.setdefault("roles", {})["leader"] = code
+            rec["leader"] = code
+            rec["leader_source"] = "bellwether"
     return rec
