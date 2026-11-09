@@ -25,11 +25,26 @@ def call(prompt_text, sid, timeout=600):
     obj,end=json.JSONDecoder().raw_decode(raw[i:])
     return obj,raw
 
+def _canon(sym):
+    s=str(sym or '').upper().replace(' ','')
+    for p in ('SH','SZ','BJ'):
+        if s.startswith(p): s=s[2:]; break
+    if '.' in s: return s
+    if s.startswith(('6','9','5')): return s+'.SH'
+    if s.startswith(('4','8','92')): return s+'.BJ'
+    return s+'.SZ'
+
 def load_holding(account='stock'):
     try:
         c=connect(); cur=c.cursor()
         cur.execute("select symbol,volume,avg_price from paper_positions where account_id=%s and volume>0",(account,))
-        rows=[{'symbol':r[0],'volume':int(r[1]),'entry':float(r[2])} for r in cur.fetchall()]
+        rows=[{'symbol':_canon(r[0]),'volume':int(r[1]),'entry':float(r[2]),'themes':[]} for r in cur.fetchall()]
+        syms=[r['symbol'] for r in rows]
+        if syms:
+            cur.execute("select symbol,theme_id from theme_membership where symbol=any(%s) and as_of_date=(select max(as_of_date) from theme_membership)",(syms,))
+            mp={}
+            for sym,tid in cur.fetchall(): mp.setdefault(_canon(sym),[]).append(tid)
+            for r in rows: r['themes']=sorted(set(mp.get(r['symbol']) or []))
         c.close(); return rows
     except Exception:
         return []
