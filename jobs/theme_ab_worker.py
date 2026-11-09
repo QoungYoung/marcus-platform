@@ -146,6 +146,11 @@ def main():
                         status='rejected'; A['b_validation']=_why
                     else:
                         try:
+                            _tc=next((c for c in (b_data.get('candidates') or []) if c.get('concept') in (B.get('target'),A.get('source'))),{})
+                            a_data['target_leader_snapshot']=_tc.get('leader_snapshot')
+                            a_data['target_top_snapshots']=_tc.get('top_snapshots') or []
+                        except Exception: pass
+                        try:
                             C=_ask_c(A,B,holding,a_data,wave,day,slot)
                         except Exception as _ce:
                             C={'action':'hold','verdict':'C call failed: '+str(_ce)[:120]}

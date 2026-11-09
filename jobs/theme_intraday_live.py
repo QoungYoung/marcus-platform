@@ -15,6 +15,24 @@ from tushare_relay import relay_query
 ALLOWED_IDS=['space','satellite','humanoid_robot','robot_actuator','ai_app','medical_device','innovative_drug']
 SRC_IDS=['robot_actuator','humanoid_robot']
 
+def _limit_pct(sym):
+    code=sym.split('.')[0]
+    if code.startswith(('300','301','688')): return 19.7
+    if code.startswith(('4','8','92')): return 29.7
+    return 9.7
+
+def _snap(sym, price, pct, high=None, low=None, open_=None, pre=None):
+    lim=_limit_pct(sym)
+    touched=bool(high and pre and (high/pre-1)*100 >= lim)
+    broken=bool(touched and pct < lim)
+    pos=None
+    try:
+        if high and low and high>low: pos=round((price-low)/(high-low),3)
+    except Exception: pass
+    return {'symbol':sym,'pct':round(float(pct),2),'price':price,'high':high,'low':low,
+            'open':open_,'pre_close':pre,'limit_pct':lim,'limit':pct>=lim,
+            'touched_limit':touched,'broken_limit':broken,'intraday_pos':pos}
+
 def main():
  ap=argparse.ArgumentParser();ap.add_argument('--date',required=True);ap.add_argument('--max-members',type=int,default=30);a=ap.parse_args();day=a.date
  import psycopg2
@@ -84,13 +102,17 @@ def main():
    try:
     r=requests.get('https://push2.eastmoney.com/api/qt/ulist.np/get',
       params={'fltt':'2','secids':','.join(_secid(x) for x in part),
-              'fields':'f12,f2,f3,f18'},timeout=8)
+              'fields':'f12,f2,f3,f15,f16,f17,f18'},timeout=8)
     data=(r.json() or {}).get('data') or {}
     for x in data.get('diff') or []:
      code=str(x.get('f12') or ''); pct=x.get('f3')
      if not code or pct in (None,'-',''): continue
      sym=next((z for z in part if z.split('.')[0]==code),None)
-     if sym: qcache[sym]={'pct':round(float(pct),2)}
+     if sym:
+      def _n(k):
+       try: return float(x.get(k))
+       except Exception: return None
+      qcache[sym]=_snap(sym,_n('f2'),float(pct),_n('f15'),_n('f16'),_n('f17'),_n('f18'))
    except Exception:
     continue
  all_syms=sorted(set().union(*[by.get(x,set()) for x in ids])) if by else []
@@ -102,7 +124,7 @@ def main():
    x=relay_query('rt_k',ts_code=sym,limit=1)
    if x is None or len(x)==0: qcache[sym]=None; return None
    r=x.iloc[0]; pc=float(r['pre_close'] or 0); cl=float(r['close'] or 0)
-   qcache[sym]={'pct':round((cl/pc-1)*100,2)} if pc>0 else None
+   qcache[sym]=_snap(sym,cl,(cl/pc-1)*100,float(r.get('high') or 0) or None,float(r.get('low') or 0) or None,float(r.get('open') or 0) or None,pc) if pc>0 else None
   except Exception: qcache[sym]=None
   return qcache[sym]
  out={}
@@ -111,7 +133,7 @@ def main():
   for sym in sorted(mem):
    z=q(sym)
    if not z: continue
-   rows.append({'symbol':sym,'pct':z['pct'],'limit':z['pct']>=9.7})
+   rows.append(z)
   n=len(rows); up=sum(1 for r in rows if r['pct']>0); lu=sum(1 for r in rows if r['limit'])
   out[tid]={'n':n,'breadth':round(up/n,3) if n else 0,'limit_up':lu,'ret1':round(sum(r['pct'] for r in rows)/n,2) if n else 0,'members':rows}
   print(tid,n,out[tid]['breadth'],lu,out[tid]['ret1'],flush=True)
@@ -144,7 +166,10 @@ def main():
         'ret1':o['ret1'],'overlap':inter,'overlap_ratio':purity,'target_purity':purity}
   cm[name]=meta
   rd=t.get('role_detail') or {}; roles=t.get('roles') or {}
-  bc.append({'concept':name,'theme_id':tid,'n':o['n'],'overlap':inter,
+  _lsym=(rd.get('leader') or {}).get('symbol') or roles.get('leader')
+  _lsnap=next((z for z in o['members'] if z['symbol']==_lsym),None) if _lsym else None
+  _top=sorted(o['members'],key=lambda z:-(z.get('pct') or -99))[:5]
+  bc.append({'concept':name,'theme_id':tid,'n':o['n'],'overlap':inter,'leader_snapshot':_lsnap,'top_snapshots':_top,
              'target_purity':purity,'limit_up':o['limit_up'],'breadth':o['breadth'],
              'ret1':o['ret1']/100 if o['ret1'] else 0,**meta,
              'role_hint':{'leader':roles.get('leader'),'wind':roles.get('wind') or [],'mid':roles.get('mid') or []},

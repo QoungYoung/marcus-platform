@@ -80,6 +80,7 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 - source_roles.roles.leader 只是初选，不是最终答案；必须用 stock_meta 的市值/行业和 source_roles.role_detail 重新判断。wind 里的老龙头/核心本体可以升为 leader；如果 facts 的 leader 是配套段/非核心，必须换掉。
 - 即使 action=hold，也要给出你认定的核心龙头 leader、leader_segment、evidence，不得留空。
 - 配套段（连接器/电源/结构件/轴承/材料/加工设备/汽车配件/链传动）不能当 leader。
+- leader_snapshot.broken_limit=true 表示触板后炸板；已有持仓可以 hold，但不加仓；空仓不追炸板股。
 - data.main_business 是主营校验：keep=false 或 ratio 低的票不能当 core；主营有关但 segment=support 的只能做证据。fina_mainbz 只有“主营业务”一项时，以 LLM 主营判断为准，但仍需核心段。
 - 没有核心 leader → hold，不买后排/配套。
 只输出 JSON：
