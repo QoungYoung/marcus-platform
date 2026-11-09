@@ -15,7 +15,7 @@ ALLOWED_IDS=['space','satellite','humanoid_robot','robot_actuator','ai_app','med
 SRC_IDS=['robot_actuator','humanoid_robot']
 
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--date',required=True);a=ap.parse_args();day=a.date
+ ap=argparse.ArgumentParser();ap.add_argument('--date',required=True);ap.add_argument('--max-members',type=int,default=30);a=ap.parse_args();day=a.date
  import psycopg2
  c=psycopg2.connect(os.environ['DATABASE_URL'],connect_timeout=5);cur=c.cursor()
  ids=list(dict.fromkeys(SRC_IDS+ALLOWED_IDS))
@@ -51,6 +51,22 @@ def main():
                        'breadth':round(int(z.get('u') or 0)/max(1,int(z.get('u') or 0)+int(z.get('z') or 0)+1),3),
                        'limit':int(z.get('u') or 0),'avg':0.0} for z in _b4[_tid][-7:]]
   except Exception: pass
+ # 过滤：源题材全量；候选题材只保留 role_hint + 市值前 N，避免 1100 只串行
+ try:
+  _mv={}
+  with psycopg2.connect(os.environ['DATABASE_URL'],connect_timeout=3) as _c:
+   with _c.cursor() as _cur:
+    _cur.execute("select ts_code,total_mv from mkt_bars_daily where trade_date=(select max(trade_date) from mkt_bars_daily where trade_date<=%s)",(day,))
+    _mv={str(r[0]):float(r[1] or 0) for r in _cur.fetchall()}
+  for _tid in list(by):
+   if _tid in SRC_IDS: continue
+   _t=tmeta.get(_tid) or {}; _rd=_t.get('role_detail') or {}; _roles=_t.get('roles') or {}
+   _keep=set(x for x in [_roles.get('leader')]+list(_roles.get('wind') or [])+list(_roles.get('mid') or []) if x)
+   _keep |= set(x for x in [((_rd.get('leader') or {}).get('symbol'))] if x)
+   _rest=sorted(by[_tid]-_keep,key=lambda x:-_mv.get(x,0))
+   by[_tid]=_keep|set(_rest[:max(0,a.max_members-len(_keep))])
+ except Exception as e:
+  print('member filter skip',str(e)[:80],flush=True)
  srcset=set().union(*[by.get(x,set()) for x in SRC_IDS]) if any(by.get(x) for x in SRC_IDS) else set()
  qcache={}
  def q(sym):
