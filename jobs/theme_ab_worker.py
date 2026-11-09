@@ -141,9 +141,16 @@ def main():
                     if b_data:
                         B,braw=call(prompt('b_target')+f"\n\n候选：{json.dumps(b_data.get('candidates') or [],ensure_ascii=False)}\nA候选池：{json.dumps(A.get('candidates') or [],ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_b_{day}_{slot}')
                     target=B.get('target') or ''; leader=(B.get('roles') or {}).get('leader') or ''
+                    if re.match(r'^\d{6}\.(SH|SZ|BJ)$', str(target)):
+                        _th=next((x.get('theme') for x in (A.get('candidates') or []) if x.get('theme')), '')
+                        if _th: target=_th; B['target']=_th;
                     wind=(B.get('roles') or {}).get('wind') or []; mid=(B.get('roles') or {}).get('mid') or []
                     mode=B.get('mode') or 'cash'
-                    if target and leader:
+                    _tq=(B.get('target_qualified') is True)
+                    A['b_target_qualified']=_tq
+                    if not _tq:
+                        target=''; leader=''; wind=[]; mid=[]; mode='cash'; A['b_mode']='cash'
+                    elif target and leader:
                         _ok,_why=validate_b(B)
                         if not _ok:
                             A['b_validation']=_why; target=''; leader=''; mode='cash'

@@ -55,6 +55,7 @@ STEP3 源有大哥 + 大哥二哥梯队未断 + 细分主线还在 → source_ac
 B='''你是 B agent：只从 A 的候选里选 target/leader，不判断源是否切换。
 规则：
 - A.candidates 的 priority 是权威顺序；不能按涨停数重排。
+- target 必须是题材名（如“商业航天/space/satellite”），不能填股票代码；股票代码只放 roles.leader。
 - 先排除伪概念/地域/风格/财务标签；再看 adjacent/overlap、首日、低位、核心段。
 
 狼大选龙头（硬规则）：
@@ -63,10 +64,19 @@ B='''你是 B agent：只从 A 的候选里选 target/leader，不判断源是�
 3) 龙头核心要素优先级：政策点火 > 强赚钱效应 > 题材联动性 > 板块内体量大 > 基本面 > 资金持续放量且买盘>卖盘并站5日线 > 产业链核心中枢/稀缺零件 > 趋势领跑 > 估值反转。
 4) 当日涨停/封单/首板只确认“还活着”，不能作为选 leader 的主排序；不按涨幅/封单选。
 5) 配套段（连接器/电源/结构件/轴承/材料/加工设备/汽车配件/链传动）只能 wind/mid，不能当 leader。
-6) 没有核心段 leader → picks=[]，target 可保留但 leader 为空；不许用后排/配套股替补。
+6) 没有核心段 leader → picks=[]，target 为空；不许用后排/配套股替补。
+
+资格门槛（先资格，后排序）：
+- spillover：first_day_absolute=true + 非 same_chain + 核心 leader + breadth/涨停确认。
+- rebound：mainline_oversold_rebound=true + 反弹阶段明确 + 核心 leader/弹性载体。
+- independent：first_day_absolute=true + 核心 leader + 不是当前持仓方向。
+- 以上都不满足 → mode=cash，target=""，roles.leader=""，picks=[]。
+- 纯度/overlap/target_purity 只用于同一资格等级内排序，不能把 target_qualified 设为 true。
+- target 已是当前持仓方向且没有 add 证据 → target_qualified=false，mode=cash，不要标 independent。
+- 没有 first_day/rebound_phase/核心 leader 确认时，不能因为“成分更纯”就切。
 
 输出 JSON：
-{"target":"","mode":"spillover|independent|cash","validator":{},"roles":{"leader":"","wind":[],"mid":[]},"leader_segment":"core|support","picks":[],"verdict":"","leader_evidence":[]}'''
+{"target":"","mode":"spillover|rebound|independent|cash","target_qualified":false,"qualification":{"first_day":false,"rebound_phase":"","core_leader":false,"breadth_confirm":false,"existing_holding":false},"purity_rank":0,"validator":{},"roles":{"leader":"","wind":[],"mid":[]},"leader_segment":"core|support","picks":[],"verdict":"","leader_evidence":[]}'''
 
 C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 target/leader。你只管理当前持仓/目标题材，不重新选题材。
 输入：A 结果、source、当前持仓（带 themes）、source facts、candidate_meta、浪型。
