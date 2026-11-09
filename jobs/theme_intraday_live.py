@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 import argparse,json,os,sys,time
+import requests
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)));sys.path.insert(0,os.path.join(ROOT,'core'))
 from tushare_relay import relay_query
 
@@ -69,6 +70,28 @@ def main():
   print('member filter skip',str(e)[:80],flush=True)
  srcset=set().union(*[by.get(x,set()) for x in SRC_IDS]) if any(by.get(x) for x in SRC_IDS) else set()
  qcache={}
+ # 主源：东财 ulist.np 批量实时；缺的再用 rt_k 单只兜底
+ def _secid(sym):
+  code=sym.split('.')[0]
+  return ('1.' if sym.endswith('.SH') else '0.')+code
+ def em_batch(syms):
+  for i in range(0,len(syms),80):
+   part=syms[i:i+80]
+   try:
+    r=requests.get('https://push2.eastmoney.com/api/qt/ulist.np/get',
+      params={'fltt':'2','secids':','.join(_secid(x) for x in part),
+              'fields':'f12,f2,f3,f18'},timeout=8)
+    data=(r.json() or {}).get('data') or {}
+    for x in data.get('diff') or []:
+     code=str(x.get('f12') or ''); pct=x.get('f3')
+     if not code or pct in (None,'-',''): continue
+     sym=next((z for z in part if z.split('.')[0]==code),None)
+     if sym: qcache[sym]={'pct':round(float(pct),2)}
+   except Exception:
+    continue
+ all_syms=sorted(set().union(*[by.get(x,set()) for x in ids])) if by else []
+ em_batch(all_syms)
+ print('eastmoney batch',len(qcache),'/',len(all_syms),flush=True)
  def q(sym):
   if sym in qcache: return qcache[sym]
   try:
