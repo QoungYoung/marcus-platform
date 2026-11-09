@@ -172,15 +172,25 @@ def main() -> int:
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
 
-    rows, q = tx(IDX)
+    try:
+        rows, q = tx(IDX)
+    except Exception as e:
+        print(f"[error] 分时/快照取不到（这才是真故障）: {type(e).__name__} {str(e)[:80]}")
+        return 2
     hm = q[30][8:12] if len(q) > 30 else ""
     if not a.force and not ("0930" <= hm <= "1500"):
         print(f"[skip] 非交易时段 {hm}")
         return 0
     info = analyze(rows, q)
     if not info:
-        print("[skip] 分时数据不足")
-        return 2
+        # ★ 2026-11-09 修（用户收到 10:03 的 failed 通知）：
+        #   开盘不足 3 个完整 15 分钟桶（需 ≥46 根分时）时 analyze() 返回 None ——
+        #   这是**正常的"还没到可判时点"**，不是故障。原来 return 2 ⇒ 调度判 failed
+        #   ⇒ 每天 9:30~10:15 每 3 分钟发一条 ❌ 通知（实测 10:03 那次 rows=34 < 46）。
+        need = BUCKET * 3 + 1
+        print(f"[skip] 开盘不足：当前 {len(rows)} 根分时，需 ≥{need} 根"
+              f"（{BUCKET} 分钟×3 个完整桶）才有得判 —— 正常跳过，非故障")
+        return 0
     dr, est_yi, dy, prev_yi = day_amount_ratio(hm)
 
     # ★ 2026-11-06 13:48 实测修正：「缩量」的基准是**昨日**，不是 20 日均。
