@@ -131,30 +131,29 @@ def main():
                 if not a_data: raise RuntimeError('no A data')
                 holding=load_holding(); wave=load_wave(day)
                 A,araw=call(prompt('a_source')+f"\n\n数据：{json.dumps(a_data,ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_a_{day}_{slot}')
-                target=''; leader=''; wind=[]; mid=[]; mode='none'; status='ok' if not A.get('need_switch') else 'proposed'
+                target=''; leader=''; wind=[]; mid=[]; mode='none'; status='ok'
                 braw={}
-                if A.get('need_switch'):
+                _switch=bool(A.get('switch_required', A.get('need_switch', False)))
+                if _switch:
                     bpath=os.path.join(ROOT,'data/asof',f'{day}_b_candidates.json')
                     b_data=json.load(open(bpath,encoding='utf-8')) if os.path.exists(bpath) else _cload(day,'b_candidates')
-                    if not b_data: raise RuntimeError('no B data')
-                    B,braw=call(prompt('b_target')+f"\n\n候选：{json.dumps(b_data.get('candidates') or [],ensure_ascii=False)}\nA候选：{json.dumps(A.get('candidates') or [],ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_b_{day}_{slot}')
+                    B={}
+                    if b_data:
+                        B,braw=call(prompt('b_target')+f"\n\n候选：{json.dumps(b_data.get('candidates') or [],ensure_ascii=False)}\nA候选池：{json.dumps(A.get('candidates') or [],ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_b_{day}_{slot}')
                     target=B.get('target') or ''; leader=(B.get('roles') or {}).get('leader') or ''
                     wind=(B.get('roles') or {}).get('wind') or []; mid=(B.get('roles') or {}).get('mid') or []
-                    mode=B.get('mode') or ''
-                    _ok,_why=validate_b(B)
-                    if not _ok:
-                        status='rejected'; A['b_validation']=_why
-                    else:
-                        try:
-                            _tc=next((c for c in (b_data.get('candidates') or []) if c.get('concept') in (B.get('target'),A.get('source'))),{})
-                            a_data['target_leader_snapshot']=_tc.get('leader_snapshot')
-                            a_data['target_top_snapshots']=_tc.get('top_snapshots') or []
-                        except Exception: pass
-                        try:
-                            C=_ask_c(A,B,holding,a_data,wave,day,slot)
-                        except Exception as _ce:
-                            C={'action':'hold','verdict':'C call failed: '+str(_ce)[:120]}
-                        target,leader,mode,status=_c_apply(C,A,target,leader)
+                    mode=B.get('mode') or 'cash'
+                    if target and leader:
+                        _ok,_why=validate_b(B)
+                        if not _ok:
+                            A['b_validation']=_why; target=''; leader=''; mode='cash'
+                    if not target:
+                        A['b_mode']='cash'
+                    try:
+                        C=_ask_c(A,B if target else {'mode':'cash','verdict':B.get('verdict','')},holding,a_data,wave,day,slot)
+                    except Exception as _ce:
+                        C={'action':'hold','verdict':'C call failed: '+str(_ce)[:120]}
+                    target,leader,mode,status=_c_apply(C,A,target,leader)
                 else:
                     try:
                         C=_ask_c(A,None,holding,a_data,wave,day,slot)

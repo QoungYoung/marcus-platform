@@ -45,12 +45,12 @@ A='''你是 A agent：只判断源题材是否该切外溢、给候选方向，�
 
 STEP1 源是否高位滞涨/高潮/反抽：ret1 不再上行、涨停不增、风向标/二哥未封、高开一步到位。
 STEP2 是否出现非源新题材首日：以 candidate_meta.first_day_absolute=true 为准；prior_launch_days 非空不是首日；不许用“老面孔/曾经活跃/breadth 高”推翻。
-STEP3 源有大哥 + 大哥二哥梯队未断 + 细分主线还在 → need_switch=false；源高位 + 候选首日 → need_switch=true。已有持仓时先判断持有/换仓/卖出。
+STEP3 源有大哥 + 大哥二哥梯队未断 + 细分主线还在 → source_action=hold, switch_required=false；源高位/炸板/梯队断 → source_action=avoid 或 exit, switch_required=true。是否切到哪个 target 交给 B，不在这里判“没有首日所以不切”。
 例外（第二波首日切换）：源处于第二波首日/高位（breadth 高、涨停家数多），同时存在 adjacent 候选 first_day_absolute=true、limit_up>=3、overlap>=20 → need_switch=true；不要因为源自身仍强就不切，这是狼大“第二波首日切外溢”的场景。
 龙头口径：A 不选个股，但判断候选/源时必须用核心段，不得把汽车配件/连接器/电源/结构件/轴承/材料/加工设备当龙头；候选排序不按涨停数。
 
 禁止数字阈值。输出 JSON：
-{"source":"","source_state":"","step1_source_stalling":false,"step2_candidate_first_day":false,"step2_source":"candidate_meta","first_day_candidates":[],"need_switch":false,"confidence":0.0,"step1_evidence":[],"step2_evidence":[],"candidates":[{"theme":"","priority":1}],"verdict":""}'''
+{"source":"","source_state":"","step1_source_stalling":false,"step2_candidate_first_day":false,"step2_source":"candidate_meta","first_day_candidates":[],"source_action":"hold|avoid|exit","switch_required":false,"confidence":0.0,"step1_evidence":[],"step2_evidence":[],"candidates":[{"theme":"","priority":1}],"verdict":""}'''
 
 B='''你是 B agent：只从 A 的候选里选 target/leader，不判断源是否切换。
 规则：
