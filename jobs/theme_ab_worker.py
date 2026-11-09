@@ -42,6 +42,36 @@ def prompt(name):
     from app.services.agent_prompt_store import load_prompt
     return load_prompt(name)
 
+def _ask_c(A, B, holding, a_data, wave, day, slot):
+    _cdata=dict(a_data or {})
+    try:
+        from app.services.wolf_card.main_business import assess as _mb
+        _theme='人形机器人' if '机器人' in str(A.get('source') or '') else str(A.get('source') or '')
+        _sm=_cdata.get('stock_meta') or {}
+        _cands=[z.get('symbol') for z in (_cdata.get('source_roles') or {}).get('humanoid_robot',{}).get('role_detail',{}).values() if isinstance(z,dict)]
+        _top=sorted(_sm,key=lambda x:-(_sm[x].get('market_cap') or 0))[:10]
+        _cdata['main_business']={x:_mb(x,_theme) for x in dict.fromkeys([z for z in _cands if z]+_top)}
+    except Exception as _me:
+        _cdata['main_business']={'error':str(_me)[:120]}
+    C,_=call(prompt('c_manage')+f"\n\nA：{json.dumps(A,ensure_ascii=False)}\nB：{json.dumps(B or {},ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n数据：{json.dumps(_cdata,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_c_{day}_{slot}')
+    return C
+
+def _c_apply(C,A,base_target,base_leader):
+    act=str(C.get('action') or 'hold').lower()
+    A['c_action']=act; A['c_verdict']=C.get('verdict',''); A['c_leader']=C.get('leader','')
+    A['c_leader_segment']=C.get('leader_segment',''); A['c_evidence']=C.get('reasons') or C.get('evidence') or []
+    target=''; leader=''; mode='C'; status='ok'
+    if act in ('buy','add','exit'):
+        sym=C.get('leader') or ''
+        if act!='exit':
+            _ok,_why=validate_b({'target':C.get('theme') or base_target or '','roles':{'leader':sym},'leader_segment':C.get('leader_segment') or ''})
+            if not _ok:
+                A['c_validation']=_why; return '', '', 'C', 'rejected'
+        if sym:
+            target=C.get('theme') or base_target or ''; leader=sym
+            mode='C_exit' if act=='exit' else 'C'; status='proposed'
+    return target,leader,mode,status
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--once',action='store_true'); ap.add_argument('--limit',type=int,default=1)
     ap.add_argument('--date',default=''); ap.add_argument('--apply',action='store_true'); ap.add_argument('--trade',action='store_true'); a=ap.parse_args()
@@ -83,35 +113,18 @@ def main():
                     _ok,_why=validate_b(B)
                     if not _ok:
                         status='rejected'; A['b_validation']=_why
-                else:
-                    # A 不切 → C 管理当前题材持仓/源：hold/buy/add/exit
-                    try:
-                        _cdata=dict(a_data or {})
+                    else:
                         try:
-                            from app.services.wolf_card.main_business import assess as _mb
-                            _theme='人形机器人' if '机器人' in str(A.get('source') or '') else str(A.get('source') or '')
-                            _sm=_cdata.get('stock_meta') or {}
-                            _cands=[z.get('symbol') for z in (_cdata.get('source_roles') or {}).get('humanoid_robot',{}).get('role_detail',{}).values() if isinstance(z,dict)]
-                            _top=sorted(_sm,key=lambda x:-(_sm[x].get('market_cap') or 0))[:10]
-                            _cdata['main_business']={x:_mb(x,_theme) for x in dict.fromkeys([z for z in _cands if z]+_top)}
-                        except Exception as _me:
-                            _cdata['main_business']={'error':str(_me)[:120]}
-                        C,_craw=call(prompt('c_manage')+f"\n\nA：{json.dumps(A,ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n数据：{json.dumps(_cdata,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_c_{day}_{slot}')
+                            C=_ask_c(A,B,holding,a_data,wave,day,slot)
+                        except Exception as _ce:
+                            C={'action':'hold','verdict':'C call failed: '+str(_ce)[:120]}
+                        target,leader,mode,status=_c_apply(C,A,target,leader)
+                else:
+                    try:
+                        C=_ask_c(A,None,holding,a_data,wave,day,slot)
                     except Exception as _ce:
                         C={'action':'hold','verdict':'C call failed: '+str(_ce)[:120]}
-                    _act=str(C.get('action') or 'hold').lower()
-                    A['c_action']=_act; A['c_verdict']=C.get('verdict',''); A['c_leader']=C.get('leader',''); A['c_leader_segment']=C.get('leader_segment',''); A['c_evidence']=C.get('reasons') or C.get('evidence') or []
-                    if _act in ('buy','add','exit'):
-                        _sym=C.get('leader') or ''
-                        if _act!='exit':
-                            _ok,_why=validate_b({'target':C.get('theme') or A.get('source') or '','roles':{'leader':_sym},'leader_segment':C.get('leader_segment') or ''})
-                            if not _ok:
-                                status='rejected'; A['c_validation']=_why; _sym=''
-                        if _sym:
-                            target=C.get('theme') or A.get('source') or ''; leader=_sym
-                            mode='C_exit' if _act=='exit' else 'C'
-                            status='proposed'
-                            wind=C.get('wind') or []; mid=C.get('mid') or []
+                    target,leader,mode,status=_c_apply(C,A,'','')
                 with c.cursor() as cur:
                     cur.execute("""insert into theme_ab_signals(trade_date,slot,source,target,leader,wind,mid,mode,status,reason,a_raw,b_raw)
                     values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)

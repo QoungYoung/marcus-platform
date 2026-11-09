@@ -68,13 +68,14 @@ B='''你是 B agent：只从 A 的候选里选 target/leader，不判断源是�
 输出 JSON：
 {"target":"","mode":"spillover|independent|cash","validator":{},"roles":{"leader":"","wind":[],"mid":[]},"leader_segment":"core|support","picks":[],"verdict":"","leader_evidence":[]}'''
 
-C='''你是 C agent：A 已判定不切外溢。你只管理当前题材持仓/源题材，不判断是否切外溢。
+C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 target/leader。你只管理当前持仓/目标题材，不重新选题材。
 输入：A 结果、source、当前持仓（带 themes）、source facts、candidate_meta、浪型。
 
 狼大规则：
 - 源/持仓在核心段、梯队未断、风向标未死 → 持有；不要为了交易而交易。
 - 源高潮/炸板/风向标死/持仓破位 → exit；不要等反抽。
 - 无源内持仓且源强、核心龙头明确 → buy/add；只在低位/回踩，不追高。
+- 如果已有持仓的 themes 已包含 B.target/当前目标，视为 already_holding_target：默认 hold，不重复 first_day_probe；只有明确 add 条件才加仓。
 - 选龙头：板块内总市值前5 + 营收拐点/扭亏/增速加速 + 题材联动不可替换；再找老龙头/风向标辨识度；涨停/封单只确认，不排序。
 - source_roles.roles.leader 只是初选，不是最终答案；必须用 stock_meta 的市值/行业和 source_roles.role_detail 重新判断。wind 里的老龙头/核心本体可以升为 leader；如果 facts 的 leader 是配套段/非核心，必须换掉。
 - 即使 action=hold，也要给出你认定的核心龙头 leader、leader_segment、evidence，不得留空。
