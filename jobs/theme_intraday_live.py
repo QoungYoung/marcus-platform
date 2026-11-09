@@ -20,9 +20,13 @@ def main():
  import psycopg2
  c=psycopg2.connect(os.environ['DATABASE_URL'],connect_timeout=5);cur=c.cursor()
  ids=list(dict.fromkeys(SRC_IDS+ALLOWED_IDS))
- cur.execute("select theme_id,symbol from theme_membership where theme_id=any(%s) and as_of_date=(select max(as_of_date) from theme_membership where theme_id=any(%s))",(ids,ids))
+ cur.execute("select theme_id,symbol from theme_membership_core where theme_id=any(%s) and as_of_date=(select max(as_of_date) from theme_membership_core where theme_id=any(%s))",(ids,ids))
+ rows=cur.fetchall()
+ if not rows:
+  cur.execute("select theme_id,symbol from theme_membership where theme_id=any(%s) and as_of_date=(select max(as_of_date) from theme_membership where theme_id=any(%s))",(ids,ids))
+  rows=cur.fetchall()
  by={}
- for tid,sym in cur.fetchall(): by.setdefault(tid,set()).add(sym)
+ for tid,sym in rows: by.setdefault(tid,set()).add(sym)
  c.close()
  # latest facts for names/roles/source history
  facts={}; latest=None

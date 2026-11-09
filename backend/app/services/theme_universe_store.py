@@ -52,6 +52,18 @@ def ensure():
                 PRIMARY KEY (theme_id, as_of_date, symbol, source)
             )
             """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS theme_membership_core (
+                theme_id TEXT NOT NULL,
+                as_of_date DATE NOT NULL,
+                symbol TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                member_role TEXT NOT NULL DEFAULT 'core',
+                main_business_ratio DOUBLE PRECISION,
+                main_business_reason TEXT,
+                PRIMARY KEY (theme_id, as_of_date, symbol)
+            )
+            """)
 
 
 def save_themes(themes: List[Dict[str, Any]], satellite: bool = False, status: str = "active") -> int:
@@ -133,6 +145,40 @@ def load_members(theme_id: str, as_of: str) -> set:
         with c.cursor() as cur:
             cur.execute("SELECT symbol FROM theme_membership WHERE theme_id=%s AND as_of_date=%s", (theme_id, d))
             return {str(r[0]) for r in cur.fetchall()}
+
+
+def load_core_members(theme_id: str, as_of: str) -> set:
+    ensure()
+    d = "%s-%s-%s" % (as_of[:4], as_of[4:6], as_of[6:8]) if len(as_of) == 8 else as_of
+    with _conn() as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT symbol FROM theme_membership_core WHERE theme_id=%s AND as_of_date=%s", (theme_id, d))
+            return {str(r[0]) for r in cur.fetchall()}
+
+
+def save_core_members(theme_id: str, members, as_of: Optional[str] = None, source: str = "main_business") -> int:
+    ensure()
+    d = as_of or date.today().strftime("%Y-%m-%d")
+    d = "%s-%s-%s" % (d[:4], d[4:6], d[6:8]) if len(d) == 8 else d
+    n = 0
+    with _conn() as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM theme_membership_core WHERE theme_id=%s AND as_of_date=%s", (theme_id, d))
+            for m in members or []:
+                sym = m.get("symbol") if isinstance(m, dict) else m
+                if not sym:
+                    continue
+                cur.execute("""INSERT INTO theme_membership_core(theme_id,as_of_date,symbol,source,member_role,main_business_ratio,main_business_reason)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT (theme_id,as_of_date,symbol) DO UPDATE SET
+                               source=EXCLUDED.source,member_role=EXCLUDED.member_role,
+                               main_business_ratio=EXCLUDED.main_business_ratio,main_business_reason=EXCLUDED.main_business_reason""",
+                            (theme_id, d, str(sym), source,
+                             (m.get("role") if isinstance(m, dict) else "core") or "core",
+                             m.get("ratio") if isinstance(m, dict) else None,
+                             m.get("reason") if isinstance(m, dict) else None))
+                n += 1
+    return n
 
 
 def save_members(theme_id: str, symbols, as_of: Optional[str] = None, source: str = "resolver") -> int:

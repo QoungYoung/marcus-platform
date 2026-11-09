@@ -115,8 +115,8 @@ def members_for(t: Dict[str, Any], date8: str) -> Set[str]:
     tid = t.get("id")
     if tid:
         try:
-            from app.services.theme_universe_store import load_members
-            pg = load_members(str(tid), date8)
+            from app.services.theme_universe_store import load_members, load_core_members
+            pg = load_core_members(str(tid), date8) or load_members(str(tid), date8)
             if pg: return set(pg)
         except Exception:
             pass

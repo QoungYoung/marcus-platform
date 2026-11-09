@@ -77,7 +77,7 @@ def assess(code: str, theme: str) -> Dict[str, Any]:
     """返回 keep/reason/ratio/matched；ratio = 主营相关收入占比。"""
     d = load(code)
     items = d.get("items") or []
-    if not items:
+    if not items or all(str(x.get("item") or "") in ("主营业务", "合计", "其他业务") for x in items):
         return {"code": code, "keep": None, "reason": "main_business_unknown", "ratio": None, "matched": []}
     kws = KEYWORDS.get(theme) or []
     total = sum(x["sales"] for x in items)
