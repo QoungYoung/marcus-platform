@@ -86,11 +86,21 @@ def main():
                 else:
                     # A 不切 → C 管理当前题材持仓/源：hold/buy/add/exit
                     try:
-                        C,_craw=call(prompt('c_manage')+f"\n\nA：{json.dumps(A,ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n数据：{json.dumps(a_data,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_c_{day}_{slot}')
+                        _cdata=dict(a_data or {})
+                        try:
+                            from app.services.wolf_card.main_business import assess as _mb
+                            _theme='人形机器人' if '机器人' in str(A.get('source') or '') else str(A.get('source') or '')
+                            _sm=_cdata.get('stock_meta') or {}
+                            _cands=[z.get('symbol') for z in (_cdata.get('source_roles') or {}).get('humanoid_robot',{}).get('role_detail',{}).values() if isinstance(z,dict)]
+                            _top=sorted(_sm,key=lambda x:-(_sm[x].get('market_cap') or 0))[:10]
+                            _cdata['main_business']={x:_mb(x,_theme) for x in dict.fromkeys([z for z in _cands if z]+_top)}
+                        except Exception as _me:
+                            _cdata['main_business']={'error':str(_me)[:120]}
+                        C,_craw=call(prompt('c_manage')+f"\n\nA：{json.dumps(A,ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n数据：{json.dumps(_cdata,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_c_{day}_{slot}')
                     except Exception as _ce:
                         C={'action':'hold','verdict':'C call failed: '+str(_ce)[:120]}
                     _act=str(C.get('action') or 'hold').lower()
-                    A['c_action']=_act; A['c_verdict']=C.get('verdict','')
+                    A['c_action']=_act; A['c_verdict']=C.get('verdict',''); A['c_leader']=C.get('leader',''); A['c_leader_segment']=C.get('leader_segment',''); A['c_evidence']=C.get('reasons') or C.get('evidence') or []
                     if _act in ('buy','add','exit'):
                         _sym=C.get('leader') or ''
                         if _act!='exit':

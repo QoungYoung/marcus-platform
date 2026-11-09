@@ -18,6 +18,7 @@ REMOVE={
  '002380.SZ':'科远智慧/软件服务',
  '002139.SZ':'拓邦股份/元器件',
  '002031.SZ':'巨轮智能/汽车配件',
+ '003033.SZ':'征和工业/汽车配件链传动',
 }
 def main():
  ap=argparse.ArgumentParser();ap.add_argument('--apply',action='store_true');a=ap.parse_args()
