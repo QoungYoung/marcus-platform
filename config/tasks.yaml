@@ -708,12 +708,12 @@ tasks:
   retry:
     enabled: false
 - id: theme_sleeve_trade_morning
-  name: 题材 sleeve 模拟盘（9:50）
+  name: 题材 sleeve 模拟盘（10:15）
   description: 读前一日题材计划，calc_position(sleeve=theme)，模拟盘买入。
   enabled: true
   schedule:
     type: cron
-    expr: 50 9 * * mon-fri
+    expr: 15 10 * * mon-fri
     timezone: Asia/Shanghai
   script:
     path: jobs/theme_sleeve_trade.py
@@ -732,12 +732,12 @@ tasks:
   retry:
     enabled: false
 - id: theme_sleeve_trade_afternoon
-  name: 题材 sleeve 模拟盘（14:20）
+  name: 题材 sleeve 模拟盘（14:40）
   description: 读前一日题材计划，calc_position(sleeve=theme)，模拟盘买入。
   enabled: true
   schedule:
     type: cron
-    expr: 20 14 * * mon-fri
+    expr: 40 14 * * mon-fri
     timezone: Asia/Shanghai
   script:
     path: jobs/theme_sleeve_trade.py

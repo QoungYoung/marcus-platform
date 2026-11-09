@@ -57,6 +57,11 @@ def main():
     d = a.date or latest_selected()
     if not d:
         print("no theme_sleeve_selected.json"); return 0
+    # 默认只交易当天计划；历史回放必须显式 --date
+    if not a.date and d != datetime.now().strftime("%Y%m%d"):
+        print(json.dumps({"status": "skipped", "reason": "selected_date_not_today",
+                          "selected_date": d, "today": datetime.now().strftime("%Y%m%d")}, ensure_ascii=False))
+        return 0
     p = os.path.join(ROOT, "data", "mainline", d, "theme_sleeve_selected.json")
     try:
         from theme_sleeve_store import load as load_sleeve
