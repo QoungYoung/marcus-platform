@@ -42,8 +42,39 @@ def prompt(name):
     from app.services.agent_prompt_store import load_prompt
     return load_prompt(name)
 
+def _enrich_target(a_data, B, day):
+    """把 B.target 的核心成员/市值/主营查好，C 不自己查库。"""
+    try:
+        tgt=str((B or {}).get('target') or '')
+        alias={'商业航天':'space','卫星互联网':'satellite','卫星':'satellite','机器人':'robot_actuator','人形机器人':'humanoid_robot','AI应用':'ai_app','医药':'innovative_drug','医疗器械':'medical_device','贵金属':'resources'}
+        tid=alias.get(tgt,tgt)
+        import psycopg2
+        with psycopg2.connect(os.environ['DATABASE_URL'],connect_timeout=5) as c:
+            with c.cursor() as cur:
+                cur.execute("select symbol from theme_membership_core where theme_id=%s and as_of_date=(select max(as_of_date) from theme_membership_core) order by symbol",(tid,))
+                mem=[r[0] for r in cur.fetchall()]
+                if not mem:
+                    cur.execute("select symbol from theme_membership where theme_id=%s and as_of_date=(select max(as_of_date) from theme_membership) order by symbol",(tid,));mem=[r[0] for r in cur.fetchall()]
+                meta={}
+                if mem:
+                    cur.execute("select ts_code,name,industry,market_cap from stock_pool where ts_code=any(%s)",(mem,))
+                    for code,name,ind,mc in cur.fetchall(): meta[str(code)]={'name':name,'industry':ind,'market_cap':float(mc or 0)}
+                    cur.execute("select ts_code,total_mv from mkt_bars_daily where trade_date=(select max(trade_date) from mkt_bars_daily where trade_date<=%s) and ts_code=any(%s)",(day,mem))
+                    for code,mv in cur.fetchall(): meta.setdefault(str(code),{})['total_mv']=float(mv or 0)
+        top=sorted(mem,key=lambda x:-(meta.get(x,{}).get('market_cap') or 0))[:10]
+        mb={}
+        try:
+            from app.services.wolf_card.main_business import assess
+            for sym in top: mb[sym]=assess(sym,tgt or '人形机器人')
+        except Exception: pass
+        a_data['target_theme']=tgt; a_data['target_members']=mem
+        a_data['target_stock_meta']=meta; a_data['target_main_business']=mb
+    except Exception as e:
+        a_data['target_enrich_error']=str(e)[:120]
+    return a_data
+
 def _ask_c(A, B, holding, a_data, wave, day, slot):
-    _cdata=dict(a_data or {})
+    _cdata=_enrich_target(dict(a_data or {}), B, day)
     try:
         from app.services.wolf_card.main_business import assess as _mb
         _theme='人形机器人' if '机器人' in str(A.get('source') or '') else str(A.get('source') or '')
