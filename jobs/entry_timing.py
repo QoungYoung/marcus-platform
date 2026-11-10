@@ -14,7 +14,7 @@
   ③ 两者同时 ⇒ **触发**
   动作：买宽基 ETF（默认 510300 沪深300ETF；可用 --etf 覆盖）✓
   持有：**20 个交易日** ✓ 到期提示了结（5 日超额扣成本后≈0 ✗ 故取 20 日 ✓）
-  仓位：按浪型档位上限（读 data/wave_state.json 的 operation ⇒ defense 30% 等 ✓）
+  仓位：按浪型档位上限（读 PG wave_state 的 operation ⇒ defense 30% 等 ✓）
 
 ## 输出
   data/entry_timing.json —— 当前持仓信号 + 历史 ✓
@@ -133,10 +133,11 @@ def evaluate(h, t):
 
 
 def wave_cap():
-    """浪型档位 → 仓位上限%（读 wave_state.json ✓ 失败给 defense 30 ✓）"""
+    """浪型档位 → 仓位上限%（PG core.wave ✓ 读不到显式告警后按 defense 30 兜底 ✓）"""
     st = _wave()
     op = str((st or {}).get("operation") or "").strip()
     if not op:
+        print("[entry] wave_state 读不到（PG）：按 defense 30% 兜底", file=sys.stderr)
         return 30, "缺"
     return {"build": 75, "t_only": 50, "side": 40, "defense": 30, "exit": 0}.get(op, 30), op
 

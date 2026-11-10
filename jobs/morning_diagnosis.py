@@ -64,7 +64,7 @@ _WOLF_OP_GUIDE = {
 }
 
 def _read_wolf_context() -> str:
-    """狼大视角：主线/浪型/高低位/个股确认（读已落地状态文件，缺失自动跳过）"""
+    """狼大视角：主线/浪型/高低位/个股确认（主线/浪型走 PG，缺失自动跳过）"""
     import os as _os
     NL = chr(10)
     data_dir = _os.environ.get("DATA_DIR", "data")
@@ -171,11 +171,12 @@ def _wave_where(wv) -> str:
 
 
 def _wolf_operation_advice() -> str:
-    """浪型 operation -> 操作纪律（狼大优先）；缺 wave_state 返回空"""
-    import os as _os
+    """浪型 operation -> 操作纪律（狼大优先）；PG 读不到返回空"""
     try:
-        with open(_os.path.join(_os.environ.get("DATA_DIR", "data"), "wave_state.json"), encoding="utf-8") as f:
-            wv = json.load(f)
+        from core.wave import current as _wave_current
+        wv = _wave_current() or {}
+        if not wv:
+            return ""
         op = str(wv.get("operation") or "side")
         guide = _WOLF_OP_GUIDE.get(op, "")
         return "操作纪律（狼大优先）: **" + op + "** " + guide + " ｜ 浪型 " + _wave_where(wv)
