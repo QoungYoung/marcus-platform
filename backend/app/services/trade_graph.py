@@ -81,6 +81,8 @@ class TradeState(TypedDict):
     stance_context: str
     position_context: str
     b_rebound_context: str        # B反三条件（PG b_rebound_daily）
+    subchain_context: str         # 子链强弱（PG：材料/设备/封装/PCB）
+    chip_cost_context: str        # 筹码成本（PG：加权成本 + 上方筹码）
     position_levels_context: str
     cycle_context: str
     trade_mode_instruction: str
@@ -1302,6 +1304,67 @@ def _read_b_rebound_context() -> str:
         return ""
 
 
+def _p3_symbols() -> list:
+    """P3 盘后意图里的标的（themes[].selected / positions）；没有返回 []。"""
+    try:
+        import json as _j
+        base = Path(os.environ.get("DATA_DIR", "data")) / "mainline"
+        if not base.is_dir():
+            return []
+        for d in sorted(base.iterdir(), reverse=True):
+            p = d / "stock_agent_selected.json"
+            if not p.exists():
+                continue
+            obj = _j.loads(p.read_text(encoding="utf-8"))
+            out = []
+            for th in obj.get("themes") or []:
+                for key in ("selected", "positions"):
+                    for item in th.get(key) or []:
+                        sym = (item.get("symbol") or item.get("code")) if isinstance(item, dict) else item
+                        if sym:
+                            out.append(str(sym))
+            return out
+    except Exception:
+        pass
+    return []
+
+
+def _read_subchain_context() -> str:
+    """子链强弱（PG）：材料/设备/先进封装/PCB/PCB制造 的 5/20 日、超指数、breadth、量比。"""
+    try:
+        from app.services import mainline_structure as _ms
+        return _ms.subchain_context()
+    except Exception as _e_sil_sc:
+        print("[silent:trade_graph.py:_read_subchain_context] %s: %s"
+              % (type(_e_sil_sc).__name__, str(_e_sil_sc)[:110]), flush=True)
+        return ""
+
+
+def _read_chip_cost_context(portfolio_json: Optional[str] = None) -> str:
+    """筹码成本（PG）：持仓 + P3 意图的加权成本/距成本/上方筹码；空则用子链成交额 top3 兜底。
+
+    portfolio_json 由 fetch_context 传入，避免重复拉持仓（一次 HTTP 约 6s）。
+    """
+    try:
+        from app.services import mainline_structure as _ms
+        syms = []
+        try:
+            import json as _j
+            pf = _j.loads(portfolio_json or _read_portfolio() or "{}")
+            for p in (pf.get("positions") or []):
+                s = p.get("symbol") or p.get("code")
+                if s:
+                    syms.append(str(s))
+        except Exception:
+            pass
+        syms += _p3_symbols()
+        return _ms.chip_cost_context(syms)
+    except Exception as _e_sil_cc:
+        print("[silent:trade_graph.py:_read_chip_cost_context] %s: %s"
+              % (type(_e_sil_cc).__name__, str(_e_sil_cc)[:110]), flush=True)
+        return ""
+
+
 def _read_wave_context() -> str:
     """浪型级别上下文：PG（core.wave）两级判定(level/sub_level/operation/gate)；
     与 _wave_level_gate 同源；PG 读不到时回退 rule-based 结构判定。"""
@@ -1525,6 +1588,8 @@ def node_fetch_context(state: TradeState) -> dict:
         "stock_confirm_context": _read_stock_confirm_context(),
         "wave_context": _read_wave_context(),
         "b_rebound_context": _read_b_rebound_context(),
+        "subchain_context": _read_subchain_context(),
+        "chip_cost_context": _read_chip_cost_context(_pf),
         "three_tier_context": _read_three_tier_context(),
         "rotation_gate_context": _read_rotation_gate_context(),
         "rotation_switch_context": _read_rotation_switch_context(),
@@ -1638,6 +1703,8 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('discipline_context', chr(39)+chr(39))}"
         f"{state.get('wave_context', chr(39)+chr(39))}"
         f"{state.get('b_rebound_context', chr(39)+chr(39))}"
+        f"{state.get('subchain_context', chr(39)+chr(39))}"
+        f"{state.get('chip_cost_context', chr(39)+chr(39))}"
         f"{state.get('three_tier_context', chr(39)+chr(39))}"
         f"{state.get('main_line_context', chr(39)+chr(39))}"
         f"{state.get('position_context', chr(39)+chr(39))}"

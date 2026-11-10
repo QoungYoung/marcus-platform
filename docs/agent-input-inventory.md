@@ -17,7 +17,10 @@
 | 8 | position_levels_context | `_read_position_levels_context` | PG `position_levels` | 每只持仓 down/up | 点位 |
 | 9 | confirm_context | `_read_confirm_context` | `position_class_result.json` | LOW 确认链、拥挤过滤 | 位置+拥挤 |
 | 10 | stock_confirm_context | `_read_stock_confirm_context` | `stock_confirm_result.json` | 主线成分股确认比例 | 广度 |
-| 11 | wave_context | `_read_wave_context` | **`data/wave_state.json`（已删）** | 浪型 level/sub/operation/gate | **级别/牛熊** |
+| 11 | wave_context | `_read_wave_context` | PG `core.wave`（11-10 修） | 浪型 level/sub/operation/gate | **级别/牛熊** |
+| 11b | b_rebound_context | `_read_b_rebound_context` | PG `b_rebound_daily`（11-10 新增） | 双脚/缩转放/5日线/仓位建议 | 结构+仓位 |
+| 11c | subchain_context | `_read_subchain_context` | PG `mkt_bars_daily`+概念（11-10 新增） | 材料/设备/封装/PCB 的 5/20 日、超指数、breadth、量比 | 子链强弱 |
+| 11d | chip_cost_context | `_read_chip_cost_context` | PG `mkt_bars_daily`（11-10 新增） | 加权成本/距成本/上方筹码 | 筹码成本 |
 | 12 | three_tier_context | `_read_three_tier_context` | `_wave_level_gate()` + `p3_position_tiers.json` | 三仓档位可做/禁做 | 仓位档位 |
 | 13 | rotation_gate_context | `_read_rotation_gate_context` | `rotation_gate` + wave op | 能否切低/只做主线内轮动 | 轮动 |
 | 14 | rotation_switch_context | `_read_rotation_switch_context` | `data/rotation_switch_plan.json` | 切谁/买哪条链 | 轮动 |
@@ -33,11 +36,14 @@
 
 ## 二、四个结构性发现
 
-### 1. 最像他的那个对象，根本没喂进去
+### 1. 最像他的那个对象，根本没喂进去（**2026-11-10 已修**）
 
 `b_rebound_daily`（PG）里有：`bottom_state / cond_feet / cond_volume / cond_ma5 / cond_count / intraday_turn / volume_phase / verdict / position_pct / position_reason / position_delta / episode_days`——正好是 11-04 那笔的三个条件 + 仓位建议。
 
-**`grep -rn 'b_rebound' backend/app/services` = 0 命中。** 它只被 `api/wave.py` 读出来给前端看，交易 agent 从来没见过。
+**修复前 `grep -rn 'b_rebound' backend/app/services` = 0 命中**，它只被 `api/wave.py` 读给前端。
+现在由 `_read_b_rebound_context()` 注入，同时在同一次改动里补了
+`subchain_context`（材料/设备/封装/PCB 的 5/20 日、超指数、breadth、量比）和
+`chip_cost_context`（近 60 日成交额加权成本、距成本、上方筹码；持仓+P3 为空时用子链成交额 top3 兜底）。
 
 ### 2. 三套市场状态互相打架
 
