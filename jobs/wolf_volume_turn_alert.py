@@ -153,6 +153,48 @@ def day_amount_ratio(hm: str):
         return None, (round(amt_wan / max(0.05, time_share(hm)) / 1e4) if amt_wan else None), None, None
 
 
+def _persist(hm, info, dy, est_yi, prev_yi, shrink, turn, price_ok) -> None:
+    """每次判定落一行 PG（volume_turn_intraday）；失败只告警，不影响推送。
+
+    为什么要落库：11-04 的缩转放根本没有被记录下来（监控 11-06 才上线），
+    B反三条件只能自己用日线重算 → 两套口径互相打架。落库后 B反/交易 agent 都读这一份。
+    """
+    try:
+        import psycopg2
+        from core import dsn as _dsn_src
+        d = _dsn_src.main()
+        if not d:
+            return
+        with psycopg2.connect(d, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""create table if not exists volume_turn_intraday(
+                    session_date varchar(8) not null,
+                    as_of_time varchar(4) not null,
+                    bucket_ratio numeric,
+                    last15_pct numeric,
+                    dy_ratio numeric,
+                    est_yi numeric,
+                    prev_yi numeric,
+                    shrink bool,
+                    turn bool,
+                    price_ok bool,
+                    updated_at timestamptz default now(),
+                    primary key (session_date, as_of_time))""")
+                cur.execute("""insert into volume_turn_intraday(
+                    session_date, as_of_time, bucket_ratio, last15_pct, dy_ratio, est_yi, prev_yi,
+                    shrink, turn, price_ok) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    on conflict (session_date, as_of_time) do update set
+                    bucket_ratio=excluded.bucket_ratio, last15_pct=excluded.last15_pct,
+                    dy_ratio=excluded.dy_ratio, est_yi=excluded.est_yi, prev_yi=excluded.prev_yi,
+                    shrink=excluded.shrink, turn=excluded.turn, price_ok=excluded.price_ok,
+                    updated_at=now()""",
+                    (datetime.now().strftime("%Y%m%d"), hm,
+                     info.get("bucket_ratio"), info.get("last15_pct"), dy, est_yi, prev_yi,
+                     bool(shrink), bool(turn), bool(price_ok)))
+    except Exception as e:
+        print("[warn] 缩转放落库失败: %s" % str(e)[:90], file=sys.stderr)
+
+
 def push(text: str) -> bool:
     try:
         from core.qq_notifier import send_c2c_message
@@ -203,6 +245,8 @@ def main() -> int:
           f"（前桶比 {info.get('last_vs_prev')}×）｜近15分 {info['last15_pct']:+.2f}%"
           f"｜今日折算 {dy}× 昨日（{est_yi}亿 vs {prev_yi}亿；20日均 {dr}×）⇒ 整体{'缩量' if shrink else '不缩'} "
           f"｜分时{'放量' if turn else '未放'} ｜价{'配合' if price_ok else '未配合'}")
+
+    _persist(hm, info, dy, est_yi, prev_yi, shrink, turn, price_ok)
 
     if not (shrink and turn and price_ok) and not a.force:
         return 0

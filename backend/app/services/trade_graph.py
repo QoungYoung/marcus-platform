@@ -1268,6 +1268,7 @@ def _read_b_rebound_context() -> str:
         _dsn = (_dsn_src.main() or "").strip()
         if not _dsn:
             return ""
+        mt = None
         with psycopg2.connect(_dsn, connect_timeout=5) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1276,6 +1277,13 @@ def _read_b_rebound_context() -> str:
                     "position_used,position_delta,episode_days from b_rebound_daily "
                     "order by session_date desc limit 1")
                 r = cur.fetchone()
+                try:
+                    cur.execute("select session_date,as_of_time,bucket_ratio,last15_pct,"
+                                "shrink,turn,price_ok from volume_turn_intraday "
+                                "order by session_date desc, as_of_time desc limit 1")
+                    mt = cur.fetchone()
+                except Exception:
+                    conn.rollback()   # 表还没建：不影响 b_rebound 主块
         if not r:
             return ""
         (sd, bs, feet, vol, ma5, cnt, turn, phase, verdict,
@@ -1297,6 +1305,10 @@ def _read_b_rebound_context() -> str:
             block += NL
         if preason:
             block += f"- 理由：{str(preason)[:200]}" + NL
+        if mt:
+            block += (f"- 盘中缩转放（监控 {mt[0]} {mt[1]}）：turn={'✅' if mt[5] else '❌'} ｜ "
+                      f"price_ok={'✅' if mt[6] else '❌'} ｜ shrink={'✅' if mt[4] else '❌'} ｜ "
+                      f"桶比 {float(mt[2] or 0):.2f}×（近15分 {float(mt[3] or 0):+.2f}%）" + NL)
         return block + NL
     except Exception as _e_sil_br:
         print("[silent:trade_graph.py:_read_b_rebound_context] %s: %s"

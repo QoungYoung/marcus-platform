@@ -662,6 +662,31 @@ def bottom_for(code: str, day: str) -> dict:
 
 
 # ────────────────────────── 读数 ──────────────────────────
+def _monitor_turn(day: str):
+    """读缩转放监控最新一行（PG volume_turn_intraday）；没有返回 None。
+
+    11-04 的缩转放当时只有这条链路能抓到（分时相对放量 2.82×），但监控 11-06 才上线、
+    且 14:50 脚本原来用日线口径自己重算 → 两套口径打架。现在优先用监控这一份。
+    """
+    try:
+        import psycopg2
+        _d = _dsn_src.main()
+        if not _d:
+            return None
+        with psycopg2.connect(_d, connect_timeout=5) as _c:
+            with _c.cursor() as _cur:
+                _cur.execute("select as_of_time,bucket_ratio,last15_pct,shrink,turn,price_ok "
+                             "from volume_turn_intraday where session_date=%s "
+                             "order by as_of_time desc limit 1", (str(day)[:8],))
+                r = _cur.fetchone()
+        if not r:
+            return None
+        return dict(as_of_time=r[0], bucket_ratio=float(r[1] or 0), last15_pct=float(r[2] or 0),
+                    shrink=bool(r[3]), turn=bool(r[4]), price_ok=bool(r[5]))
+    except Exception:
+        return None
+
+
 def read(day: str, cut: str = CUT) -> dict:
     etf_d = adjust_splits(fetch_daily(ETF, day))
     idx_d = fetch_daily(IDX, day)
@@ -790,7 +815,15 @@ def read(day: str, cut: str = CUT) -> dict:
         _cm5 = bool(_bs.get("above_ma5"))
         _cfeet = "双脚成立" in str(_bs.get("state") or "")
         _it = (vol_trend(IDX) or {}).get("intraday_turn") or {}
-        _cvol = bool(_it.get("occurred")) or ((volume_turn or {}).get("phase") == "缩转放")
+        _mt = _monitor_turn(day)
+        if _mt is not None:
+            # 监控口径（分时相对缩转放）：turn + 价配合；shrink 只作上下文标签，不作硬门
+            _cvol = bool(_mt["turn"] and _mt["price_ok"])
+            _vol_phase = "监控 %s turn=%.2f× shrink=%s price_ok=%s" % (
+                _mt["as_of_time"], _mt["bucket_ratio"], _mt["shrink"], _mt["price_ok"])
+        else:
+            _cvol = bool(_it.get("occurred")) or ((volume_turn or {}).get("phase") == "缩转放")
+            _vol_phase = (volume_turn or {}).get("phase")
         _cnt = sum([_cfeet, _cvol, _cm5])
         _broken = bool(_bs.get("l_left") and float(idx_d.close.iloc[-1]) < float(_bs.get("l_left")))
         _feet = ("双脚已现" in str(_bs.get("state") or "")) or ("双脚成立" in str(_bs.get("state") or ""))
@@ -841,7 +874,7 @@ def read(day: str, cut: str = CUT) -> dict:
                     "position_reason=excluded.position_reason, created_at=now()",
                     (day, _bs.get("state"), _cfeet, _cvol, _cm5, _cnt,
                      f"{_it.get('from_time')}→{_it.get('to_time')} {_it.get('ratio')}×" if _it.get("occurred") else "",
-                     (volume_turn or {}).get("phase"), _bs.get("ma5"),
+                     _vol_phase, _bs.get("ma5"),
                      None, False,
                      _verdict,
                      _today_pct, _lad["reason"], _used, _delta, _episode, _used_src))
