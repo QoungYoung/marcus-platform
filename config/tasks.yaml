@@ -100,6 +100,29 @@ tasks:
     channels:
     - qqbot
   depends_on: []
+- id: decision_card_eval
+  name: 决策卡评分（错过/错做/做小）
+  description: 15:25 对当日 trade_decision_card 评分：结构成立但 action=none/trim/exit = missed（记反事实收益）；
+    probe/push 后次日 <=-1.5% = false_positive；size 低于结构允许上限 = under_sized。落 PG trade_decision_card_eval，
+    用于让 agent 学到"什么时候该不动、什么时候该动"。
+  enabled: true
+  schedule:
+    type: cron
+    expr: 25 15 * * mon-fri
+    timezone: Asia/Shanghai
+  script:
+    path: jobs/eval_decision_cards.py
+    args: []
+  output:
+    log_file: logs/decision_card_eval_{date}.log
+    append: true
+  notifications:
+    on_success: false
+    on_failure: true
+    pi_analysis: false
+    channels:
+    - qqbot
+  depends_on: []
 - id: wolf_eod_review_chain
   name: 次日盘前复盘链（B4+A3+C2+B1）
   description: 次日 08:05：B4 涨停梯队/连板 + A3 期指多空 + C2 跌得少弹得早 + B1 复盘打分。对象日=上一交易日；B4 的

@@ -42,6 +42,10 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setattr(DD, "_load_pg", lambda d8: None)
     monkeypatch.setattr(DD, "_save_pg", lambda obj: {"ok": False, "reason": "test_stub"})
     monkeypatch.setattr(DD, "_latest_pg_at_or_before", lambda d8: None)
+    # ★ 2026-11-10：_load_wave 已改为 PG 优先（wave_store）⇒ 本文件测的是**文件回退逻辑**，
+    #   必须把 PG 打空才能走到 tmp 目录里的 wave_state.json。
+    from app.services import wave_store as _WS
+    monkeypatch.setattr(_WS, "get_wave", lambda: None, raising=False)
     monkeypatch.setattr(WD, "tier_target_pct", lambda op: 50.0, raising=False)
     monkeypatch.setattr(WD, "tier_floor_pct", lambda op: 30.0, raising=False)
     # 交易日历打桩（离线确定性）：上一交易日 = 往回第一个工作日

@@ -87,9 +87,15 @@ def test_ensure_wave_fills_from_ladder(monkeypatch):
     assert w and w["level"] == "down" and w["operation"] == "defense", w
 
 
-def test_sell_kinds_never_blocked_when_down():
+def test_sell_kinds_never_blocked_when_down(monkeypatch):
     # ★ 2026-10-20：卖类**永不拦** —— 且必须是**前缀**口径（全仓还用 high_sell_strong ✗ 原来漏了）
     import app.services.wave_gate as WG
+    # ★ 2026-11-10：买类拦截现在由「指数大级别破位」(wolf_context.index_level_stop) 决定，
+    #   不再看 wave.operation 字符串 ⇒ 本用例要测的是"破位时买类被拦"，把破位打桩为 True。
+    import sys as _sys, types as _types
+    _fake = _types.ModuleType("wolf_context")
+    _fake.index_level_stop = lambda **kw: (True, "test_stub")
+    monkeypatch.setitem(_sys.modules, "wolf_context", _fake)
     w = {"date": "20261019", "level": "down", "sub_level": "下跌1浪", "operation": "defense"}
     for k in ("high_sell", "high_sell_then_buy_back", "high_sell_strong", "high_sell_anything"):
         g = WG.check_gate(kind=k, wave=w)
