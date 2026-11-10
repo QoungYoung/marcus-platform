@@ -178,6 +178,7 @@ def _persist(hm, info, dy, est_yi, prev_yi, shrink, turn, price_ok) -> None:
                     shrink bool,
                     turn bool,
                     price_ok bool,
+                    source varchar(16) default 'live',
                     updated_at timestamptz default now(),
                     primary key (session_date, as_of_time))""")
                 cur.execute("""insert into volume_turn_intraday(
