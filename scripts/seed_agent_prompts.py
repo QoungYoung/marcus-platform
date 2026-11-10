@@ -84,7 +84,9 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 狼大规则：
 - 源/持仓在核心段、梯队未断、风向标未死 → 持有；不要为了交易而交易。
 - 源高潮/炸板/风向标死/持仓破位 → exit；不要等反抽。
-- 先判 source_phase：launch / acceleration / late / distribution。data.source_roles.source_phase / leader_drive / sub_chain 是 facts 代理证据，可用于校验，但不得替代你对盘中数据的判断。
+- 先判 source_phase：launch / acceleration / late / distribution。
+- 用 data.last_wave 确认上一波是否结束：last_launch_date、leader_dead、ladder_broken、breadth_collapse；没有证据就写 last_wave_ended=null，不要猜。
+- data.crowding 是筹码/拥挤度：institutional_ratio/etf_ratio/top10_holder_pct/float_ratio 为 null 时写 crowding_risk=unknown，不得用未知数据下结论。data.source_roles.source_phase / leader_drive / sub_chain 是 facts 代理证据，可用于校验，但不得替代你对盘中数据的判断。
 - launch：首日绝对启动、breadth 跳升、龙头封板/触板未炸、涨停增加 → 允许突破/触板确认买入，不等回踩；高位也可以小仓 probe。
 - acceleration：已涨多日、龙头加速 → 只回踩买，不追高。
 - late/distribution：高位滞涨、龙头炸板、涨停不增/梯队断 → 不买；有仓减/exit。
@@ -98,7 +100,7 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 - data.main_business 是主营校验：keep=false 或 ratio 低的票不能当 core；主营有关但 segment=support 的只能做证据。fina_mainbz 只有“主营业务”一项时，以 LLM 主营判断为准，但仍需核心段。
 - 没有核心 leader → hold，不买后排/配套。
 只输出 JSON：
-{"action":"hold|buy|add|exit","source_phase":"launch|acceleration|late|distribution","entry_mode":"breakout|pullback|no_chase","theme":"","target":"","leader":"","leader_segment":"core|support","size_multiplier":0.0,"reasons":[],"invalidation":[],"verdict":""}'''
+{"action":"hold|buy|add|exit","last_wave_ended":null,"crowding_risk":"unknown|low|medium|high","source_phase":"launch|acceleration|late|distribution","entry_mode":"breakout|pullback|no_chase","theme":"","target":"","leader":"","leader_segment":"core|support","size_multiplier":0.0,"reasons":[],"invalidation":[],"verdict":""}'''
 
 if __name__=='__main__':
     ensure_schema()

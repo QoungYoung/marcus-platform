@@ -59,8 +59,9 @@ def _enrich_target(a_data, B, day):
                 if mem:
                     cur.execute("select ts_code,name,industry,market_cap from stock_pool where ts_code=any(%s)",(mem,))
                     for code,name,ind,mc in cur.fetchall(): meta[str(code)]={'name':name,'industry':ind,'market_cap':float(mc or 0)}
-                    cur.execute("select ts_code,total_mv from mkt_bars_daily where trade_date=(select max(trade_date) from mkt_bars_daily where trade_date<=%s) and ts_code=any(%s)",(day,mem))
-                    for code,mv in cur.fetchall(): meta.setdefault(str(code),{})['total_mv']=float(mv or 0)
+                    cur.execute("select ts_code,total_mv,turnover_rate,amount from mkt_bars_daily where trade_date=(select max(trade_date) from mkt_bars_daily where trade_date<=%s) and ts_code=any(%s)",(day,mem))
+                    for code,mv,tr,amt in cur.fetchall():
+                        meta.setdefault(str(code),{}).update({'total_mv':float(mv or 0),'turnover_rate':float(tr or 0),'amount':float(amt or 0)})
         top=sorted(mem,key=lambda x:-(meta.get(x,{}).get('market_cap') or 0))[:10]
         mb={}
         try:
@@ -69,6 +70,13 @@ def _enrich_target(a_data, B, day):
         except Exception: pass
         a_data['target_theme']=tgt; a_data['target_members']=mem
         a_data['target_stock_meta']=meta; a_data['target_main_business']=mb
+        a_data['crowding']={s:{'market_cap':(meta.get(s) or {}).get('market_cap'),
+                               'total_mv':(meta.get(s) or {}).get('total_mv'),
+                               'turnover_rate':(meta.get(s) or {}).get('turnover_rate'),
+                               'amount':(meta.get(s) or {}).get('amount'),
+                               'institutional_ratio':None,'etf_ratio':None,
+                               'top10_holder_pct':None,'float_ratio':None,
+                               'status':'unknown'} for s in top}
     except Exception as e:
         a_data['target_enrich_error']=str(e)[:120]
     return a_data
@@ -84,6 +92,8 @@ def _ask_c(A, B, holding, a_data, wave, day, slot):
         _cdata['main_business']={x:_mb(x,_theme) for x in dict.fromkeys([z for z in _cands if z]+_top)}
     except Exception as _me:
         _cdata['main_business']={'error':str(_me)[:120]}
+    _sr=_cdata.get('source_roles') or {}
+    _cdata['last_wave']={k:{'source_phase':v.get('source_phase'),'last_launch_date':v.get('last_launch_date'),'leader_drive':v.get('leader_drive'),'sub_chain':v.get('sub_chain')} for k,v in _sr.items()}
     C,_=call(prompt('c_manage')+f"\n\nA：{json.dumps(A,ensure_ascii=False)}\nB：{json.dumps(B or {},ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n数据：{json.dumps(_cdata,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_c_{day}_{slot}')
     return C
 
