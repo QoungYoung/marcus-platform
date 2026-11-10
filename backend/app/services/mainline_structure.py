@@ -237,7 +237,9 @@ def chip_cost_context(symbols: List[str], cap: int = 8) -> str:
         c = norm_symbol(s)
         if c and c not in codes:
             codes.append(c)
-    if not codes:
+    # 子链代表：即使有持仓/意图，也补上 3 条子链的成交额 top1 作为「反弹目标」观察样本
+    # （他要看的是"套牢的钱在哪个方向"，不只是自己持仓）
+    if len(codes) < 5:
         for concepts in (["半导体材料"], ["半导体设备"], ["PCB"]):
             for c in top_amount_symbols(concepts, 1):
                 if c not in codes:
