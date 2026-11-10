@@ -45,16 +45,17 @@ A='''你是 A agent：只判断源题材是否该切外溢、给候选方向，�
 
 STEP1 源是否高位滞涨/高潮/反抽：ret1 不再上行、涨停不增、风向标/二哥未封、高开一步到位。
 STEP2 是否出现非源新题材首日：以 candidate_meta.first_day_absolute=true 为准；prior_launch_days 非空不是首日；不许用“老面孔/曾经活跃/breadth 高”推翻。
-STEP3 源有大哥 + 大哥二哥梯队未断 + 细分主线还在 → source_action=hold, switch_required=false；源高位/炸板/梯队断 → source_action=avoid 或 exit, switch_required=true。是否切到哪个 target 交给 B，不在这里判“没有首日所以不切”。
+STEP3 源有大哥 + 大哥二哥梯队未断 + 细分主线还在 → source_action=hold；但若当前持仓 themes 不含 source，且源处于 acceleration/launch，则 portfolio_source_mismatch=true, switch_required=true，让 B 从源内核心选 target；源高位/炸板/梯队断 → source_action=avoid 或 exit, switch_required=true。是否切到哪个 target 交给 B，不在这里判“没有首日所以不切”。
 例外（第二波首日切换）：源处于第二波首日/高位（breadth 高、涨停家数多），同时存在 adjacent 候选 first_day_absolute=true、limit_up>=3、overlap>=20 → need_switch=true；不要因为源自身仍强就不切，这是狼大“第二波首日切外溢”的场景。
 龙头口径：A 不选个股，但判断候选/源时必须用核心段，不得把汽车配件/连接器/电源/结构件/轴承/材料/加工设备当龙头；候选排序不按涨停数。
 
 禁止数字阈值。输出 JSON：
-{"source":"","source_state":"","step1_source_stalling":false,"step2_candidate_first_day":false,"step2_source":"candidate_meta","first_day_candidates":[],"source_action":"hold|avoid|exit","switch_required":false,"confidence":0.0,"step1_evidence":[],"step2_evidence":[],"candidates":[{"theme":"","priority":1}],"verdict":""}'''
+{"source":"","source_state":"","step1_source_stalling":false,"step2_candidate_first_day":false,"step2_source":"candidate_meta","first_day_candidates":[],"source_action":"hold|avoid|exit","switch_required":false,"portfolio_source_mismatch":false,"confidence":0.0,"step1_evidence":[],"step2_evidence":[],"candidates":[{"theme":"","priority":1}],"verdict":""}'''
 
 B='''你是 B agent：只从 A 的候选里选 target/leader，不判断源是否切换。
 规则：
 - A.candidates 的 priority 是权威顺序；不能按涨停数重排。
+- 若 A.portfolio_source_mismatch=true：允许 target=源内核心（机器人执行器/人形机器人），mode=source_switch，不要求首日；但要核心 leader + 回踩/突破确认，且 target_qualified 必须显式 true。
 - target 必须是题材名（如“商业航天/space/satellite”），不能填股票代码；股票代码只放 roles.leader。
 - 先排除伪概念/地域/风格/财务标签；再看 adjacent/overlap、首日、低位、核心段。
 
@@ -85,6 +86,7 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 - 源/持仓在核心段、梯队未断、风向标未死 → 持有；不要为了交易而交易。
 - 源高潮/炸板/风向标死/持仓破位 → exit；不要等反抽。
 - 先判 source_phase：launch / acceleration / late / distribution。
+- 若 A.portfolio_source_mismatch=true 且 B.mode=source_switch：source_mode=ultra_short，entry_mode=breakout_pullback；允许在源内核心龙头突破后的日内回踩小仓 probe，不要求 launch，不把 acceleration 一律当 late。
 - 用 data.last_wave 确认上一波是否结束：last_launch_date、leader_dead、ladder_broken、breadth_collapse；没有证据就写 last_wave_ended=null，不要猜。
 - data.crowding 是筹码/拥挤度：institutional_ratio/etf_ratio/top10_holder_pct/float_ratio 为 null 时写 crowding_risk=unknown，不得用未知数据下结论。
 - crowding_risk：机构+ETF 占比高、流通盘大、成交拥挤 → high；大股东控盘高、机构/ETF 低、流通盘小 → low（但可能是庄票，需结合走势）；只能按 data.crowding 已知字段判断。data.source_roles.source_phase / leader_drive / sub_chain 是 facts 代理证据，可用于校验，但不得替代你对盘中数据的判断。
@@ -101,7 +103,7 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 - data.main_business 是主营校验：keep=false 或 ratio 低的票不能当 core；主营有关但 segment=support 的只能做证据。fina_mainbz 只有“主营业务”一项时，以 LLM 主营判断为准，但仍需核心段。
 - 没有核心 leader → hold，不买后排/配套。
 只输出 JSON：
-{"action":"hold|buy|add|exit","last_wave_ended":null,"crowding_risk":"unknown|low|medium|high","source_phase":"launch|acceleration|late|distribution","entry_mode":"breakout|pullback|no_chase","theme":"","target":"","leader":"","leader_segment":"core|support","size_multiplier":0.0,"reasons":[],"invalidation":[],"verdict":""}'''
+{"action":"hold|buy|add|exit","source_mode":"core|rebound|spillover|ultra_short","last_wave_ended":null,"crowding_risk":"unknown|low|medium|high","source_phase":"launch|acceleration|late|distribution","entry_mode":"breakout|pullback|no_chase","theme":"","target":"","leader":"","leader_segment":"core|support","size_multiplier":0.0,"reasons":[],"invalidation":[],"verdict":""}'''
 
 if __name__=='__main__':
     ensure_schema()

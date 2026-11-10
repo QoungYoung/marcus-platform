@@ -156,6 +156,15 @@ def main():
  src_roles={}; stock_meta={}
  try:
   src_syms=set().union(*[by.get(x,set()) for x in SRC_IDS]) if any(by.get(x) for x in SRC_IDS) else set()
+  # 角色 hint 里的 leader/wind/mid 即使不在核心成员池，也要给 C 元数据
+  for _tid in SRC_IDS:
+   _t=tmeta.get(_tid) or {}; _rd=_t.get('role_detail') or {}
+   for _k in ('leader','wind','mid'):
+    _v=_rd.get(_k)
+    if isinstance(_v,dict) and _v.get('symbol'): src_syms.add(_v['symbol'])
+    elif isinstance(_v,list):
+     for _x in _v:
+      if isinstance(_x,dict) and _x.get('symbol'): src_syms.add(_x['symbol'])
   if src_syms:
    with psycopg2.connect(os.environ['DATABASE_URL'],connect_timeout=3) as _c:
     with _c.cursor() as _cur:

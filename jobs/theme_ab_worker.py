@@ -106,7 +106,7 @@ def _ask_c(A, B, holding, a_data, wave, day, slot):
 def _c_apply(C,A,base_target,base_leader):
     act=str(C.get('action') or 'hold').lower()
     A['c_action']=act; A['c_verdict']=C.get('verdict',''); A['c_leader']=C.get('leader','')
-    A['c_leader_segment']=C.get('leader_segment',''); A['c_source_phase']=C.get('source_phase',''); A['c_entry_mode']=C.get('entry_mode',''); A['c_evidence']=C.get('reasons') or C.get('evidence') or []
+    A['c_leader_segment']=C.get('leader_segment',''); A['c_source_phase']=C.get('source_phase',''); A['c_source_mode']=C.get('source_mode',''); A['c_entry_mode']=C.get('entry_mode',''); A['c_evidence']=C.get('reasons') or C.get('evidence') or []
     target=''; leader=''; mode='C'; status='ok'
     if act in ('buy','add','exit'):
         sym=C.get('leader') or ''
@@ -154,6 +154,11 @@ def main():
                     bpath=os.path.join(ROOT,'data/asof',f'{day}_b_candidates.json')
                     b_data=json.load(open(bpath,encoding='utf-8')) if os.path.exists(bpath) else _cload(day,'b_candidates')
                     B={}
+                    if A.get('portfolio_source_mismatch'):
+                        _srcmap={'机器人链':[('robot_actuator','机器人执行器'),('humanoid_robot','人形机器人')]}
+                        _have={x.get('theme') for x in (A.get('candidates') or []) if isinstance(x,dict)}
+                        _add=[{'theme':k,'name':n,'priority':0,'role':'source'} for k,n in _srcmap.get(A.get('source'),[]) if k not in _have]
+                        if _add: A['candidates']=_add+list(A.get('candidates') or [])
                     if b_data:
                         B,braw=call(prompt('b_target')+f"\n\n候选：{json.dumps(b_data.get('candidates') or [],ensure_ascii=False)}\nA候选池：{json.dumps(A.get('candidates') or [],ensure_ascii=False)}\n当前持仓：{json.dumps(holding,ensure_ascii=False)}\n浪型：{json.dumps(wave,ensure_ascii=False)}\n只输出 JSON。",f'ab_b_{day}_{slot}')
                     target=B.get('target') or ''; leader=(B.get('roles') or {}).get('leader') or ''
