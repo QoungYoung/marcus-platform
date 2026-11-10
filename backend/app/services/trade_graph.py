@@ -80,6 +80,7 @@ class TradeState(TypedDict):
     pool_context: str
     stance_context: str
     position_context: str
+    b_rebound_context: str        # B反三条件（PG b_rebound_daily）
     position_levels_context: str
     cycle_context: str
     trade_mode_instruction: str
@@ -1253,15 +1254,62 @@ _OP_GUIDE = {
     "exit": "兑现降仓：反弹即减、控制回撤，不再开新仓",
 }
 
-def _read_wave_context() -> str:
-    """浪型级别上下文：优先注入 wave_agent 两级判定(level/sub_level/operation/gate)，
-    与 _wave_level_gate 硬拦同源(读 wave_state.json)；文件缺失时回退 rule-based 结构判定。"""
+def _read_b_rebound_context() -> str:
+    """B反三条件（PG b_rebound_daily）：双脚/缩转放/站上5日线 + 仓位建议。
+
+    与 backend/app/api/wave.py::_b_rebound_daily 同源；只读 PG，失败返回空（fail-open）。
+    11-04 他推仓位看的就是这三条 —— 之前这张表从没进过交易 agent。
+    """
     NL = chr(10)
     try:
-        import json as _json, os as _os
-        path = _os.path.join(_os.environ.get("DATA_DIR", "data"), "wave_state.json")
-        if _os.path.exists(path):
-            st = _json.load(open(path, encoding="utf-8"))
+        import psycopg2
+        _dsn = (_dsn_src.main() or "").strip()
+        if not _dsn:
+            return ""
+        with psycopg2.connect(_dsn, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select session_date,bottom_state,cond_feet,cond_volume,cond_ma5,cond_count,"
+                    "intraday_turn,volume_phase,verdict,position_pct,position_reason,"
+                    "position_used,position_delta,episode_days from b_rebound_daily "
+                    "order by session_date desc limit 1")
+                r = cur.fetchone()
+        if not r:
+            return ""
+        (sd, bs, feet, vol, ma5, cnt, turn, phase, verdict,
+         ppct, preason, pused, pdelta, edays) = r
+        _m = lambda b: "✅" if b else "❌"
+        block = ("## B反三条件（b_rebound_daily）" + NL
+                 + f"- 会话日：{sd} ｜ 底部结构：{bs or '未知'} ｜ 判定：{verdict or '—'}" + NL
+                 + f"- 条件：双脚 {_m(feet)} ｜ 缩转放 {_m(vol)} ｜ 站上5日线 {_m(ma5)} ｜ 成立 {int(cnt or 0)}/3" + NL)
+        if turn or phase:
+            block += f"- 盘中：turn={turn or '—'} ｜ volume_phase={phase or '—'}" + NL
+        if ppct is not None:
+            block += f"- 仓位建议：{float(ppct):.0f}%"
+            if pdelta is not None:
+                block += f"（本次变化 {float(pdelta):+.0f}%）"
+            if pused is not None:
+                block += f" ｜ 已用 {float(pused):.0f}%"
+            if edays is not None:
+                block += f" ｜ 本轮第 {int(edays)} 天"
+            block += NL
+        if preason:
+            block += f"- 理由：{str(preason)[:200]}" + NL
+        return block + NL
+    except Exception as _e_sil_br:
+        print("[silent:trade_graph.py:_read_b_rebound_context] %s: %s"
+              % (type(_e_sil_br).__name__, str(_e_sil_br)[:110]), flush=True)
+        return ""
+
+
+def _read_wave_context() -> str:
+    """浪型级别上下文：PG（core.wave）两级判定(level/sub_level/operation/gate)；
+    与 _wave_level_gate 同源；PG 读不到时回退 rule-based 结构判定。"""
+    NL = chr(10)
+    try:
+        from core.wave import current as _wave_current
+        st = _wave_current() or {}
+        if st:
             wl = _wave_level_gate()   # {level, sub_level, operation, gate} 与安全门同源
             lvl = wl["level"] or "未知"
             sub = wl["sub_level"] or ""
@@ -1385,15 +1433,16 @@ def _wave_operation(level, sub):
 _OP_TO_GATE = {"build": "normal", "t_only": "t_only", "side": "side", "defense": "defense", "exit": "exit"}
 
 def _wave_level_gate() -> dict:
-    """按狼大两级规则: 读 wave_state {level, sub_level}, 返回 {level, sub_level, operation, gate}。
+    """按狼大两级规则: 读 PG wave_state（core.wave，唯一真源）→ {level, sub_level, operation, gate}。
     gate: normal(可建仓)/t_only(只做T)/side(观望调仓换股)/defense(防御不建仓)/exit(兑现降仓)。
-    code层硬拦截仅在 defense/exit 触发；t_only/side 传给 Pi 提示只做T/调仓不追。"""
+    code层硬拦截仅在 defense/exit 触发；t_only/side 传给 Pi 提示只做T/调仓不追。
+    2026-11-10：原来直读 data/wave_state.json（11-08 已删）⇒ 静默 fail-open 成 side/normal；改走 PG。"""
     try:
-        import os as _os, json as _json
-        path = _os.path.join(_os.environ.get("DATA_DIR", "data"), "wave_state.json")
-        if not _os.path.exists(path):
+        from core.wave import current as _wave_current
+        st = _wave_current() or {}
+        if not st:
+            print("[wave] PG wave_state 读不到（trade_graph._wave_level_gate）⇒ fail-open side", flush=True)
             return {"level": "未知", "sub_level": "", "operation": "side", "gate": "normal"}
-        st = _json.load(open(path, encoding="utf-8"))
         lvl = st.get("level") or "未知"
         sub = st.get("sub_level") or st.get("sublevel") or st.get("sub") or ""
         op = _wave_operation(lvl, sub)
@@ -1475,6 +1524,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "confirm_context": _read_confirm_context(),
         "stock_confirm_context": _read_stock_confirm_context(),
         "wave_context": _read_wave_context(),
+        "b_rebound_context": _read_b_rebound_context(),
         "three_tier_context": _read_three_tier_context(),
         "rotation_gate_context": _read_rotation_gate_context(),
         "rotation_switch_context": _read_rotation_switch_context(),
@@ -1587,6 +1637,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('wolf_judge_context', chr(39)+chr(39))}"
         f"{state.get('discipline_context', chr(39)+chr(39))}"
         f"{state.get('wave_context', chr(39)+chr(39))}"
+        f"{state.get('b_rebound_context', chr(39)+chr(39))}"
         f"{state.get('three_tier_context', chr(39)+chr(39))}"
         f"{state.get('main_line_context', chr(39)+chr(39))}"
         f"{state.get('position_context', chr(39)+chr(39))}"
