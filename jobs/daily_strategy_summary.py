@@ -15,7 +15,7 @@ except Exception:
 # -*- coding: utf-8 -*-
 """daily_strategy_summary.py — 一次生成「当日策略摘要」：主线 + 波浪 + 宏观 + 风控 + 狼大操作口径。
 
-确定性脚本：完全从 data/{main_line_state,wave_state,macro_state,systemic_risk}.json 拼装，
+确定性脚本：浪型读 PG（wave_state 唯一真源）；主线走 state_io→PG；宏观/风控读 data 导出物，
 不用 LLM，避免 pi_analysis 叙事编号漂移/自相矛盾。用于替代零散的主线/波浪两份独立报告。
 输出：stdout markdown（调度器推送QQ）+ 落盘 data/strategy_summary_<date>.md
 用法：python -u jobs/daily_strategy_summary.py
@@ -38,7 +38,26 @@ OP_GUIDE = {
     "exit": "兑现降仓：反弹即减、控制回撤，不再开新仓",
 }
 
+def _load_wave_state():
+    """浪型：**只读 PG**（`wave_state.payload`，经 core.wave.current）。
+
+    2026-11-08 起 `data/wave_state.json` 已停写并删除；回落到文件只会拿到过期档
+    （实测 11-09 摘要整段变成 `?`）。所以这里不回落文件，读不到就显式标记不可用。
+    """
+    try:
+        from core.wave import current
+        w = current() or {}
+        if isinstance(w, dict) and w:
+            return w
+        print("[wave] PG wave_state 读不到（core.wave.current 返回空）", file=sys.stderr)
+    except Exception as _e:
+        print("[wave] 读取 PG wave_state 失败: %s" % str(_e)[:120], file=sys.stderr)
+    return {}
+
+
 def load(name):
+    if name == "wave_state.json":
+        return _load_wave_state()
     _pg_si = _state_io.maybe_load(name) if _state_io else None
     if _pg_si is not None:
         return _pg_si
@@ -120,18 +139,22 @@ def mk_report():
 
     L = []
     L.append("# 当日策略摘要（%s · 盘前）" % today)
-    L.append("> 由 主线判定 + 波浪判定 + 宏观 + 风控 合并生成（确定性，读 data/*.json + PG index_daily，非LLM叙事）")
+    L.append("> 由 主线判定 + 波浪判定 + 宏观 + 风控 合并生成（确定性，浪型/主线读 PG，宏观/风控读 data 导出物 + PG index_daily，非LLM叙事）")
     L.append("")
 
     # ── 一、大盘波浪 ──
-    L.append("## 一、大盘波浪（wave_state）")
+    L.append("## 一、大盘波浪（wave_state · PG）")
     level = wv.get("level") or "?"
     sub = wv.get("sub_level") or "?"
     op = wv.get("operation") or "?"
     conf = wv.get("confidence")
-    L.append("- 大级别：**%s**（%s）｜子浪：**%s**｜操作：**%s**（confidence %s）｜判定日期：%s" % (
-        level, LEVEL_NAMES.get(level, level), sub, op, conf,
-        f.get("date") or wv.get("date") or "?"))
+    if wv:
+        L.append("- 大级别：**%s**（%s）｜子浪：**%s**｜操作：**%s**（confidence %s）｜判定日期：%s" % (
+            level, LEVEL_NAMES.get(level, level), sub, op, conf,
+            f.get("date") or wv.get("date") or "?"))
+    else:
+        L.append("- ⚠️ **wave_state 不可用（PG 读取失败）**：级别/子浪/操作口径未知，"
+                 "本摘要不得据此推断 defense 或仓位上限；交易门禁按 fail-open 自行判定")
     L.append("- 收盘 %s ｜ 5日 %s%% ｜ 20日 %s%% ｜ 箱体位置 %s%% ｜ 量比5/60 %s ｜ 120日量分位 %s%%" % (
         close, r5, r20, pos, vol_ratio, vol_pct))
     L.append("- MA5/20/60/200: %s / %s / %s / %s ｜ 距前高 %s%% ｜ 距前低 %s%%" % (
@@ -201,8 +224,11 @@ def mk_report():
     # ── 六、综合 ──
     L.append("")
     L.append("## 六、综合一句话")
-    L.append("- 大级别 **%s/%s（%s）**，主线 **%s** —— %s" % (
-        level, sub, op, mainline, OP_GUIDE.get(op, "")))
+    if wv:
+        L.append("- 大级别 **%s/%s（%s）**，主线 **%s** —— %s" % (
+            level, sub, op, mainline, OP_GUIDE.get(op, "")))
+    else:
+        L.append("- 大级别 **不可用（PG wave_state 读取失败）**，主线 **%s** —— 级别未知时不给操作口径" % mainline)
     return "\n".join(L) + "\n"
 
 def main():
