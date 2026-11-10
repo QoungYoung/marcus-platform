@@ -90,7 +90,7 @@ def _ask_c(A, B, holding, a_data, wave, day, slot):
 def _c_apply(C,A,base_target,base_leader):
     act=str(C.get('action') or 'hold').lower()
     A['c_action']=act; A['c_verdict']=C.get('verdict',''); A['c_leader']=C.get('leader','')
-    A['c_leader_segment']=C.get('leader_segment',''); A['c_evidence']=C.get('reasons') or C.get('evidence') or []
+    A['c_leader_segment']=C.get('leader_segment',''); A['c_source_phase']=C.get('source_phase',''); A['c_entry_mode']=C.get('entry_mode',''); A['c_evidence']=C.get('reasons') or C.get('evidence') or []
     target=''; leader=''; mode='C'; status='ok'
     if act in ('buy','add','exit'):
         sym=C.get('leader') or ''

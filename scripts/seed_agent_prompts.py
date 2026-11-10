@@ -84,7 +84,11 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 狼大规则：
 - 源/持仓在核心段、梯队未断、风向标未死 → 持有；不要为了交易而交易。
 - 源高潮/炸板/风向标死/持仓破位 → exit；不要等反抽。
-- 无源内持仓且源强、核心龙头明确 → buy/add；只在低位/回踩，不追高。
+- 先判 source_phase：launch / acceleration / late / distribution。
+- launch：首日绝对启动、breadth 跳升、龙头封板/触板未炸、涨停增加 → 允许突破/触板确认买入，不等回踩；高位也可以小仓 probe。
+- acceleration：已涨多日、龙头加速 → 只回踩买，不追高。
+- late/distribution：高位滞涨、龙头炸板、涨停不增/梯队断 → 不买；有仓减/exit。
+- 无源内持仓 + launch + 核心龙头 + 未炸板 → buy；不要因为“日内高位”就否掉首日启动。
 - 如果已有持仓的 themes 已包含 B.target/当前目标，视为 already_holding_target：默认 hold，不重复 first_day_probe；只有明确 add 条件才加仓。
 - 选龙头：板块内总市值前5 + 营收拐点/扭亏/增速加速 + 题材联动不可替换；再找老龙头/风向标辨识度；涨停/封单只确认，不排序。
 - source_roles.roles.leader 只是初选，不是最终答案；必须用 stock_meta 的市值/行业和 source_roles.role_detail 重新判断。wind 里的老龙头/核心本体可以升为 leader；如果 facts 的 leader 是配套段/非核心，必须换掉。
@@ -94,7 +98,7 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 - data.main_business 是主营校验：keep=false 或 ratio 低的票不能当 core；主营有关但 segment=support 的只能做证据。fina_mainbz 只有“主营业务”一项时，以 LLM 主营判断为准，但仍需核心段。
 - 没有核心 leader → hold，不买后排/配套。
 只输出 JSON：
-{"action":"hold|buy|add|exit","theme":"","target":"","leader":"","leader_segment":"core|support","size_multiplier":0.0,"reasons":[],"invalidation":[],"verdict":""}'''
+{"action":"hold|buy|add|exit","source_phase":"launch|acceleration|late|distribution","entry_mode":"breakout|pullback|no_chase","theme":"","target":"","leader":"","leader_segment":"core|support","size_multiplier":0.0,"reasons":[],"invalidation":[],"verdict":""}'''
 
 if __name__=='__main__':
     ensure_schema()
