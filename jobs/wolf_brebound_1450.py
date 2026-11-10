@@ -675,9 +675,11 @@ def _monitor_turn(day: str):
             return None
         with psycopg2.connect(_d, connect_timeout=5) as _c:
             with _c.cursor() as _cur:
+                # 要的是"今天出现过缩转放"（任意时刻），不是"此刻正在放量"：
+                # 14:48 读到的往往是 turn=false 的常态行，会把 13:45 那一次真信号冲掉。
                 _cur.execute("select as_of_time,bucket_ratio,last15_pct,shrink,turn,price_ok "
                              "from volume_turn_intraday where session_date=%s "
-                             "order by as_of_time desc limit 1", (str(day)[:8],))
+                             "and turn and price_ok order by as_of_time desc limit 1", (str(day)[:8],))
                 r = _cur.fetchone()
         if not r:
             return None

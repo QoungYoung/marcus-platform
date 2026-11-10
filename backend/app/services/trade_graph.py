@@ -1278,10 +1278,17 @@ def _read_b_rebound_context() -> str:
                     "order by session_date desc limit 1")
                 r = cur.fetchone()
                 try:
+                    # 优先"今日已触发的缩转放"（任意时刻），没有再退回最新一行作为当前状态
                     cur.execute("select session_date,as_of_time,bucket_ratio,last15_pct,"
                                 "shrink,turn,price_ok from volume_turn_intraday "
+                                "where turn and price_ok "
                                 "order by session_date desc, as_of_time desc limit 1")
                     mt = cur.fetchone()
+                    if mt is None:
+                        cur.execute("select session_date,as_of_time,bucket_ratio,last15_pct,"
+                                    "shrink,turn,price_ok from volume_turn_intraday "
+                                    "order by session_date desc, as_of_time desc limit 1")
+                        mt = cur.fetchone()
                 except Exception:
                     conn.rollback()   # 表还没建：不影响 b_rebound 主块
         if not r:
