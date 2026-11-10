@@ -92,6 +92,7 @@ def subchain_strength(as_of: Optional[str] = None) -> List[Dict]:
                         "and trade_date<=%s order by trade_date desc limit 21", (dmax,))
             idx = [float(r[0]) for r in cur.fetchall()][::-1]
             idx_ret5 = (idx[-1] / idx[-6] - 1) * 100 if len(idx) >= 6 else None
+            idx_ret1 = (idx[-1] / idx[-2] - 1) * 100 if len(idx) >= 2 else None
 
             for name, concepts in SUBCHAINS:
                 cur.execute("select distinct ts_code from stock_concept_map where concept_name = any(%s)", (concepts,))
@@ -107,7 +108,7 @@ def subchain_strength(as_of: Optional[str] = None) -> List[Dict]:
                 per: Dict[str, List] = {}
                 for code, close, amt in rows:
                     per.setdefault(code, []).append((float(close), float(amt or 0)))
-                r5s, r20s, above, amt5, amt20 = [], [], 0, 0.0, 0.0
+                r5s, r20s, r1s, above, upn, nhn, amt5, amt20 = [], [], [], 0, 0, 0, 0.0, 0.0
                 n = 0
                 for code, arr in per.items():
                     if len(arr) < 21:
@@ -117,6 +118,13 @@ def subchain_strength(as_of: Optional[str] = None) -> List[Dict]:
                     n += 1
                     r5s.append((c[-1] / c[-6] - 1) * 100)
                     r20s.append((c[-1] / c[-21] - 1) * 100)
+                    r1s.append((c[-1] / c[-2] - 1) * 100)
+                    if c[-1] > c[-2]:
+                        upn += 1
+                    # 二段跳的可计算形式：今天收盘 ≥ 之前 20 日最高（不含今天）
+                    hi20 = max(c[-21:-1]) if len(c) >= 21 else None
+                    if hi20 is not None and c[-1] >= hi20:
+                        nhn += 1
                     ma20 = sum(c[-20:]) / 20
                     if c[-1] > ma20:
                         above += 1
@@ -126,11 +134,16 @@ def subchain_strength(as_of: Optional[str] = None) -> List[Dict]:
                     out.append({"name": name, "unknown": "无行情"})
                     continue
                 avg5 = sum(r5s) / n
+                avg1 = sum(r1s) / n
                 out.append({
                     "name": name, "as_of": dmax, "members": n,
+                    "ret1": round(avg1, 2),
                     "ret5": round(avg5, 2),
                     "ret20": round(sum(r20s) / n, 2),
+                    "excess1": (round(avg1 - idx_ret1, 2) if idx_ret1 is not None else None),
                     "excess5": (round(avg5 - idx_ret5, 2) if idx_ret5 is not None else None),
+                    "up": upn,
+                    "new_high20": nhn,
                     "breadth": round(above / n * 100),
                     "amt_ratio": (round(amt5 / amt20, 2) if amt20 > 0 else None),
                 })
@@ -155,9 +168,11 @@ def subchain_context(max_lines: int = 7, as_of: Optional[str] = None) -> str:
             lines.append(f"- {r['name']}：unknown（{r['unknown']}，不猜）")
             continue
         ex = f"{r['excess5']:+.2f}%" if r.get("excess5") is not None else "?"
+        ex1 = f"{r['excess1']:+.2f}%" if r.get("excess1") is not None else "?"
         ar = f"{r['amt_ratio']:.2f}" if r.get("amt_ratio") is not None else "?"
-        lines.append(f"- {r['name']}：5日 {r['ret5']:+.2f}% ｜ 20日 {r['ret20']:+.2f}% ｜ "
-                     f"超指数5日 {ex} ｜ breadth {r['breadth']}% ｜ 量比 {ar}（n={r['members']}）")
+        lines.append(f"- {r['name']}：当日 {r['ret1']:+.2f}%（超指数 {ex1}）｜ 5日 {r['ret5']:+.2f}% ｜ "
+                     f"20日 {r['ret20']:+.2f}% ｜ 上涨 {r['up']}/{r['members']} ｜ "
+                     f"创20日新高 {r['new_high20']}/{r['members']} ｜ 量比 {ar}")
     if NO_MAPPING:
         lines.append("- " + "、".join(NO_MAPPING) + "：无概念映射（unknown，不猜）")
     return NL.join(lines) + NL + NL
