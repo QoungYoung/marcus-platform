@@ -1762,8 +1762,9 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"你是狼大体系的交易 agent，不是通用趋势/震荡策略机器人。\n"
         f"先判断‘能不能做’，再判断‘做什么’，最后才用 calc_position 算‘买多少’。\n\n"
         f"【1. 只做主线】\n"
-        f"- 只在 main_line_context 给出的主线/主题里选股；主线不存在、mainline_active=false、tradeable=false 时，不新开底仓。\n"
-        f"- 浪型 defense/exit 或 P3 防御门关闭时，只做T/减仓/观察，不追主升。\n"
+        f"- 只在 main_line_context 给出的主线/主题里选股；mainline_active=false、tradeable=false 时，**不新开底仓**。\n"
+        f"- 浪型 defense：允许 **probe 试探仓 ≤10%**（calc_position 的 probe 档），但必须同时满足：① 结构证据至少两项成立（b_rebound 三条件 / two_jump 二段跳 / chip_cost 上方筹码）② 决策卡五段齐全 ③ 先 check_entry_filters 再 calc_position。\n"
+        f"- 浪型 exit 或 P3 防御门 G2/G3：只做T/减仓/观察，不新开任何仓位。\n"
         f"- 一票否决：没有主线、没有逻辑、没有辨识度，不因为‘跌得多’就买。\n\n"
         f"【2. 选股顺序：主线→赛道→主题→个股】\n"
         f"- 主线决定方向；赛道决定强弱；主题决定催化；个股只选核心/风向标/龙头/龙2/二供。\n"
@@ -1789,7 +1790,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"【7. 仓位】\n"
         f"- 只用现有 calc_position 三档（试探/确认/冲刺）和 caps，不自己发明仓位公式。\n"
         f"- 单票、总仓、现金底线、单笔最大亏损，以 calc_position 返回为准；它说 0 就 0。\n"
-        f"- 先试探后确认；不一次性打满。\n\n"
+        f"- 先试探后确认；不一次性打满。defense 下 probe 档上限 10%，calc_position 返回 0 就 0。\n\n"
         f"【8. 卖出】\n"
         f"- 破黄线/破前低/高位放量滞涨/逻辑失效/触发止损，减仓或退出。\n"
         f"- 做T只卖T仓，底仓不卖；止损按现有纪律块执行，不因为‘看好’硬扛。\n"
@@ -1809,6 +1810,14 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"【12. 输出】\n"
         f"- 先给结论：做/不做、买/卖/观察、几条腿、每只角色和理由。\n"
         f"- 再给证据：主线、位置、逻辑、量价、筹码/席位、P3 状态、calc_position 结果。\n"
+        f"【13. 决策卡（每次必须写，哪怕不做）】\n"
+        f"DECISION:\n"
+        f"- action: none | probe | push | trim | exit\n"
+        f"- target: 方向/标的（none 也要写观察对象）\n"
+        f"- trigger: 什么条件成立才动手（具体到量价/结构/价位）\n"
+        f"- deadline: 最晚什么时候决定，过了作废（如 14:30）\n"
+        f"- size: 占总仓 %（none 也给上限）\n"
+        f"- invalid: 什么情况下认错\n\n"
         f"- 最后一行必须是：SIGNAL: <按浪型> POSITION:<当前仓位> REASON:<一句话>\n\n"
         f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
     )
@@ -1836,6 +1845,64 @@ def node_call_pi_decision(state: TradeState) -> dict:
     return {"pi_raw_reply": reply}
 
 
+_CARD_FIELDS = ("action", "target", "trigger", "deadline", "size", "invalid")
+
+
+def _parse_decision_card(reply: str) -> dict:
+    """解析 DECISION 五段卡（action/target/trigger/deadline/size/invalid）。缺失返回 {}。"""
+    out = {}
+    try:
+        m = re.search(r"DECISION\s*[:：]\s*\n(.*?)(?:\n\s*\n|\nSIGNAL\s*:|\Z)", reply or "", re.S | re.I)
+        block = m.group(1) if m else ""
+        for line in block.splitlines():
+            mm = re.match(r"\s*[-*]?\s*(action|target|trigger|deadline|size|invalid)\s*[:：]\s*(.+)",
+                          line, re.I)
+            if mm:
+                out[mm.group(1).lower()] = mm.group(2).strip()[:300]
+    except Exception:
+        pass
+    return out
+
+
+def _save_decision_card(state: TradeState, card: dict, reply: str) -> None:
+    """决策卡落 PG（trade_decision_card）；失败只打日志，不影响交易结果。"""
+    try:
+        import psycopg2
+        _d = (_dsn_src.main() or "").strip()
+        if not _d:
+            return
+        size = None
+        try:
+            _m = re.search(r"(\d+(?:\.\d+)?)", card.get("size", "") or "")
+            size = float(_m.group(1)) if _m else None
+        except Exception:
+            size = None
+        with psycopg2.connect(_d, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""create table if not exists trade_decision_card(
+                    id bigserial primary key,
+                    trade_date date not null,
+                    trade_window varchar(16),
+                    task_id varchar(64),
+                    action varchar(16),
+                    target text,
+                    trigger_text text,
+                    deadline varchar(32),
+                    size_pct numeric,
+                    invalid_text text,
+                    raw_reply text,
+                    created_at timestamptz default now())""")
+                cur.execute("insert into trade_decision_card(trade_date,trade_window,task_id,action,target,"
+                            "trigger_text,deadline,size_pct,invalid_text,raw_reply) "
+                            "values (current_date,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                            (state.get("window"), state.get("task_id"), card.get("action"),
+                             card.get("target"), card.get("trigger"), card.get("deadline"),
+                             size, card.get("invalid"), (reply or "")[:4000]))
+    except Exception as _e_sil_card:
+        print("[silent:trade_graph.py:_save_decision_card] %s: %s"
+              % (type(_e_sil_card).__name__, str(_e_sil_card)[:110]), flush=True)
+
+
 def node_process_result(state: TradeState) -> dict:
     """
     节点 4: 结果处理 —— 确定性节点
@@ -1850,6 +1917,10 @@ def node_process_result(state: TradeState) -> dict:
         return {"error": state.get('error', '无 Pi 回复可处理')}
 
     stance, position_limit, reason = _parse_signal(reply)
+    card = _parse_decision_card(reply)
+    _save_decision_card(state, card, reply)
+    if not card.get("action"):
+        reply = reply + "\n\n⚠️ 决策卡缺失：未按 DECISION(action/target/trigger/deadline/size/invalid) 输出"
 
     _update_strategy_chain(stance, position_limit, reason, eid)
     _remove_bought_from_pool(reply, eid)

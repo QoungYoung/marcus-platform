@@ -1,6 +1,6 @@
 {
-  "version": "2026-09-03",
-  "doc": "P3 三仓档位模型 v0 规则（本地 config/ 权威，可同步服务器；DB 覆盖后续支持）",
+  "version": "2026-11-10",
+  "doc": "P3 三仓档位模型 v0 规则（本地 config/ 权威，可同步服务器；DB 覆盖后续支持）（2026-11-10：defense 增加 probe 试探仓 ≤10%，对应狼大 11-04 5% 起点）",
   "mode_env": "P3_TIER_MODE",
   "defaults": {
     "t_cap_pct": 5,
@@ -137,6 +137,11 @@
           "needs": [
             "has_base"
           ]
+        },
+        "probe": {
+          "allow": true,
+          "cap_pct": 10,
+          "needs": []
         }
       }
     },
