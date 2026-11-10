@@ -86,6 +86,7 @@ class JobStatus(Enum):
     IDLE = "idle"
     RUNNING = "running"
     SUCCESS = "success"
+    SKIPPED = "skipped"
     FAILED = "failed"
     DISABLED = "disabled"
 
@@ -804,7 +805,15 @@ class SchedulerService:
             if return_code == 0:
                 execution.status = JobStatus.SUCCESS.value
                 execution.error = error  # 保存 stderr 即使成功
-                logger.info(f"[{execution_id}] Task {task.name} completed successfully")
+                # 脚本显式返回 {"status":"skipped"} 时，不当作 success
+                try:
+                    _tail = (output or "").strip().splitlines()[-1] if (output or "").strip() else ""
+                    _obj = json.loads(_tail)
+                    if isinstance(_obj, dict) and str(_obj.get("status")).lower() == "skipped":
+                        execution.status = JobStatus.SKIPPED.value
+                except Exception:
+                    pass
+                logger.info(f"[{execution_id}] Task {task.name} completed status={execution.status}")
             else:
                 execution.status = JobStatus.FAILED.value
                 execution.error = error
@@ -965,7 +974,7 @@ class SchedulerService:
                             logger.error(f"Failed to send Pi report: {e}")
                 
                 # 回退：简单通知
-                emoji = "✅" if execution.status == JobStatus.SUCCESS.value else "❌"
+                emoji = "✅" if execution.status == JobStatus.SUCCESS.value else ("⏭️" if execution.status == JobStatus.SKIPPED.value else "❌")
                 lines = [
                     f"{emoji} Marcus 任务通知",
                     f"任务: {task.name}",
