@@ -21,6 +21,7 @@
 | 11b | b_rebound_context | `_read_b_rebound_context` | PG `b_rebound_daily`（11-10 新增） | 双脚/缩转放/5日线/仓位建议 | 结构+仓位 |
 | 11c | subchain_context | `_read_subchain_context` | PG `mkt_bars_daily`+概念（11-10 新增） | 材料/设备/封装/PCB 的 当日/5/20 日、超指数、上涨家数、20日新高、量比 | 子链强弱 |
 | 11d | chip_cost_context | `_read_chip_cost_context` | PG `mkt_bars_daily`（11-10 新增） | 加权成本/距成本/上方筹码 | 筹码成本 |
+| 11e | two_jump_context | `_read_two_jump_context` | 腾讯分时（live）/ `stk_mins`（回放）（11-10 新增） | 指数针底时刻 + 各方向首次新高排序（jump_rank） | 二段跳 |
 | 12 | three_tier_context | `_read_three_tier_context` | `_wave_level_gate()` + `p3_position_tiers.json` | 三仓档位可做/禁做 | 仓位档位 |
 | 13 | rotation_gate_context | `_read_rotation_gate_context` | `rotation_gate` + wave op | 能否切低/只做主线内轮动 | 轮动 |
 | 14 | rotation_switch_context | `_read_rotation_switch_context` | `data/rotation_switch_plan.json` | 切谁/买哪条链 | 轮动 |

@@ -83,6 +83,7 @@ class TradeState(TypedDict):
     b_rebound_context: str        # B反三条件（PG b_rebound_daily）
     subchain_context: str         # 子链强弱（PG：材料/设备/封装/PCB）
     chip_cost_context: str        # 筹码成本（PG：加权成本 + 上方筹码）
+    two_jump_context: str         # 二段跳（分钟级：指数针底后谁先创新高）
     position_levels_context: str
     cycle_context: str
     trade_mode_instruction: str
@@ -1360,6 +1361,17 @@ def _read_subchain_context() -> str:
         return ""
 
 
+def _read_two_jump_context() -> str:
+    """二段跳（分钟级）：指数当日低点之后，各方向首次创当日新高的时间排序。"""
+    try:
+        from app.services import two_jump as _tj
+        return _tj.context()
+    except Exception as _e_sil_tj:
+        print("[silent:trade_graph.py:_read_two_jump_context] %s: %s"
+              % (type(_e_sil_tj).__name__, str(_e_sil_tj)[:110]), flush=True)
+        return ""
+
+
 def _read_chip_cost_context(portfolio_json: Optional[str] = None) -> str:
     """筹码成本（PG）：持仓 + P3 意图的加权成本/距成本/上方筹码；空则用子链成交额 top3 兜底。
 
@@ -1610,6 +1622,7 @@ def node_fetch_context(state: TradeState) -> dict:
         "b_rebound_context": _read_b_rebound_context(),
         "subchain_context": _read_subchain_context(),
         "chip_cost_context": _read_chip_cost_context(_pf),
+        "two_jump_context": _read_two_jump_context(),
         "three_tier_context": _read_three_tier_context(),
         "rotation_gate_context": _read_rotation_gate_context(),
         "rotation_switch_context": _read_rotation_switch_context(),
@@ -1725,6 +1738,7 @@ def node_call_pi_decision(state: TradeState) -> dict:
         f"{state.get('b_rebound_context', chr(39)+chr(39))}"
         f"{state.get('subchain_context', chr(39)+chr(39))}"
         f"{state.get('chip_cost_context', chr(39)+chr(39))}"
+        f"{state.get('two_jump_context', chr(39)+chr(39))}"
         f"{state.get('three_tier_context', chr(39)+chr(39))}"
         f"{state.get('main_line_context', chr(39)+chr(39))}"
         f"{state.get('position_context', chr(39)+chr(39))}"
