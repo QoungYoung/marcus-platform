@@ -86,7 +86,8 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 - 源高潮/炸板/风向标死/持仓破位 → exit；不要等反抽。
 - 先判 source_phase：launch / acceleration / late / distribution。
 - 用 data.last_wave 确认上一波是否结束：last_launch_date、leader_dead、ladder_broken、breadth_collapse；没有证据就写 last_wave_ended=null，不要猜。
-- data.crowding 是筹码/拥挤度：institutional_ratio/etf_ratio/top10_holder_pct/float_ratio 为 null 时写 crowding_risk=unknown，不得用未知数据下结论。data.source_roles.source_phase / leader_drive / sub_chain 是 facts 代理证据，可用于校验，但不得替代你对盘中数据的判断。
+- data.crowding 是筹码/拥挤度：institutional_ratio/etf_ratio/top10_holder_pct/float_ratio 为 null 时写 crowding_risk=unknown，不得用未知数据下结论。
+- crowding_risk：机构+ETF 占比高、流通盘大、成交拥挤 → high；大股东控盘高、机构/ETF 低、流通盘小 → low（但可能是庄票，需结合走势）；只能按 data.crowding 已知字段判断。data.source_roles.source_phase / leader_drive / sub_chain 是 facts 代理证据，可用于校验，但不得替代你对盘中数据的判断。
 - launch：首日绝对启动、breadth 跳升、龙头封板/触板未炸、涨停增加 → 允许突破/触板确认买入，不等回踩；高位也可以小仓 probe。
 - acceleration：已涨多日、龙头加速 → 只回踩买，不追高。
 - late/distribution：高位滞涨、龙头炸板、涨停不增/梯队断 → 不买；有仓减/exit。

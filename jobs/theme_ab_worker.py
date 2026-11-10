@@ -70,13 +70,19 @@ def _enrich_target(a_data, B, day):
         except Exception: pass
         a_data['target_theme']=tgt; a_data['target_members']=mem
         a_data['target_stock_meta']=meta; a_data['target_main_business']=mb
+        _crowd={}
+        try:
+            from app.services.stock_crowding import get as _cget
+            for s in top:
+                try: _crowd[s]=_cget(s,day)
+                except Exception: pass
+        except Exception: pass
         a_data['crowding']={s:{'market_cap':(meta.get(s) or {}).get('market_cap'),
                                'total_mv':(meta.get(s) or {}).get('total_mv'),
                                'turnover_rate':(meta.get(s) or {}).get('turnover_rate'),
                                'amount':(meta.get(s) or {}).get('amount'),
-                               'institutional_ratio':None,'etf_ratio':None,
-                               'top10_holder_pct':None,'float_ratio':None,
-                               'status':'unknown'} for s in top}
+                               **( _crowd.get(s) or {'institutional_ratio':None,'etf_ratio':None,
+                               'top10_holder_pct':None,'float_ratio':None,'status':'unknown'})} for s in top}
     except Exception as e:
         a_data['target_enrich_error']=str(e)[:120]
     return a_data
