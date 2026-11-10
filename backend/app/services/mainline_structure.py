@@ -60,8 +60,12 @@ def norm_symbol(s: str) -> str:
     return x
 
 
-def _latest_date(cur) -> Optional[str]:
-    cur.execute("select max(trade_date) from mkt_bars_daily")
+def _latest_date(cur, as_of: Optional[str] = None) -> Optional[str]:
+    """最新交易日；传 as_of(YYYYMMDD) 则取 <= 该日的最新一根（回放/验收用）。"""
+    if as_of:
+        cur.execute("select max(trade_date) from mkt_bars_daily where trade_date <= %s", (str(as_of)[:8],))
+    else:
+        cur.execute("select max(trade_date) from mkt_bars_daily")
     r = cur.fetchone()
     return str(r[0]) if r and r[0] else None
 
@@ -72,15 +76,15 @@ def _days_before(d8: str, days: int) -> str:
 
 
 # ── 子链强弱 ────────────────────────────────────────────────
-def subchain_strength() -> List[Dict]:
-    """每条子链：5/20 日等权收益、超指数 5 日、breadth(>MA20)、量比(5/20)。"""
+def subchain_strength(as_of: Optional[str] = None) -> List[Dict]:
+    """每条子链：5/20 日等权收益、超指数 5 日、breadth(>MA20)、量比(5/20)。as_of 用于回放。"""
     conn = _conn()
     if conn is None:
         return []
     out: List[Dict] = []
     try:
         with conn, conn.cursor() as cur:
-            dmax = _latest_date(cur)
+            dmax = _latest_date(cur, as_of)
             if not dmax:
                 return []
             # 基准：上证 5 日
@@ -140,8 +144,8 @@ def subchain_strength() -> List[Dict]:
     return out
 
 
-def subchain_context(max_lines: int = 7) -> str:
-    rows = subchain_strength()
+def subchain_context(max_lines: int = 7, as_of: Optional[str] = None) -> str:
+    rows = subchain_strength(as_of=as_of)
     if not rows:
         return ""
     as_of = next((r.get("as_of") for r in rows if r.get("as_of")), "")
@@ -160,8 +164,8 @@ def subchain_context(max_lines: int = 7) -> str:
 
 
 # ── 筹码成本 ────────────────────────────────────────────────
-def chip_cost(symbol: str, lookback: int = 60) -> Dict:
-    """成交额加权成本 + 现价上方筹码占比（被套比例）。"""
+def chip_cost(symbol: str, lookback: int = 60, as_of: Optional[str] = None) -> Dict:
+    """成交额加权成本 + 现价上方筹码占比（被套比例）。as_of 用于回放。"""
     code = norm_symbol(symbol)
     if not code:
         return {}
@@ -170,8 +174,13 @@ def chip_cost(symbol: str, lookback: int = 60) -> Dict:
         return {}
     try:
         with conn, conn.cursor() as cur:
-            cur.execute("select trade_date, close, amount, pct_chg from mkt_bars_daily "
-                        "where ts_code=%s order by trade_date desc limit %s", (code, lookback))
+            if as_of:
+                cur.execute("select trade_date, close, amount, pct_chg from mkt_bars_daily "
+                            "where ts_code=%s and trade_date <= %s order by trade_date desc limit %s",
+                            (code, str(as_of)[:8], lookback))
+            else:
+                cur.execute("select trade_date, close, amount, pct_chg from mkt_bars_daily "
+                            "where ts_code=%s order by trade_date desc limit %s", (code, lookback))
             rows = cur.fetchall()
         if len(rows) < 5:
             return {}
@@ -202,14 +211,14 @@ def chip_cost(symbol: str, lookback: int = 60) -> Dict:
             pass
 
 
-def top_amount_symbols(concepts: List[str], limit: int = 3) -> List[str]:
+def top_amount_symbols(concepts: List[str], limit: int = 3, as_of: Optional[str] = None) -> List[str]:
     """某概念里近 5 日成交额最大的 N 只（作为没有持仓/意图时的观察样本）。"""
     conn = _conn()
     if conn is None:
         return []
     try:
         with conn, conn.cursor() as cur:
-            dmax = _latest_date(cur)
+            dmax = _latest_date(cur, as_of)
             if not dmax:
                 return []
             cur.execute("select distinct ts_code from stock_concept_map where concept_name = any(%s)", (concepts,))
@@ -230,7 +239,7 @@ def top_amount_symbols(concepts: List[str], limit: int = 3) -> List[str]:
             pass
 
 
-def chip_cost_context(symbols: List[str], cap: int = 8) -> str:
+def chip_cost_context(symbols: List[str], cap: int = 8, as_of: Optional[str] = None) -> str:
     """给定标的（持仓 + P3 意图）→ 筹码成本块；空则用子链成交额 top3 兜底。"""
     codes: List[str] = []
     for s in symbols or []:
@@ -241,12 +250,12 @@ def chip_cost_context(symbols: List[str], cap: int = 8) -> str:
     # （他要看的是"套牢的钱在哪个方向"，不只是自己持仓）
     if len(codes) < 5:
         for concepts in (["半导体材料"], ["半导体设备"], ["PCB"]):
-            for c in top_amount_symbols(concepts, 1):
+            for c in top_amount_symbols(concepts, 1, as_of=as_of):
                 if c not in codes:
                     codes.append(c)
     if not codes:
         return ""
-    rows = [r for r in (chip_cost(c) for c in codes[:cap]) if r]
+    rows = [r for r in (chip_cost(c, as_of=as_of) for c in codes[:cap]) if r]
     if not rows:
         return ""
     lines = ["## 筹码成本（成交额加权，近 60 日）"]
