@@ -91,6 +91,21 @@ def main():
  except Exception as e:
   print('member filter skip',str(e)[:80],flush=True)
  srcset=set().union(*[by.get(x,set()) for x in SRC_IDS]) if any(by.get(x) for x in SRC_IDS) else set()
+ # 首日：回看最近 6 个交易日；上一波有 3 板以上有效启动则不是首日
+ try:
+  _b4=json.load(open(os.path.join(ROOT,'data','theme_b4_history.json'),encoding='utf-8'))
+ except Exception: _b4={}
+ try:
+  from mainline_common import trade_dates
+  _window=set(trade_dates(day)[-7:-1])
+ except Exception:
+  _window=set()
+ def _first_day(tid, today_limit):
+  _all=[z for z in (_b4.get(tid) or []) if str(z.get('date') or '') < day]
+  prior=[z for z in _all if (str(z.get('date')) in _window if _window else str(z.get('date')) >= str(int(day)-10))][-6:]
+  launch=[z for z in prior if int(z.get('u') or 0)>=3]
+  return (bool(today_limit>=3 and not launch), [z.get('date') for z in launch], (launch[-1].get('date') if launch else None), len(prior))
+
  qcache={}
  # 主源：东财 ulist.np 批量实时；缺的再用 rt_k 单只兜底
  def _secid(sym):
@@ -161,8 +176,10 @@ def main():
   t=tmeta.get(tid) or {}; name=t.get('name') or tid; o=out[tid]
   inter=len(srcset & (by.get(tid) or set())) if tid not in SRC_IDS else len(srcset)
   purity=round(inter/max(1,len(by.get(tid) or set())),3)
-  meta={'first_day_absolute': bool(o['limit_up']>=3 and o['breadth']>=0.6),
-        'prior_launch_days':[], 'limit_up':o['limit_up'],'breadth':o['breadth'],
+  _fd,_pld,_last,_pn=_first_day(tid,o['limit_up'])
+  meta={'first_day_absolute': bool(_fd),
+        'prior_launch_days':_pld, 'last_launch_date':_last, 'prior_days_checked':_pn,
+        'limit_up':o['limit_up'],'breadth':o['breadth'],
         'ret1':o['ret1'],'overlap':inter,'overlap_ratio':purity,'target_purity':purity}
   cm[name]=meta
   rd=t.get('role_detail') or {}; roles=t.get('roles') or {}
