@@ -104,8 +104,12 @@ def compute(day: Optional[str] = None) -> Dict:
                 continue
             pre = [p for hm, p in s if hm < t0_hm]
             post = [(hm, p) for hm, p in s if hm > t0_hm]
-            if not pre or not post:
-                dirs.append({"name": name, "code": code, "high_time": None, "note": "样本不足"})
+            if not pre:
+                dirs.append({"name": name, "code": code, "high_time": None, "note": "低点前无样本"})
+                continue
+            if len(post) < 5:
+                dirs.append({"name": name, "code": code, "high_time": None,
+                             "note": "低点后样本不足（指数仍在创新低/刚转向）"})
                 continue
             pre_high = max(pre)
             hit = next(((hm, p) for hm, p in post if p > pre_high), None)
@@ -123,6 +127,7 @@ def compute(day: Optional[str] = None) -> Dict:
             "broke_prev": (idx_low < prev_low) if prev_low is not None else None,
             "dirs": dirs, "winner": (ranked[0]["name"] if ranked else None),
             "as_of": idx[-1][0], "bars": len(idx),
+            "index_still_low": (i0 == len(idx) - 1),
         }
     except Exception:
         return {}
@@ -134,9 +139,10 @@ def context(day: Optional[str] = None) -> str:
         return ""
     broke = ("破前低" if r.get("broke_prev") else "未破前低") if r.get("broke_prev") is not None else "前低未知"
     lines = ["## 二段跳（分钟级，as_of %s %s）" % (r["day"], r["as_of"]),
-             "- 指数低点 %s（%.3f，%s%s）" % (
+             "- 指数低点 %s（%.3f，%s%s）%s" % (
                  r["t0"], r["index_low"], broke,
-                 ("，前低 %.3f" % r["prev_low"]) if r.get("prev_low") is not None else "")]
+                 ("，前低 %.3f" % r["prev_low"]) if r.get("prev_low") is not None else "",
+                 "｜**低点=当前，仍在创新低**" if r.get("index_still_low") else "")]
     for d in r["dirs"]:
         if d.get("high_time"):
             lines.append("- %s %s：首新高 %s（rank %d）" % (d["name"], d["code"], d["high_time"], d.get("rank") or 99))
