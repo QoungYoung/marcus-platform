@@ -211,6 +211,11 @@ def main():
         print('[theme] held theme skip:',str(e)[:80],flush=True)
     out = []
     _active = set(_active_ids)
+    try:
+        _scfg=load_yaml(os.path.join(ROOT,'config','mainline','theme_subchain.yaml')) or {}
+        _subchain=_scfg.get('themes') or {}
+    except Exception:
+        _subchain={}
     _items = list((theme.get("focus") or []) + (theme.get("trial") or []) + (theme.get("watch") or []))
     _seen = {x.get("id") for x in _items}
     for _tid in _active_ids:
@@ -387,6 +392,27 @@ def main():
         elif (fx.get("ret1") or 0) > 0.03 and (fx.get("breadth") or 0) > 0.5:
             tier = "watch_strong"
         rec["tier"] = tier
+        rec["sub_chain"] = _subchain.get(tid, tid)
+        # 龙头带动 + 阶段（可观测代理；不是终局）
+        try:
+            _lp=(leader or {}).get('pct')
+            _winds=[x for x in wind]; _mids=[x for x in mid]
+            _wu=sum(1 for x in _winds if (x.get('pct') or 0)>0)/max(1,len(_winds)) if _winds else 0
+            _mh=sum(1 for x in _mids if (x.get('pct') or 0)>0)/max(1,len(_mids)) if _mids else 0
+            _drive=sum([1 if (_lp or 0)>0 else 0, 1 if _wu>=0.5 else 0, 1 if _mh>=0.5 else 0, 1 if (fx.get('breadth') or 0)>=0.5 else 0])
+            rec['leader_drive']={'leader_pct':_lp,'wind_up':round(_wu,2),'mid_hold':round(_mh,2),'breadth':fx.get('breadth'),'score':_drive}
+            _u=rec['b4'].get('u',0); _br=fx.get('breadth') or 0
+            if _lp is not None and _lp<0 and _u==0 and _br<0.5: _phase='distribution'
+            elif _u==0 and _br<0.5: _phase='late'
+            elif _u>=3 and _br>=0.6: _phase='launch'
+            elif _u>0: _phase='acceleration'
+            else: _phase='late'
+            rec['source_phase']=_phase; rec['source_phase_source']='facts_proxy'
+            _b4h=[z for z in (hist.get(tid) or []) if int(z.get('u') or 0)>=3]
+            rec['last_launch_date']=_b4h[-1].get('date') if _b4h else None
+        except Exception as _e:
+            rec['source_phase']='unknown'; rec['leader_drive']={}
+
         if not a.skip_intraday:
             try:
                 from app.services.t_data_sources import fetch_tencent_mkline

@@ -1,0 +1,15 @@
+version: 1
+themes:
+  robot_actuator: 机器人执行器
+  humanoid_robot: 人形机器人
+  space: 卫星总体
+  satellite: 卫星互联网
+  ai_app: AI应用
+  medical_device: 医疗器械
+  innovative_drug: 创新药
+  semi_equipment: 半导体设备
+  semi_material: 半导体材料
+  packaging: 先进封装
+  pcb: PCB制造
+  ccl: 覆铜板
+  electronic_cloth: 电子布

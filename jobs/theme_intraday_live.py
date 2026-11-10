@@ -166,7 +166,8 @@ def main():
       stock_meta.setdefault(str(code),{})['total_mv']=float(mv or 0)
   for _tid in SRC_IDS:
    _t=tmeta.get(_tid) or {}
-   src_roles[_tid]={'roles':_t.get('roles') or {},'role_detail':_t.get('role_detail') or {}}
+   src_roles[_tid]={'roles':_t.get('roles') or {},'role_detail':_t.get('role_detail') or {},
+                    'source_phase':_t.get('source_phase'),'leader_drive':_t.get('leader_drive') or {},'sub_chain':_t.get('sub_chain')}
  except Exception as e:
   print('source meta skip',str(e)[:80],flush=True)
  # A candidate_meta / B candidates

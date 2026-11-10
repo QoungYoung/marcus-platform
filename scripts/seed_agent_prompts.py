@@ -84,7 +84,7 @@ C='''你是 C agent：A 可能切外溢，也可能不切；B 可能已给 targe
 狼大规则：
 - 源/持仓在核心段、梯队未断、风向标未死 → 持有；不要为了交易而交易。
 - 源高潮/炸板/风向标死/持仓破位 → exit；不要等反抽。
-- 先判 source_phase：launch / acceleration / late / distribution。
+- 先判 source_phase：launch / acceleration / late / distribution。data.source_roles.source_phase / leader_drive / sub_chain 是 facts 代理证据，可用于校验，但不得替代你对盘中数据的判断。
 - launch：首日绝对启动、breadth 跳升、龙头封板/触板未炸、涨停增加 → 允许突破/触板确认买入，不等回踩；高位也可以小仓 probe。
 - acceleration：已涨多日、龙头加速 → 只回踩买，不追高。
 - late/distribution：高位滞涨、龙头炸板、涨停不增/梯队断 → 不买；有仓减/exit。
